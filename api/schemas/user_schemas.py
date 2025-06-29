@@ -66,3 +66,26 @@ class UserSession(BaseModel):
     ip_address: str
     user_agent: str
     is_active: bool
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+class APIKeyCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100, description="Name for the API key")
+    description: Optional[str] = Field(None, max_length=500, description="Optional description")
+    expires_days: Optional[int] = Field(None, gt=0, le=365, description="Days until expiration (max 365)")
+
+class APIKeyResponse(BaseModel):
+    id: int
+    name: str
+    description: Optional[str]
+    key_prefix: str
+    is_active: bool
+    expires_at: Optional[datetime]
+    last_used: Optional[datetime]
+    usage_count: int
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
