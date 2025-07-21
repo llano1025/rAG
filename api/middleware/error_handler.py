@@ -101,7 +101,7 @@ class ErrorLogger:
 class ErrorHandler:
     def __init__(
         self,
-        app: FastAPI,
+        app,
         error_logging: bool = True,
         include_traceback: bool = False,
         error_handlers: Optional[Dict] = None
@@ -111,24 +111,33 @@ class ErrorHandler:
         self.include_traceback = include_traceback
         self.error_logger = ErrorLogger(logger)
         self.custom_error_handlers = error_handlers or {}
-        self.setup_exception_handlers()
 
-    def setup_exception_handlers(self):
-        """Setup exception handlers for different types of errors."""
-        @self.app.exception_handler(StarletteHTTPException)
-        async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    async def __call__(self, scope, receive, send):
+        """ASGI middleware implementation."""
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope, receive)
+        
+        async def send_wrapper(message):
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_wrapper)
+        except Exception as exc:
+            response = await self.handle_exception(request, exc)
+            await response(scope, receive, send)
+
+    async def handle_exception(self, request: Request, exc: Exception) -> JSONResponse:
+        """Handle any exception that occurs during request processing."""
+        if isinstance(exc, StarletteHTTPException):
             return await self.handle_http_exception(request, exc)
-
-        @self.app.exception_handler(RequestValidationError)
-        async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        elif isinstance(exc, RequestValidationError):
             return await self.handle_validation_exception(request, exc)
-
-        @self.app.exception_handler(ValidationError)
-        async def pydantic_validation_handler(request: Request, exc: ValidationError):
+        elif isinstance(exc, ValidationError):
             return await self.handle_pydantic_validation_error(request, exc)
-
-        @self.app.exception_handler(Exception)
-        async def general_exception_handler(request: Request, exc: Exception):
+        else:
             return await self.handle_general_exception(request, exc)
 
     def register_error_handler(self, exception_class: type, handler: callable):

@@ -1,10 +1,10 @@
 # utils/monitoring/__init__.py
-from .metrics import Metrics
-from .health_check import HealthCheck
+from .metrics import MetricsCollector
+from .health_check import HealthChecker
 from .error_tracker import ErrorTracker
 
 __all__ = [
-    'Metrics',
-    'HealthCheck',
+    'MetricsCollector',
+    'HealthChecker',
     'ErrorTracker'
 ]

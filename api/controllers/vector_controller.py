@@ -1,200 +1,616 @@
-# # api/controllers/vector_controller.py
-# from typing import List, Dict, Optional
-# from fastapi import HTTPException
-# import numpy as np
+"""
+Vector controller for document processing and vector operations.
+Integrates with authentication system and provides user-aware document management.
+"""
 
-# from vector_db.chunking import AdaptiveChunker, Chunk, ChunkingError
-# from vector_db.embedding_manager import EmbeddingManager
-# from vector_db.search_optimizer import SearchOptimizer, SearchError
-# from vector_db.version_controller import VersionController
+import logging
+import asyncio
+from typing import List, Dict, Optional, Any, Union
+from fastapi import HTTPException, status
+from sqlalchemy.orm import Session
+from datetime import datetime
 
-# class VectorController:
-#     def __init__(
-#         self,
-#         chunker: AdaptiveChunker,
-#         embedding_manager: EmbeddingManager,
-#         search_optimizer: SearchOptimizer,
-#         version_controller: VersionController
-#     ):
-#         self.chunker = chunker
-#         self.embedding_manager = embedding_manager
-#         self.search_optimizer = search_optimizer
-#         self.version_controller = version_controller
+from database.models import User, Document, DocumentChunk, VectorIndex, DocumentStatusEnum
+from vector_db.storage_manager import VectorStorageManager, get_storage_manager
+from vector_db.document_version_manager import DocumentVersionManager, get_version_manager
+from vector_db.enhanced_search_engine import EnhancedSearchEngine, get_search_engine, SearchFilter, SearchType
+from file_processor.text_extractor import TextExtractor
+from file_processor.type_detector import FileTypeDetector
+from file_processor.metadata_extractor import MetadataExtractor
+from utils.security.audit_logger import AuditLogger
 
-#     async def process_document(
-#         self,
-#         content: str,
-#         document_id: str,
-#         metadata: Dict
-#     ) -> dict:
-#         try:
-#             # Create chunks using adaptive chunking
-#             chunks = self.chunker.chunk_document(content, metadata)
-            
-#             # Generate embeddings for all chunks at once
-#             chunk_texts = [chunk.text for chunk in chunks]
-#             embeddings = await self.embedding_manager.generate_embeddings(chunk_texts)
-            
-#             # Create new chunks with embeddings
-#             chunks_with_embeddings = [
-#                 Chunk(
-#                     text=chunk.text,
-#                     start_idx=chunk.start_idx,
-#                     end_idx=chunk.end_idx,
-#                     metadata=chunk.metadata,
-#                     embedding=np.array(embedding)
-#                 )
-#                 for chunk, embedding in zip(chunks, embeddings)
-#             ]
-            
-#             # Build search index with new chunks
-#             self.search_optimizer.build_index(chunks_with_embeddings)
-            
-#             # Version control
-#             version_info = await self.version_controller.create_version(
-#                 document_id,
-#                 chunks_with_embeddings
-#             )
-            
-#             return {
-#                 "document_id": document_id,
-#                 "chunk_count": len(chunks_with_embeddings),
-#                 "version": version_info,
-#                 "chunks": [
-#                     {
-#                         "text": chunk.text,
-#                         "start_idx": chunk.start_idx,
-#                         "end_idx": chunk.end_idx,
-#                         "metadata": chunk.metadata
-#                     }
-#                     for chunk in chunks_with_embeddings
-#                 ]
-#             }
-#         except ChunkingError as e:
-#             raise HTTPException(status_code=500, detail=f"Chunking failed: {str(e)}")
-#         except SearchError as e:
-#             raise HTTPException(status_code=500, detail=f"Search index building failed: {str(e)}")
-#         except Exception as e:
-#             raise HTTPException(status_code=500, detail=f"Failed to process document: {str(e)}")
+logger = logging.getLogger(__name__)
 
-#     async def search_similar(
-#         self,
-#         query: str,
-#         k: int = 5
-#     ) -> List[dict]:
-#         try:
-#             # Generate embedding for query
-#             query_embeddings = await self.embedding_manager.generate_embeddings([query])
-#             query_embedding = np.array(query_embeddings[0])
-            
-#             # Search similar chunks
-#             results = self.search_optimizer.search(query_embedding, k=k)
-            
-#             # Format results
-#             formatted_results = [
-#                 {
-#                     "text": chunk.text,
-#                     "start_idx": chunk.start_idx,
-#                     "end_idx": chunk.end_idx,
-#                     "metadata": chunk.metadata,
-#                     "similarity_score": float(score)
-#                 }
-#                 for chunk, score in results
-#             ]
-            
-#             return formatted_results
-#         except SearchError as e:
-#             raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
-#         except Exception as e:
-#             raise HTTPException(status_code=500, detail=f"Search operation failed: {str(e)}")
-
-# /controllers/vector_controller.py
-from typing import Dict, List
-from fastapi import HTTPException
-
-from vector_db.chunking import AdaptiveChunker, Chunk, ChunkingError
-from vector_db.embedding_manager import EmbeddingManager
-from vector_db.search_optimizer import SearchOptimizer, SearchConfig, MetricType, IndexType
-from vector_db.version_controller import VersionController
+class VectorControllerError(Exception):
+    """Raised when vector controller operation fails."""
+    pass
 
 class VectorController:
-    """Controller for managing document vectors and indexing."""
+    """
+    Vector operations controller with user authentication and access control.
+    
+    Handles:
+    - Document upload and processing
+    - Vector indexing and storage
+    - Document search and retrieval
+    - User access control
+    - Version management
+    """
     
     def __init__(
         self,
-        chunker: AdaptiveChunker,
-        embedding_manager: EmbeddingManager,
-        version_controller: VersionController,
-        embedding_dim: int = 768
+        storage_manager: VectorStorageManager = None,
+        version_manager: DocumentVersionManager = None,
+        search_engine: EnhancedSearchEngine = None,
+        audit_logger: AuditLogger = None
     ):
-        self.chunker = chunker
-        self.embedding_manager = embedding_manager
-        self.version_controller = version_controller
+        """Initialize vector controller with dependencies."""
+        self.storage_manager = storage_manager or get_storage_manager()
+        self.version_manager = version_manager or get_version_manager()
+        self.search_engine = search_engine or get_search_engine()
+        self.audit_logger = audit_logger
         
-        # Create content and context search optimizers
-        self.content_search = self._create_search_optimizer(embedding_dim)
-        self.context_search = self._create_search_optimizer(embedding_dim)
-
-    def _create_search_optimizer(self, embedding_dim: int) -> SearchOptimizer:
-        """Create a search optimizer with standard configuration."""
-        config = SearchConfig(
-            dimension=embedding_dim,
-            index_type=IndexType.HNSW,
-            metric=MetricType.COSINE,
-            ef_search=64,
-            ef_construction=200
-        )
-        return SearchOptimizer(config)
-
-    async def process_document(
+        # File processing components
+        self.text_extractor = TextExtractor()
+        self.type_detector = FileTypeDetector()
+        self.metadata_extractor = MetadataExtractor()
+    
+    async def upload_document(
         self,
-        content: str,
-        document_id: str,
-        metadata: Dict
-    ) -> dict:
-        """Process and index document with contextual awareness."""
+        file_content: bytes,
+        filename: str,
+        user: User,
+        metadata: Dict[str, Any] = None,
+        db: Session = None
+    ) -> Dict[str, Any]:
+        """
+        Upload and process a document for a user.
+        
+        Args:
+            file_content: Raw file content bytes
+            filename: Original filename
+            user: User uploading the document
+            metadata: Additional metadata
+            db: Database session
+            
+        Returns:
+            Dictionary with document processing results
+        """
         try:
-            # Create chunks with context
-            chunks = self.chunker.chunk_document(content, metadata)
+            # Validate user permissions
+            if not user.has_permission("write_documents"):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="User does not have permission to upload documents"
+                )
             
-            # Generate content and context embeddings
-            chunks_with_embeddings = await self.embedding_manager.generate_embeddings(chunks)
+            # Detect file type
+            content_type = self.type_detector.detect_type(file_content, filename)
+            file_size = len(file_content)
             
-            # Build search indices
-            self.content_search.build_index(chunks_with_embeddings)
-            self.context_search.build_index(chunks_with_embeddings)
+            # Validate file type and size
+            if not self._is_supported_file_type(content_type):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Unsupported file type: {content_type}"
+                )
             
-            # Version control
-            version_info = await self.version_controller.create_version(
-                document_id,
-                chunks_with_embeddings,
-                metadata
+            if file_size > 50 * 1024 * 1024:  # 50MB limit
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail="File size exceeds 50MB limit"
+                )
+            
+            # Extract text content
+            extracted_text = await self.text_extractor.extract_text(file_content, content_type)
+            
+            if not extracted_text or len(extracted_text.strip()) < 10:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Could not extract meaningful text content from file"
+                )
+            
+            # Extract metadata
+            file_metadata = await self.metadata_extractor.extract_metadata(file_content, content_type)
+            
+            # Combine metadata
+            combined_metadata = metadata or {}
+            combined_metadata.update(file_metadata)
+            combined_metadata.update({
+                'original_filename': filename,
+                'uploaded_at': datetime.utcnow().isoformat(),
+                'content_type': content_type,
+                'file_size': file_size,
+                'text_length': len(extracted_text),
+                'user_id': user.id
+            })
+            
+            # Create document version with vector indexing
+            document = await self.version_manager.create_document_version(
+                user_id=user.id,
+                filename=filename,
+                content=extracted_text,
+                content_type=content_type,
+                file_size=file_size,
+                metadata=combined_metadata,
+                db=db
             )
             
-            return {
-                "document_id": document_id,
-                "chunk_count": len(chunks_with_embeddings),
-                "version": version_info,
-                "chunks": [
-                    {
-                        "text": chunk.text,
-                        "context": chunk.context_text,
-                        "start_idx": chunk.start_idx,
-                        "end_idx": chunk.end_idx,
-                        "metadata": chunk.metadata
+            # Log successful upload
+            if self.audit_logger:
+                await self.audit_logger.log(
+                    action="document_uploaded",
+                    resource_type="document",
+                    resource_id=str(document.id),
+                    user_id=user.id,
+                    details={
+                        'filename': filename,
+                        'content_type': content_type,
+                        'file_size': file_size,
+                        'text_length': len(extracted_text)
                     }
-                    for chunk in chunks_with_embeddings
+                )
+            
+            return {
+                'document_id': document.id,
+                'filename': document.filename,
+                'status': document.status.value,
+                'content_type': content_type,
+                'file_size': file_size,
+                'text_length': len(extracted_text),
+                'chunks_count': len(document.chunks),
+                'version': document.version,
+                'created_at': document.created_at.isoformat(),
+                'processed_at': document.processed_at.isoformat() if document.processed_at else None
+            }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to upload document: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Document upload failed"
+            )
+    
+    async def search_documents(
+        self,
+        query: str,
+        user: User,
+        search_type: str = SearchType.SEMANTIC,
+        limit: int = 10,
+        filters: Dict[str, Any] = None,
+        db: Session = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Search documents for a user with access control.
+        
+        Args:
+            query: Search query text
+            user: User performing the search
+            search_type: Type of search (semantic, keyword, hybrid, contextual)
+            limit: Maximum number of results
+            filters: Additional search filters
+            db: Database session
+            
+        Returns:
+            List of search results
+        """
+        try:
+            # Validate user permissions
+            if not user.has_permission("read_documents"):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="User does not have permission to search documents"
+                )
+            
+            # Create search filter
+            search_filter = SearchFilter()
+            if filters:
+                if 'content_types' in filters:
+                    search_filter.content_types = filters['content_types']
+                if 'date_range' in filters:
+                    search_filter.date_range = filters['date_range']
+                if 'tags' in filters:
+                    search_filter.tags = filters['tags']
+                if 'language' in filters:
+                    search_filter.language = filters['language']
+                if 'min_score' in filters:
+                    search_filter.min_score = filters['min_score']
+            
+            # Perform search
+            results = await self.search_engine.search(
+                query=query,
+                user=user,
+                search_type=search_type,
+                filters=search_filter,
+                limit=limit,
+                db=db
+            )
+            
+            # Format results for API response
+            formatted_results = []
+            for result in results:
+                formatted_results.append({
+                    'chunk_id': result.chunk_id,
+                    'document_id': result.document_id,
+                    'text': result.text,
+                    'score': result.score,
+                    'highlight': result.highlight,
+                    'metadata': result.metadata,
+                    'document_metadata': result.document_metadata,
+                    'timestamp': result.timestamp.isoformat()
+                })
+            
+            # Log search
+            if self.audit_logger:
+                await self.audit_logger.log(
+                    action="documents_searched",
+                    resource_type="search",
+                    user_id=user.id,
+                    details={
+                        'query': query,
+                        'search_type': search_type,
+                        'results_count': len(results),
+                        'limit': limit
+                    }
+                )
+            
+            return formatted_results
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to search documents: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Document search failed"
+            )
+    
+    async def get_document(
+        self,
+        document_id: int,
+        user: User,
+        db: Session = None
+    ) -> Dict[str, Any]:
+        """
+        Get document details with access control.
+        
+        Args:
+            document_id: ID of the document to retrieve
+            user: User requesting the document
+            db: Database session
+            
+        Returns:
+            Document details dictionary
+        """
+        try:
+            # Get document from database
+            document = db.query(Document).filter(
+                Document.id == document_id,
+                Document.is_deleted == False
+            ).first()
+            
+            if not document:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Document not found"
+                )
+            
+            # Check access permissions
+            if not document.can_access(user):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied to this document"
+                )
+            
+            # Get document chunks
+            chunks = db.query(DocumentChunk).filter(
+                DocumentChunk.document_id == document_id
+            ).order_by(DocumentChunk.chunk_index).all()
+            
+            # Format response
+            document_data = {
+                'id': document.id,
+                'filename': document.filename,
+                'title': document.title,
+                'description': document.description,
+                'content_type': document.content_type,
+                'file_size': document.file_size,
+                'status': document.status.value,
+                'version': document.version,
+                'is_public': document.is_public,
+                'user_id': document.user_id,
+                'created_at': document.created_at.isoformat(),
+                'updated_at': document.updated_at.isoformat(),
+                'processed_at': document.processed_at.isoformat() if document.processed_at else None,
+                'extracted_text': document.extracted_text,
+                'language': document.language,
+                'tags': document.get_tag_list(),
+                'chunks_count': len(chunks),
+                'chunks': [
+                    {
+                        'id': chunk.id,
+                        'chunk_id': chunk.chunk_id,
+                        'chunk_index': chunk.chunk_index,
+                        'text': chunk.text,
+                        'text_length': chunk.text_length,
+                        'start_char': chunk.start_char,
+                        'end_char': chunk.end_char,
+                        'context_before': chunk.context_before,
+                        'context_after': chunk.context_after,
+                        'embedding_model': chunk.embedding_model
+                    }
+                    for chunk in chunks
                 ]
             }
             
-        except ChunkingError as e:
-            raise HTTPException(status_code=500, detail=f"Chunking failed: {str(e)}")
+            return document_data
+            
+        except HTTPException:
+            raise
         except Exception as e:
+            logger.error(f"Failed to get document: {e}")
             raise HTTPException(
-                status_code=500,
-                detail=f"Failed to process document: {str(e)}"
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to retrieve document"
             )
+    
+    async def list_user_documents(
+        self,
+        user: User,
+        skip: int = 0,
+        limit: int = 50,
+        include_public: bool = True,
+        db: Session = None
+    ) -> Dict[str, Any]:
+        """
+        List documents accessible to a user.
+        
+        Args:
+            user: User requesting the list
+            skip: Number of documents to skip
+            limit: Maximum number of documents to return
+            include_public: Whether to include public documents
+            db: Database session
+            
+        Returns:
+            Dictionary with documents list and metadata
+        """
+        try:
+            # Build query for accessible documents
+            query = db.query(Document).filter(Document.is_deleted == False)
+            
+            if user.is_superuser or user.has_role("admin"):
+                # Admins can see all documents
+                pass
+            else:
+                # Regular users see their own documents and public ones
+                if include_public:
+                    query = query.filter(
+                        (Document.user_id == user.id) | (Document.is_public == True)
+                    )
+                else:
+                    query = query.filter(Document.user_id == user.id)
+            
+            # Get total count
+            total_count = query.count()
+            
+            # Get paginated documents
+            documents = query.order_by(Document.created_at.desc()).offset(skip).limit(limit).all()
+            
+            # Format documents
+            documents_data = []
+            for doc in documents:
+                doc_data = {
+                    'id': doc.id,
+                    'filename': doc.filename,
+                    'title': doc.title,
+                    'description': doc.description,
+                    'content_type': doc.content_type,
+                    'file_size': doc.file_size,
+                    'status': doc.status.value,
+                    'version': doc.version,
+                    'is_public': doc.is_public,
+                    'user_id': doc.user_id,
+                    'created_at': doc.created_at.isoformat(),
+                    'updated_at': doc.updated_at.isoformat(),
+                    'processed_at': doc.processed_at.isoformat() if doc.processed_at else None,
+                    'language': doc.language,
+                    'tags': doc.get_tag_list(),
+                    'chunks_count': len(doc.chunks)
+                }
+                documents_data.append(doc_data)
+            
+            return {
+                'documents': documents_data,
+                'total_count': total_count,
+                'skip': skip,
+                'limit': limit,
+                'has_more': skip + len(documents) < total_count
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to list documents: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to list documents"
+            )
+    
+    async def delete_document(
+        self,
+        document_id: int,
+        user: User,
+        hard_delete: bool = False,
+        db: Session = None
+    ) -> Dict[str, Any]:
+        """
+        Delete a document with access control.
+        
+        Args:
+            document_id: ID of the document to delete
+            user: User requesting the deletion
+            hard_delete: Whether to permanently delete or soft delete
+            db: Database session
+            
+        Returns:
+            Dictionary with deletion status
+        """
+        try:
+            # Get document
+            document = db.query(Document).filter(
+                Document.id == document_id,
+                Document.is_deleted == False
+            ).first()
+            
+            if not document:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Document not found"
+                )
+            
+            # Check permissions
+            if document.user_id != user.id and not user.has_permission("delete_documents"):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied: cannot delete this document"
+                )
+            
+            # Delete document
+            success = await self.version_manager.delete_document_version(
+                document_id=document_id,
+                user_id=user.id,
+                db=db,
+                hard_delete=hard_delete
+            )
+            
+            if not success:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to delete document"
+                )
+            
+            # Log deletion
+            if self.audit_logger:
+                await self.audit_logger.log(
+                    action="document_deleted",
+                    resource_type="document",
+                    resource_id=str(document_id),
+                    user_id=user.id,
+                    details={
+                        'filename': document.filename,
+                        'hard_delete': hard_delete
+                    }
+                )
+            
+            return {
+                'document_id': document_id,
+                'deleted': True,
+                'hard_delete': hard_delete,
+                'timestamp': datetime.utcnow().isoformat()
+            }
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to delete document: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Document deletion failed"
+            )
+    
+    async def get_vector_stats(
+        self,
+        user: User,
+        db: Session = None
+    ) -> Dict[str, Any]:
+        """
+        Get vector database statistics for a user.
+        
+        Args:
+            user: User requesting the statistics
+            db: Database session
+            
+        Returns:
+            Dictionary with vector statistics
+        """
+        try:
+            # Get user's documents
+            user_docs = db.query(Document).filter(
+                Document.user_id == user.id,
+                Document.is_deleted == False
+            ).all()
+            
+            # Get vector indices
+            user_indices = db.query(VectorIndex).filter(
+                VectorIndex.user_id == user.id
+            ).all()
+            
+            # Calculate statistics
+            total_documents = len(user_docs)
+            total_chunks = sum(len(doc.chunks) for doc in user_docs)
+            total_indices = len(user_indices)
+            
+            # Get index statistics
+            index_stats = {}
+            for doc in user_docs:
+                index_name = f"doc_{doc.id}"
+                try:
+                    stats = await self.storage_manager.get_index_stats(index_name)
+                    index_stats[index_name] = stats
+                except Exception as e:
+                    logger.warning(f"Failed to get stats for index {index_name}: {e}")
+            
+            return {
+                'user_id': user.id,
+                'total_documents': total_documents,
+                'total_chunks': total_chunks,
+                'total_indices': total_indices,
+                'documents_by_status': self._get_documents_by_status(user_docs),
+                'documents_by_type': self._get_documents_by_type(user_docs),
+                'index_statistics': index_stats,
+                'timestamp': datetime.utcnow().isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get vector stats: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to retrieve vector statistics"
+            )
+    
+    def _is_supported_file_type(self, content_type: str) -> bool:
+        """Check if file type is supported for processing."""
+        supported_types = [
+            'text/plain',
+            'application/pdf',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'application/msword',
+            'text/html',
+            'application/json',
+            'text/markdown',
+            'text/csv'
+        ]
+        return content_type in supported_types
+    
+    def _get_documents_by_status(self, documents: List[Document]) -> Dict[str, int]:
+        """Get document count by status."""
+        status_counts = {}
+        for doc in documents:
+            status = doc.status.value
+            status_counts[status] = status_counts.get(status, 0) + 1
+        return status_counts
+    
+    def _get_documents_by_type(self, documents: List[Document]) -> Dict[str, int]:
+        """Get document count by content type."""
+        type_counts = {}
+        for doc in documents:
+            content_type = doc.content_type
+            type_counts[content_type] = type_counts.get(content_type, 0) + 1
+        return type_counts
 
-    def get_search_optimizers(self) -> tuple[SearchOptimizer, SearchOptimizer]:
-        """Get content and context search optimizers for search operations."""
-        return self.content_search, self.context_search
+
+# Dependency injection
+def get_vector_controller(audit_logger: AuditLogger = None) -> VectorController:
+    """Get vector controller instance with dependencies."""
+    return VectorController(audit_logger=audit_logger)

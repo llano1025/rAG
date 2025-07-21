@@ -13,7 +13,7 @@ from api.schemas.user_schemas import (
     User as UserSchema, UserCreate, UserUpdate, UserPermissions,
     UserLogin, UserActivityLog, UserSession, APIKeyCreate, APIKeyResponse
 )
-from api.schemas.api_schemas import APIResponse
+from api.schemas.api_schemas import APIKeyResponse
 from api.middleware.auth import AuthMiddleware
 from api.controllers.auth_controller import AuthController
 from utils.security.audit_logger import AuditLogger
@@ -32,7 +32,7 @@ async def get_auth_controller(
     audit_logger = get_audit_logger()
     return AuthController(encryption, audit_logger)
 
-@router.post("/register", response_model=APIResponse)
+@router.post("/register", response_model=APIKeyResponse)
 async def register_user(
     user_data: UserCreate,
     request: Request,
@@ -44,7 +44,7 @@ async def register_user(
         # Create new user using the controller
         user = await auth_controller.create_user(user_data, db)
         
-        return APIResponse(
+        return APIKeyResponse(
             success=True,
             data={
                 "user_id": user.id,
@@ -63,10 +63,10 @@ async def register_user(
             detail="User registration failed"
         )
 
-@router.post("/login", response_model=APIResponse)
+@router.post("/login", response_model=APIKeyResponse)
 async def login_user(
-    form_data: OAuth2PasswordRequestForm = Depends(),
     request: Request,
+    form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db),
     auth_controller: AuthController = Depends(get_auth_controller)
 ):
@@ -106,7 +106,7 @@ async def login_user(
         # Update last login
         await auth_controller.update_last_login(user.id, db)
         
-        return APIResponse(
+        return APIKeyResponse(
             success=True,
             data={
                 "access_token": access_token,
@@ -133,7 +133,7 @@ async def login_user(
             detail="Login failed"
         )
 
-@router.post("/logout", response_model=APIResponse)
+@router.post("/logout", response_model=APIKeyResponse)
 async def logout_user(
     request: Request,
     current_user: dict = Depends(AuthMiddleware.get_current_user),
@@ -150,7 +150,7 @@ async def logout_user(
             # For now, we'll just invalidate the session if we can find it
             pass
         
-        return APIResponse(
+        return APIKeyResponse(
             success=True,
             data={"message": "Logged out successfully"},
             message="Logout successful"
@@ -162,7 +162,7 @@ async def logout_user(
             detail="Logout failed"
         )
 
-@router.get("/me", response_model=APIResponse)
+@router.get("/me", response_model=APIKeyResponse)
 async def get_current_user(
     current_user: dict = Depends(AuthMiddleware.get_current_user),
     db: Session = Depends(get_db),
@@ -177,7 +177,7 @@ async def get_current_user(
                 detail="User not found"
             )
         
-        return APIResponse(
+        return APIKeyResponse(
             success=True,
             data={
                 "id": user.id,
@@ -206,7 +206,7 @@ async def get_current_user(
             detail="Failed to retrieve user information"
         )
 
-@router.put("/me", response_model=APIResponse)
+@router.put("/me", response_model=APIKeyResponse)
 async def update_current_user(
     user_update: UserUpdate,
     request: Request,
@@ -222,7 +222,7 @@ async def update_current_user(
             db
         )
         
-        return APIResponse(
+        return APIKeyResponse(
             success=True,
             data={
                 "id": updated_user.id,
@@ -246,7 +246,7 @@ async def update_current_user(
         )
 
 # Admin-only endpoints
-@router.get("/", response_model=APIResponse)
+@router.get("/", response_model=APIKeyResponse)
 async def list_users(
     skip: int = 0,
     limit: int = 50,
@@ -272,7 +272,7 @@ async def list_users(
                 "roles": [role.name.value for role in user.roles]
             })
         
-        return APIResponse(
+        return APIKeyResponse(
             success=True,
             data={
                 "users": users_data,
@@ -291,7 +291,7 @@ async def list_users(
             detail="Failed to retrieve users"
         )
 
-@router.get("/{user_id}", response_model=APIResponse)
+@router.get("/{user_id}", response_model=APIKeyResponse)
 async def get_user(
     user_id: int,
     current_user: dict = Depends(AuthMiddleware.verify_admin),
@@ -307,7 +307,7 @@ async def get_user(
                 detail="User not found"
             )
         
-        return APIResponse(
+        return APIKeyResponse(
             success=True,
             data={
                 "id": user.id,
@@ -338,7 +338,7 @@ async def get_user(
             detail="Failed to retrieve user"
         )
 
-@router.put("/{user_id}", response_model=APIResponse)
+@router.put("/{user_id}", response_model=APIKeyResponse)
 async def update_user(
     user_id: int,
     user_update: UserUpdate,
@@ -351,7 +351,7 @@ async def update_user(
     try:
         updated_user = await auth_controller.update_user(user_id, user_update, db)
         
-        return APIResponse(
+        return APIKeyResponse(
             success=True,
             data={
                 "id": updated_user.id,
@@ -373,7 +373,7 @@ async def update_user(
             detail="Failed to update user"
         )
 
-@router.delete("/{user_id}", response_model=APIResponse)
+@router.delete("/{user_id}", response_model=APIKeyResponse)
 async def delete_user(
     user_id: int,
     request: Request,
@@ -385,7 +385,7 @@ async def delete_user(
     try:
         await auth_controller.delete_user(user_id, db)
         
-        return APIResponse(
+        return APIKeyResponse(
             success=True,
             data={"user_id": user_id},
             message="User deleted successfully"
@@ -400,7 +400,7 @@ async def delete_user(
         )
 
 # API Key Management Endpoints
-@router.post("/api-keys", response_model=APIResponse)
+@router.post("/api-keys", response_model=APIKeyResponse)
 async def create_api_key(
     api_key_data: APIKeyCreate,
     current_user: dict = Depends(AuthMiddleware.get_current_user),
@@ -417,7 +417,7 @@ async def create_api_key(
             db=db
         )
         
-        return APIResponse(
+        return APIKeyResponse(
             success=True,
             data={
                 "id": api_key.id,
@@ -440,7 +440,7 @@ async def create_api_key(
             detail="Failed to create API key"
         )
 
-@router.get("/api-keys", response_model=APIResponse)
+@router.get("/api-keys", response_model=APIKeyResponse)
 async def list_api_keys(
     current_user: dict = Depends(AuthMiddleware.get_current_user),
     db: Session = Depends(get_db)
@@ -467,7 +467,7 @@ async def list_api_keys(
                 "created_at": key.created_at.isoformat()
             })
         
-        return APIResponse(
+        return APIKeyResponse(
             success=True,
             data={"api_keys": keys_data},
             message="API keys retrieved successfully"
@@ -479,7 +479,7 @@ async def list_api_keys(
             detail="Failed to retrieve API keys"
         )
 
-@router.delete("/api-keys/{key_id}", response_model=APIResponse)
+@router.delete("/api-keys/{key_id}", response_model=APIKeyResponse)
 async def revoke_api_key(
     key_id: int,
     current_user: dict = Depends(AuthMiddleware.get_current_user),
@@ -500,7 +500,7 @@ async def revoke_api_key(
                 detail="API key not found"
             )
         
-        return APIResponse(
+        return APIKeyResponse(
             success=True,
             data={"key_id": key_id},
             message="API key revoked successfully"

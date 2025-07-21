@@ -1,15 +1,15 @@
 # utils/__init__.py
-from .security import Encryption, PiiDetector, AuditLogger
-from .monitoring import Metrics, HealthCheck, ErrorTracker
+from .security import EncryptionManager, PIIDetector, AuditLogger
+from .monitoring import MetricsCollector, HealthChecker, ErrorTracker
 from .caching import RedisManager, CacheStrategy
 from .export import DataExporter, WebhookManager
 
 __all__ = [
-    'Encryption',
-    'PiiDetector',
+    'EncryptionManager',
+    'PIIDetector',
     'AuditLogger',
-    'Metrics',
-    'HealthCheck',
+    'MetricsCollector',
+    'HealthChecker',
     'ErrorTracker',
     'RedisManager',
     'CacheStrategy',

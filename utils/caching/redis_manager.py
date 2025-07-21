@@ -48,6 +48,26 @@ class RedisManager:
                 raise
         return self._redis_client
 
+    async def connect(self):
+        """Initialize Redis connection (async interface for consistency)."""
+        try:
+            # Force initialization of client via property
+            _ = self.client
+            logger.info("Redis connection established successfully")
+        except Exception as e:
+            logger.error(f"Failed to establish Redis connection: {str(e)}")
+            raise
+
+    async def disconnect(self):
+        """Close Redis connection."""
+        try:
+            if self._redis_client:
+                self._redis_client.close()
+                self._redis_client = None
+                logger.info("Redis connection closed")
+        except Exception as e:
+            logger.error(f"Error closing Redis connection: {str(e)}")
+
     def set_value(
         self,
         key: str,

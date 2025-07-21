@@ -5,10 +5,10 @@ from pydantic import BaseModel
 from ..middleware.auth import get_current_user
 from ..controllers import search_controller
 from ..schemas.search_schemas import (
-    SearchRequest,
+    SearchQuery,
     SearchResponse,
-    SearchFilter,
-    SimilaritySearchRequest
+    SearchFilters,
+    SearchResult
 )
 
 router = APIRouter(prefix="/search", tags=["search"])
@@ -20,7 +20,7 @@ class SearchMetadata(BaseModel):
 
 @router.post("/", response_model=SearchResponse)
 async def search_documents(
-    request: SearchRequest,
+    request: SearchQuery,
     current_user = Depends(get_current_user)
 ):
     """
@@ -41,7 +41,7 @@ async def search_documents(
 
 @router.post("/similarity", response_model=SearchResponse)
 async def similarity_search(
-    request: SimilaritySearchRequest,
+    request: SearchQuery,
     current_user = Depends(get_current_user)
 ):
     """
@@ -59,7 +59,7 @@ async def similarity_search(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@router.get("/filters", response_model=List[SearchFilter])
+@router.get("/filters", response_model=List[SearchFilters])
 async def get_available_filters(
     current_user = Depends(get_current_user)
 ):
@@ -73,7 +73,7 @@ async def get_available_filters(
 
 @router.post("/save", response_model=dict)
 async def save_search(
-    request: SearchRequest,
+    request: SearchQuery,
     name: str = Query(..., description="Name for the saved search"),
     current_user = Depends(get_current_user)
 ):

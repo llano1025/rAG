@@ -1,11 +1,11 @@
 
 # utils/security/__init__.py
-from .encryption import Encryption
-from .pii_detector import PiiDetector
+from .encryption import EncryptionManager
+from .pii_detector import PIIDetector
 from .audit_logger import AuditLogger
 
 __all__ = [
-    'Encryption',
-    'PiiDetector',
+    'EncryptionManager',
+    'PIIDetector',
     'AuditLogger'
 ]

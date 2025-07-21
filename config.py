@@ -1,6 +1,7 @@
 import os
 from typing import Optional, List
-from pydantic import BaseSettings, Field, validator
+from pydantic import Field, validator
+from pydantic_settings import BaseSettings
 from functools import lru_cache
 
 class Settings(BaseSettings):
@@ -89,6 +90,61 @@ class Settings(BaseSettings):
     # Worker settings
     WORKER_CONCURRENCY: int = Field(default=4, env="WORKER_CONCURRENCY")
     BACKGROUND_TASK_TIMEOUT: int = Field(default=300, env="BACKGROUND_TASK_TIMEOUT")  # 5 minutes
+    
+    # Environment and fallback settings
+    ENVIRONMENT: str = Field(default="development", env="ENVIRONMENT")
+    USE_EMBEDDED_FALLBACKS: bool = Field(default=True, env="USE_EMBEDDED_FALLBACKS")
+    
+    # Phase 7: Performance Configuration
+    BATCH_PROCESSOR_MAX_WORKERS: int = Field(default=10, env="BATCH_PROCESSOR_MAX_WORKERS")
+    BATCH_PROCESSOR_MAX_MEMORY_MB: int = Field(default=1024, env="BATCH_PROCESSOR_MAX_MEMORY_MB")
+    BATCH_PROCESSOR_DEFAULT_BATCH_SIZE: int = Field(default=50, env="BATCH_PROCESSOR_DEFAULT_BATCH_SIZE")
+    
+    # Query Optimization Configuration
+    QUERY_CACHE_TTL_SECONDS: int = Field(default=3600, env="QUERY_CACHE_TTL_SECONDS")
+    QUERY_CACHE_MAX_SIZE_MB: int = Field(default=500, env="QUERY_CACHE_MAX_SIZE_MB")
+    ENABLE_QUERY_PLANNING: bool = Field(default=True, env="ENABLE_QUERY_PLANNING")
+    
+    # Load Balancer Configuration
+    LOAD_BALANCER_STRATEGY: str = Field(default="adaptive", env="LOAD_BALANCER_STRATEGY")
+    LOAD_BALANCER_HEALTH_CHECK_INTERVAL: int = Field(default=30, env="LOAD_BALANCER_HEALTH_CHECK_INTERVAL")
+    ENABLE_CIRCUIT_BREAKER: bool = Field(default=True, env="ENABLE_CIRCUIT_BREAKER")
+    CIRCUIT_BREAKER_FAILURE_THRESHOLD: int = Field(default=5, env="CIRCUIT_BREAKER_FAILURE_THRESHOLD")
+    
+    # Async Processing Configuration
+    ASYNC_WORKER_POOL_MAX_WORKERS: int = Field(default=10, env="ASYNC_WORKER_POOL_MAX_WORKERS")
+    ASYNC_WORKER_POOL_QUEUE_SIZE: int = Field(default=1000, env="ASYNC_WORKER_POOL_QUEUE_SIZE")
+    ENABLE_AUTO_SCALING: bool = Field(default=True, env="ENABLE_AUTO_SCALING")
+    
+    # Phase 8: Monitoring Configuration
+    USAGE_STATISTICS_ENABLED: bool = Field(default=True, env="USAGE_STATISTICS_ENABLED")
+    USAGE_STATS_FLUSH_INTERVAL: int = Field(default=300, env="USAGE_STATS_FLUSH_INTERVAL")  # 5 minutes
+    USAGE_STATS_MAX_EVENTS: int = Field(default=10000, env="USAGE_STATS_MAX_EVENTS")
+    
+    # Backup Configuration
+    BACKUP_ENABLED: bool = Field(default=True, env="BACKUP_ENABLED")
+    BACKUP_DIRECTORY: str = Field(default="backups", env="BACKUP_DIRECTORY")
+    BACKUP_RETENTION_DAYS: int = Field(default=30, env="BACKUP_RETENTION_DAYS")
+    BACKUP_COMPRESSION: bool = Field(default=True, env="BACKUP_COMPRESSION")
+    BACKUP_SCHEDULE_DAILY: str = Field(default="0 2 * * *", env="BACKUP_SCHEDULE_DAILY")  # Daily at 2 AM
+    
+    # Alert Configuration
+    ALERTS_ENABLED: bool = Field(default=True, env="ALERTS_ENABLED")
+    ALERT_EMAIL_SMTP_HOST: str = Field(default="localhost", env="ALERT_EMAIL_SMTP_HOST")
+    ALERT_EMAIL_FROM: str = Field(default="alerts@rag-system.com", env="ALERT_EMAIL_FROM")
+    ALERT_WEBHOOK_URL: Optional[str] = Field(default=None, env="ALERT_WEBHOOK_URL")
+    ALERT_SLACK_WEBHOOK_URL: Optional[str] = Field(default=None, env="ALERT_SLACK_WEBHOOK_URL")
+    
+    # Dashboard Configuration
+    DASHBOARD_ENABLED: bool = Field(default=True, env="DASHBOARD_ENABLED")
+    DASHBOARD_REFRESH_INTERVAL: int = Field(default=30, env="DASHBOARD_REFRESH_INTERVAL")
+    DASHBOARD_MAX_HISTORY: int = Field(default=100, env="DASHBOARD_MAX_HISTORY")
+    DASHBOARD_THEME: str = Field(default="auto", env="DASHBOARD_THEME")
+    
+    # Export Configuration
+    EXPORT_DIRECTORY: str = Field(default="exports", env="EXPORT_DIRECTORY")
+    EXPORT_MAX_FILE_SIZE_MB: int = Field(default=500, env="EXPORT_MAX_FILE_SIZE_MB")
+    EXPORT_COMPRESSION_DEFAULT: bool = Field(default=True, env="EXPORT_COMPRESSION_DEFAULT")
     
     @validator("SECRET_KEY")
     def validate_secret_key(cls, v):

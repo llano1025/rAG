@@ -1,45 +1,17 @@
-# # api/controllers/search_controller.py
-# from typing import List, Optional
-# from fastapi import HTTPException
-
-# from vector_db.search_optimizer import SearchOptimizer
-# from llm.response_handler import ResponseHandler
-
-# class SearchController:
-#     def __init__(
-#         self,
-#         search_optimizer: SearchOptimizer,
-#         response_handler: ResponseHandler
-#     ):
-#         self.search_optimizer = search_optimizer
-#         self.response_handler = response_handler
-
-#     async def search(
-#         self,
-#         query: str,
-#         filters: Optional[dict] = None,
-#         limit: int = 10
-#     ) -> List[dict]:
-#         try:
-#             results = await self.search_optimizer.search(
-#                 query=query,
-#                 filters=filters,
-#                 limit=limit
-#             )
-#             return await self.response_handler.format_results(results)
-#         except Exception as e:
-#             raise HTTPException(status_code=500, detail=str(e))
-# /controllers/search_controller.py
-
-# /controllers/search_controller.py
 from typing import List, Dict, Optional, Tuple
 from fastapi import HTTPException
 import numpy as np
+from sqlalchemy.ext.asyncio import AsyncSession
+import hashlib
+import json
+from datetime import datetime
 
 from vector_db.embedding_manager import EmbeddingManager
 from vector_db.search_optimizer import SearchOptimizer, SearchError
 from vector_db.context_processor import ContextProcessor
 from vector_db.chunking import Chunk
+from database.models import User, SearchQuery, Document
+from utils.security.audit_logger import AuditLogger
 
 class SearchController:
     """Controller for all search operations."""
@@ -49,25 +21,49 @@ class SearchController:
         embedding_manager: EmbeddingManager,
         content_search: SearchOptimizer,
         context_search: SearchOptimizer,
-        context_processor: ContextProcessor
+        context_processor: ContextProcessor,
+        db: AsyncSession,
+        audit_logger: AuditLogger
     ):
         self.embedding_manager = embedding_manager
         self.content_search = content_search
         self.context_search = context_search
         self.context_processor = context_processor
+        self.db = db
+        self.audit_logger = audit_logger
 
     async def search(
         self,
         query: str,
+        user: User,
         query_context: Optional[str] = None,
         k: int = 5,
         filters: Optional[Dict] = None,
         content_weight: float = 0.7,
         context_weight: float = 0.3,
-        min_score: float = 0.0
+        min_score: float = 0.0,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None
     ) -> List[Dict]:
         """Unified search endpoint with all features."""
+        start_time = datetime.utcnow()
+        
         try:
+            # Check for cached results first
+            query_hash = SearchQuery.create_query_hash(query, filters)
+            cached_query = await self._get_cached_search(query_hash, user.id)
+            
+            if cached_query and cached_query.is_cache_valid():
+                await self.audit_logger.log_event(
+                    user_id=user.id,
+                    action="search_cache_hit",
+                    resource_type="search",
+                    resource_id=str(cached_query.id),
+                    ip_address=ip_address,
+                    user_agent=user_agent
+                )
+                return cached_query.get_cached_results()
+            
             # Process query context
             processed_context = self.context_processor.process_context(
                 query, query_context
@@ -78,6 +74,9 @@ class SearchController:
                 query, processed_context
             )
             
+            # Add user access control filters
+            user_filters = await self._add_user_access_filters(filters, user)
+            
             # Search in both spaces
             content_results = self.content_search.search(
                 query_emb, k=k, min_score=min_score
@@ -86,18 +85,39 @@ class SearchController:
                 context_emb, k=k, min_score=min_score
             )
             
-            # Combine and filter results
-            results = self._combine_and_filter_results(
+            # Combine and filter results with access control
+            results = await self._combine_and_filter_results(
                 content_results,
                 context_results,
                 content_weight,
                 context_weight,
-                filters
+                user_filters,
+                user
             )
             
-            return self._format_results(results[:k])
+            formatted_results = self._format_results(results[:k])
+            
+            # Cache results and log search
+            search_time = (datetime.utcnow() - start_time).total_seconds() * 1000
+            await self._save_search_query(
+                query, user, query_hash, formatted_results, 
+                search_time, user_filters, ip_address, user_agent
+            )
+            
+            return formatted_results
             
         except Exception as e:
+            # Log search error
+            await self.audit_logger.log_event(
+                user_id=user.id,
+                action="search_error",
+                resource_type="search",
+                error_message=str(e),
+                ip_address=ip_address,
+                user_agent=user_agent,
+                status="error"
+            )
+            
             raise HTTPException(
                 status_code=500,
                 detail=f"Search failed: {str(e)}"
@@ -106,15 +126,21 @@ class SearchController:
     async def batch_search(
         self,
         queries: List[str],
+        user: User,
         contexts: Optional[List[str]] = None,
         k: int = 5,
         filters: Optional[Dict] = None,
         content_weight: float = 0.7,
         context_weight: float = 0.3,
-        min_score: float = 0.0
+        min_score: float = 0.0,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None
     ) -> List[List[Dict]]:
         """Unified batch search endpoint."""
         try:
+            # Add user access control filters
+            user_filters = await self._add_user_access_filters(filters, user)
+            
             # Process all contexts
             processed_contexts = [
                 self.context_processor.process_context(q, c)
@@ -145,40 +171,76 @@ class SearchController:
             
             # Process each query's results
             batch_results = []
-            for q_content, q_context in zip(content_results, context_results):
-                combined = self._combine_and_filter_results(
+            for i, (q_content, q_context) in enumerate(zip(content_results, context_results)):
+                combined = await self._combine_and_filter_results(
                     q_content,
                     q_context,
                     content_weight,
                     context_weight,
-                    filters
+                    user_filters,
+                    user
                 )
                 batch_results.append(self._format_results(combined[:k]))
+                
+                # Log each search query
+                query_hash = SearchQuery.create_query_hash(queries[i], user_filters)
+                await self._save_search_query(
+                    queries[i], user, query_hash, batch_results[-1], 
+                    0, user_filters, ip_address, user_agent, is_batch=True
+                )
+            
+            # Log batch search event
+            await self.audit_logger.log_event(
+                user_id=user.id,
+                action="batch_search",
+                resource_type="search",
+                details={"query_count": len(queries), "total_results": sum(len(r) for r in batch_results)},
+                ip_address=ip_address,
+                user_agent=user_agent
+            )
             
             return batch_results
             
         except Exception as e:
+            # Log batch search error
+            await self.audit_logger.log_event(
+                user_id=user.id,
+                action="batch_search_error",
+                resource_type="search",
+                error_message=str(e),
+                ip_address=ip_address,
+                user_agent=user_agent,
+                status="error"
+            )
+            
             raise HTTPException(
                 status_code=500,
                 detail=f"Batch search failed: {str(e)}"
             )
 
-    def _combine_and_filter_results(
+    async def _combine_and_filter_results(
         self,
         content_results: List[Tuple[Chunk, float]],
         context_results: List[Tuple[Chunk, float]],
         content_weight: float,
         context_weight: float,
-        filters: Optional[Dict]
+        filters: Optional[Dict],
+        user: User
     ) -> List[Tuple[Chunk, float]]:
-        """Combine, filter, and rank search results."""
+        """Combine, filter, and rank search results with access control."""
         combined_scores = {}
+        accessible_documents = await self._get_accessible_documents(user)
         
         for results, weight in [
             (content_results, content_weight),
             (context_results, context_weight)
         ]:
             for chunk, score in results:
+                # Check document access permissions
+                document_id = chunk.metadata.get('document_id')
+                if document_id and document_id not in accessible_documents:
+                    continue
+                    
                 if filters and not self._matches_filters(chunk.metadata, filters):
                     continue
                 
@@ -222,3 +284,108 @@ class SearchController:
             }
             for chunk, score in results
         ]
+    
+    async def _get_cached_search(self, query_hash: str, user_id: int) -> Optional[SearchQuery]:
+        """Get cached search results if available."""
+        try:
+            from sqlalchemy import select
+            result = await self.db.execute(
+                select(SearchQuery).where(
+                    SearchQuery.query_hash == query_hash,
+                    SearchQuery.user_id == user_id
+                )
+            )
+            return result.scalar_one_or_none()
+        except Exception:
+            return None
+    
+    async def _add_user_access_filters(self, filters: Optional[Dict], user: User) -> Dict:
+        """Add user access control filters to search filters."""
+        user_filters = filters.copy() if filters else {}
+        
+        # Add user-specific document filters unless user is admin
+        if not user.is_admin:
+            accessible_docs = await self._get_accessible_documents(user)
+            user_filters['accessible_documents'] = accessible_docs
+        
+        return user_filters
+    
+    async def _get_accessible_documents(self, user: User) -> List[str]:
+        """Get list of document IDs that user can access."""
+        try:
+            from sqlalchemy import select, or_
+            
+            # Query documents user can access
+            query = select(Document.id).where(
+                or_(
+                    Document.user_id == user.id,  # Own documents
+                    Document.is_public == True,    # Public documents
+                    user.is_admin == True          # Admin can access all
+                )
+            )
+            
+            result = await self.db.execute(query)
+            return [str(doc_id[0]) for doc_id in result.fetchall()]
+        except Exception:
+            # If query fails, return empty list (restrictive)
+            return []
+    
+    async def _save_search_query(
+        self, 
+        query: str, 
+        user: User, 
+        query_hash: str, 
+        results: List[Dict], 
+        search_time: float,
+        filters: Optional[Dict] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+        is_batch: bool = False
+    ):
+        """Save search query for analytics and caching."""
+        try:
+            search_query = SearchQuery(
+                user_id=user.id,
+                query_text=query,
+                query_hash=query_hash,
+                query_type="semantic",  # Default type
+                search_filters=json.dumps(filters) if filters else None,
+                max_results=len(results),
+                results_count=len(results),
+                search_time_ms=int(search_time),
+                ip_address=ip_address,
+                user_agent=user_agent
+            )
+            
+            # Cache results if not batch search
+            if not is_batch and results:
+                search_query.set_cached_results(results)
+            
+            self.db.add(search_query)
+            await self.db.commit()
+            
+            # Log search event
+            await self.audit_logger.log_event(
+                user_id=user.id,
+                action="search" if not is_batch else "batch_search_item",
+                resource_type="search",
+                resource_id=str(search_query.id),
+                details={
+                    "query": query[:100],  # Truncate long queries
+                    "results_count": len(results),
+                    "search_time_ms": int(search_time)
+                },
+                ip_address=ip_address,
+                user_agent=user_agent
+            )
+            
+        except Exception as e:
+            # Don't fail search if logging fails
+            await self.audit_logger.log_event(
+                user_id=user.id,
+                action="search_logging_error",
+                resource_type="search",
+                error_message=str(e),
+                ip_address=ip_address,
+                user_agent=user_agent
+            )

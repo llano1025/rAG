@@ -6,6 +6,8 @@ import hashlib
 from dataclasses import dataclass
 import fitz  # PyMuPDF
 from docx import Document
+import tempfile
+import os
 from .type_detector import FileTypeDetector
 
 @dataclass
@@ -45,6 +47,49 @@ class MetadataExtractor:
         self._extract_specific_metadata(file_path, metadata)
         
         return metadata
+
+    async def extract_metadata(self, file_content: bytes, content_type: str, filename: str = None) -> DocumentMetadata:
+        """Extract metadata from document content bytes (async method expected by controllers)."""
+        # Create temporary file from bytes content
+        with tempfile.NamedTemporaryFile(delete=False, suffix=self._get_file_extension(content_type)) as temp_file:
+            temp_file.write(file_content)
+            temp_file.flush()
+            temp_path = temp_file.name
+        
+        try:
+            # Extract metadata using existing method
+            metadata = self.extract(temp_path)
+            
+            # Override filename if provided
+            if filename:
+                metadata.file_name = filename
+            
+            # Override file size with actual content size
+            metadata.file_size = len(file_content)
+            metadata.file_type = content_type
+            
+            # Recalculate checksum from content
+            metadata.checksum = hashlib.sha256(file_content).hexdigest()
+            
+            return metadata
+        finally:
+            # Clean up temporary file
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+
+    def _get_file_extension(self, content_type: str) -> str:
+        """Get appropriate file extension for content type."""
+        extensions = {
+            'application/pdf': '.pdf',
+            'application/msword': '.doc',
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+            'text/plain': '.txt',
+            'text/html': '.html',
+            'image/jpeg': '.jpg',
+            'image/png': '.png',
+            'image/tiff': '.tiff'
+        }
+        return extensions.get(content_type, '.tmp')
 
     def _calculate_checksum(self, file_path: Union[str, Path]) -> str:
         """Calculate SHA-256 checksum of file."""

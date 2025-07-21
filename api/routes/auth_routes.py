@@ -12,7 +12,7 @@ from pydantic import BaseModel, EmailStr
 from database.connection import get_db
 from database.models import User
 from api.controllers.auth_controller import AuthController
-from api.schemas.api_schemas import APIResponse
+from api.schemas.api_schemas import APIKeyResponse
 from utils.security.audit_logger import AuditLogger
 from utils.security.encryption import EncryptionManager
 
@@ -49,7 +49,7 @@ async def send_email_background(email: str, subject: str, content: str):
     print(f"CONTENT: {content}")
     print("=" * 50)
 
-@router.post("/request-password-reset", response_model=APIResponse)
+@router.post("/request-password-reset", response_model=APIKeyResponse)
 async def request_password_reset(
     request_data: PasswordResetRequest,
     background_tasks: BackgroundTasks,
@@ -102,7 +102,7 @@ async def request_password_reset(
             )
         
         # Always return success for security (don't reveal if email exists)
-        return APIResponse(
+        return APIKeyResponse(
             success=True,
             data={"message": "If the email exists, a password reset link has been sent."},
             message="Password reset request processed"
@@ -114,7 +114,7 @@ async def request_password_reset(
             detail="Password reset request failed"
         )
 
-@router.post("/reset-password", response_model=APIResponse)
+@router.post("/reset-password", response_model=APIKeyResponse)
 async def reset_password(
     reset_data: PasswordReset,
     db: Session = Depends(get_db),
@@ -162,7 +162,7 @@ async def reset_password(
             details={"email": user.email}
         )
         
-        return APIResponse(
+        return APIKeyResponse(
             success=True,
             data={"message": "Password reset successfully"},
             message="Password updated"
@@ -176,7 +176,7 @@ async def reset_password(
             detail="Password reset failed"
         )
 
-@router.post("/request-email-verification", response_model=APIResponse)
+@router.post("/request-email-verification", response_model=APIKeyResponse)
 async def request_email_verification(
     background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_auth_controller),
@@ -189,7 +189,7 @@ async def request_email_verification(
         # For now, we'll accept an email in the request
         # In production, get from current_user context
         
-        return APIResponse(
+        return APIKeyResponse(
             success=True,
             data={"message": "Email verification endpoint - requires authenticated user"},
             message="Not implemented without authentication context"
@@ -201,7 +201,7 @@ async def request_email_verification(
             detail="Email verification request failed"
         )
 
-@router.post("/verify-email", response_model=APIResponse)
+@router.post("/verify-email", response_model=APIKeyResponse)
 async def verify_email(
     verification_data: EmailVerification,
     db: Session = Depends(get_db),
@@ -239,7 +239,7 @@ async def verify_email(
             details={"email": user.email}
         )
         
-        return APIResponse(
+        return APIKeyResponse(
             success=True,
             data={
                 "message": "Email verified successfully",

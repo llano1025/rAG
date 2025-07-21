@@ -148,3 +148,69 @@ class FileTypeDetector:
             raise UnsupportedFileType(f"No extension mapping for MIME type: {mime_type}")
         
         return self.MIME_TO_EXTENSION[mime_type]
+
+    def detect_type(self, file_path: Union[str, Path] = None, file_content: bytes = None, filename: str = None) -> str:
+        """Detect MIME type from file path or content bytes (method expected by controllers).
+        
+        Args:
+            file_path: Path to file (for backward compatibility)
+            file_content: File content as bytes
+            filename: Original filename (for extension validation)
+            
+        Returns:
+            str: Detected MIME type
+            
+        Raises:
+            UnsupportedFileType: If the file type is not supported
+            ValueError: If neither file_path nor file_content is provided
+        """
+        if file_path is not None:
+            # Use existing detect method for file path
+            return self.detect(file_path)
+        elif file_content is not None:
+            # Detect from bytes content
+            try:
+                mime_type = self.mime.from_buffer(file_content)
+                self.logger.debug(f"Detected MIME type from content: {mime_type}")
+                
+                if mime_type not in self.MIME_TO_EXTENSION:
+                    raise UnsupportedFileType(f"Unsupported file type: {mime_type}")
+                
+                # Validate against filename extension if provided
+                if filename and not self._validate_extension_against_filename(filename, mime_type):
+                    self.logger.warning(f"Extension mismatch for {filename}: detected {mime_type}")
+                
+                return mime_type
+                
+            except Exception as e:
+                self.logger.error(f"Error detecting type from content: {e}")
+                raise UnsupportedFileType(f"Failed to detect file type: {e}")
+        else:
+            raise ValueError("Either file_path or file_content must be provided")
+    
+    def _validate_extension_against_filename(self, filename: str, mime_type: str) -> bool:
+        """Validate filename extension against MIME type.
+        
+        Args:
+            filename: The filename to validate
+            mime_type: The detected MIME type
+            
+        Returns:
+            bool: True if extension matches MIME type
+        """
+        extension = Path(filename).suffix.lower()
+        expected_extension = self.MIME_TO_EXTENSION.get(mime_type)
+        
+        # Handle common extension variations
+        extension_mappings = {
+            '.jpeg': '.jpg',
+            '.htm': '.html',
+            '.tif': '.tiff'
+        }
+        
+        normalized_extension = extension_mappings.get(extension, extension)
+        is_valid = normalized_extension == expected_extension
+        
+        self.logger.debug(f"Extension validation: {extension} -> {normalized_extension} vs {expected_extension} -> {is_valid}")
+        
+        return is_valid

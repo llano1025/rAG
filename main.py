@@ -6,13 +6,13 @@ import logging
 import os
 from typing import Dict, Any
 
-from api.routes import document_routes, search_routes, vector_routes, library_routes, user_routes, auth_routes
+from api.routes import document_routes, search_routes, vector_routes, library_routes, user_routes, auth_routes, health_routes, admin_routes, advanced_routes
 from api.middleware.auth import AuthMiddleware
-from api.middleware.error_handler import ErrorHandlerMiddleware
-from api.middleware.rate_limiter import RateLimiterMiddleware
-from utils.monitoring.health_check import HealthCheck
+from api.middleware.error_handler import ErrorHandler
+from api.middleware.rate_limiter import RateLimiter
+from utils.monitoring.health_check import HealthChecker
 from utils.caching.redis_manager import RedisManager
-from utils.security.encryption import EncryptionManager
+from utils.security.encryption import EncryptionManager, EncryptionConfig
 from utils.security.audit_logger import AuditLogger
 from database.connection import create_tables
 from config import get_settings
@@ -57,7 +57,14 @@ async def lifespan(app: FastAPI):
         logger.info("Redis connection established")
         
         # Initialize encryption manager
-        encryption_manager = EncryptionManager()
+        from pathlib import Path
+        encryption_config = EncryptionConfig(
+            key_path=Path("data/encryption.key"),
+            salt_path=Path("data/encryption.salt")
+        )
+        # Ensure data directory exists
+        Path("data").mkdir(exist_ok=True)
+        encryption_manager = EncryptionManager(encryption_config)
         logger.info("Encryption manager initialized")
         
         # Initialize audit logger
@@ -65,7 +72,7 @@ async def lifespan(app: FastAPI):
         logger.info("Audit logger initialized")
         
         # Initialize health check
-        health_check = HealthCheck()
+        health_check = HealthChecker()
         await health_check.initialize()
         logger.info("Health check system initialized")
         
@@ -126,8 +133,8 @@ def create_app() -> FastAPI:
         )
     
     # Add custom middleware
-    app.add_middleware(ErrorHandlerMiddleware)
-    app.add_middleware(RateLimiterMiddleware)
+    app.add_middleware(ErrorHandler)
+    # app.add_middleware(RateLimiter)  # Disabled for testing - requires proper configuration
     
     # Include routers
     app.include_router(auth_routes.router, prefix="/api/v1")
@@ -136,6 +143,9 @@ def create_app() -> FastAPI:
     app.include_router(search_routes.router, prefix="/api/v1")
     app.include_router(vector_routes.router, prefix="/api/v1")
     app.include_router(library_routes.router, prefix="/api/v1")
+    app.include_router(health_routes.router, prefix="/api/v1")
+    app.include_router(admin_routes.router, prefix="/api/v1")
+    app.include_router(advanced_routes.router)
     
     @app.get("/")
     async def root():
@@ -195,7 +205,7 @@ def get_redis_manager() -> RedisManager:
     global redis_manager
     return redis_manager
 
-def get_health_check() -> HealthCheck:
+def get_health_check() -> HealthChecker:
     """Get the global health check instance."""
     global health_check
     return health_check

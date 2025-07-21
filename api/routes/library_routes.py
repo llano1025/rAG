@@ -6,18 +6,17 @@ from ..controllers import library_controller
 from ..schemas.library_schemas import (
     FolderCreate,
     FolderUpdate,
-    FolderResponse,
+    Folder,
     TagCreate,
     TagUpdate,
-    TagResponse,
-    LibraryStats,
-    DocumentMove
+    Tag,
+    LibraryStats
 )
 
 router = APIRouter(prefix="/library", tags=["library"])
 
 # Folder Routes
-@router.post("/folders", response_model=FolderResponse)
+@router.post("/folders", response_model=Folder)
 async def create_folder(
     folder: FolderCreate,
     current_user = Depends(get_current_user)
@@ -32,7 +31,7 @@ async def create_folder(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@router.get("/folders", response_model=List[FolderResponse])
+@router.get("/folders", response_model=List[Folder])
 async def list_folders(
     parent_id: Optional[str] = Query(None),
     current_user = Depends(get_current_user)
@@ -44,7 +43,7 @@ async def list_folders(
     )
     return folders
 
-@router.put("/folders/{folder_id}", response_model=FolderResponse)
+@router.put("/folders/{folder_id}", response_model=Folder)
 async def update_folder(
     folder_id: str,
     folder_update: FolderUpdate,
@@ -77,7 +76,7 @@ async def delete_folder(
     return {"message": "Folder deleted successfully"}
 
 # Tag Routes
-@router.post("/tags", response_model=TagResponse)
+@router.post("/tags", response_model=Tag)
 async def create_tag(
     tag: TagCreate,
     current_user = Depends(get_current_user)
@@ -92,7 +91,7 @@ async def create_tag(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@router.get("/tags", response_model=List[TagResponse])
+@router.get("/tags", response_model=List[Tag])
 async def list_tags(
     current_user = Depends(get_current_user)
 ):
@@ -102,7 +101,7 @@ async def list_tags(
     )
     return tags
 
-@router.put("/tags/{tag_id}", response_model=TagResponse)
+@router.put("/tags/{tag_id}", response_model=Tag)
 async def update_tag(
     tag_id: str,
     tag_update: TagUpdate,
@@ -133,9 +132,14 @@ async def delete_tag(
     return {"message": "Tag deleted successfully"}
 
 # Document Organization Routes
+
+class DocumentMoveRequest(BaseModel):
+    document_ids: List[int]
+    target_folder_id: Optional[str] = None
+
 @router.post("/move-documents")
 async def move_documents(
-    move_request: DocumentMove,
+    move_request: DocumentMoveRequest,
     current_user = Depends(get_current_user)
 ):
     """Move documents to a different folder."""

@@ -8,12 +8,12 @@ from .controllers import (
     AuthController
 )
 from .schemas import (
-    DocumentSchema,
-    SearchSchema,
-    VectorSchema,
-    LibrarySchema,
-    UserSchema,
-    ApiSchema
+    Document,
+    SearchQuery,
+    VectorEntry,
+    LibraryStats,
+    User,
+    APIKey
 )
 
 __all__ = [
@@ -26,10 +26,10 @@ __all__ = [
     'VectorController',
     'LibraryController',
     'AuthController',
-    'DocumentSchema',
-    'SearchSchema',
-    'VectorSchema',
-    'LibrarySchema',
-    'UserSchema',
-    'ApiSchema'
+    'Document',
+    'SearchQuery',
+    'VectorEntry',
+    'LibraryStats',
+    'User',
+    'APIKey'
 ]

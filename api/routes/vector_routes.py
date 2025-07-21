@@ -6,7 +6,7 @@ from ..controllers import vector_controller
 from ..schemas.vector_schemas import (
     VectorUpsertRequest,
     VectorSearchRequest,
-    VectorResponse,
+    VectorSearchResponse,
     VectorMetadata
 )
 
@@ -15,7 +15,7 @@ router = APIRouter(prefix="/vectors", tags=["vectors"])
 class BatchVectorRequest(BaseModel):
     vectors: List[VectorUpsertRequest]
 
-@router.post("/upsert", response_model=VectorResponse)
+@router.post("/upsert", response_model=VectorSearchResponse)
 async def upsert_vector(
     request: VectorUpsertRequest,
     current_user = Depends(get_current_user)
@@ -32,7 +32,7 @@ async def upsert_vector(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@router.post("/batch-upsert", response_model=List[VectorResponse])
+@router.post("/batch-upsert", response_model=List[VectorSearchResponse])
 async def batch_upsert_vectors(
     request: BatchVectorRequest,
     current_user = Depends(get_current_user)
@@ -49,7 +49,7 @@ async def batch_upsert_vectors(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@router.post("/search", response_model=List[VectorResponse])
+@router.post("/search", response_model=List[VectorSearchResponse])
 async def search_vectors(
     request: VectorSearchRequest,
     current_user = Depends(get_current_user)
@@ -69,7 +69,7 @@ async def search_vectors(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@router.get("/{vector_id}", response_model=VectorResponse)
+@router.get("/{vector_id}", response_model=VectorSearchResponse)
 async def get_vector(
     vector_id: str,
     current_user = Depends(get_current_user)
