@@ -2,10 +2,11 @@
 SQLAlchemy database models for authentication and user management.
 """
 
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey, Table, Enum as SQLEnum, Float
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey, Table, Enum as SQLEnum, Float, Index
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from enum import Enum
+from typing import Dict
 import secrets
 from datetime import datetime, timedelta
 
@@ -397,6 +398,13 @@ class Document(Base, TimestampMixin, SoftDeleteMixin):
         if user.is_superuser or user.has_role("admin"):
             return True
         
+        # Check document shares
+        for share in self.shares:
+            if (share.shared_with_user_id == user.id and 
+                share.is_valid() and 
+                share.can_read):
+                return True
+        
         # Check fine-grained permissions from access_permissions JSON
         if self.access_permissions:
             import json
@@ -413,6 +421,63 @@ class Document(Base, TimestampMixin, SoftDeleteMixin):
                         return True
             except (json.JSONDecodeError, KeyError):
                 pass
+        
+        return False
+    
+    def can_edit(self, user: User) -> bool:
+        """Check if user can edit this document."""
+        # Owner can always edit
+        if self.user_id == user.id:
+            return True
+        
+        # Admins can edit all documents
+        if user.is_superuser or user.has_role("admin"):
+            return True
+        
+        # Check document shares for edit permission
+        for share in self.shares:
+            if (share.shared_with_user_id == user.id and 
+                share.is_valid() and 
+                share.can_write):
+                return True
+        
+        return False
+    
+    def can_delete(self, user: User) -> bool:
+        """Check if user can delete this document."""
+        # Owner can always delete
+        if self.user_id == user.id:
+            return True
+        
+        # Admins can delete all documents
+        if user.is_superuser or user.has_role("admin"):
+            return True
+        
+        # Check document shares for delete permission
+        for share in self.shares:
+            if (share.shared_with_user_id == user.id and 
+                share.is_valid() and 
+                share.can_delete):
+                return True
+        
+        return False
+    
+    def can_share(self, user: User) -> bool:
+        """Check if user can share this document."""
+        # Owner can always share
+        if self.user_id == user.id:
+            return True
+        
+        # Admins can share all documents
+        if user.is_superuser or user.has_role("admin"):
+            return True
+        
+        # Check document shares for share permission
+        for share in self.shares:
+            if (share.shared_with_user_id == user.id and 
+                share.is_valid() and 
+                share.can_share):
+                return True
         
         return False
     
@@ -622,3 +687,63 @@ class SearchQuery(Base, TimestampMixin):
             hash_input += json.dumps(filters, sort_keys=True)
         
         return hashlib.sha256(hash_input.encode()).hexdigest()
+
+class DocumentShare(Base, TimestampMixin):
+    """Document sharing model for managing document access permissions."""
+    
+    __tablename__ = "document_shares"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    document_id = Column(Integer, ForeignKey("documents.id"), nullable=False)
+    shared_with_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    shared_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    
+    # Access permissions
+    can_read = Column(Boolean, default=True, nullable=False)
+    can_write = Column(Boolean, default=False, nullable=False)
+    can_delete = Column(Boolean, default=False, nullable=False)
+    can_share = Column(Boolean, default=False, nullable=False)
+    
+    # Share metadata
+    share_message = Column(Text, nullable=True)  # Optional message when sharing
+    expires_at = Column(DateTime(timezone=True), nullable=True)  # Optional expiration
+    
+    # Status
+    is_active = Column(Boolean, default=True, nullable=False)
+    
+    # Relationships
+    document = relationship("Document", backref="shares")
+    shared_with_user = relationship("User", foreign_keys=[shared_with_user_id], backref="shared_documents")
+    shared_by_user = relationship("User", foreign_keys=[shared_by_user_id], backref="documents_shared")
+    
+    # Unique constraint to prevent duplicate shares
+    __table_args__ = (
+        Index('idx_document_share_unique', 'document_id', 'shared_with_user_id', unique=True),
+    )
+    
+    def __repr__(self):
+        return f"<DocumentShare(document_id={self.document_id}, shared_with={self.shared_with_user_id})>"
+    
+    def is_valid(self) -> bool:
+        """Check if share is still valid (not expired and active)."""
+        if not self.is_active:
+            return False
+        if self.expires_at and self.expires_at < datetime.utcnow():
+            return False
+        return True
+    
+    def get_permissions(self) -> Dict[str, bool]:
+        """Get permissions as dictionary."""
+        return {
+            'can_read': self.can_read,
+            'can_write': self.can_write,
+            'can_delete': self.can_delete,
+            'can_share': self.can_share
+        }
+    
+    def set_permissions(self, permissions: Dict[str, bool]):
+        """Set permissions from dictionary."""
+        self.can_read = permissions.get('can_read', True)
+        self.can_write = permissions.get('can_write', False)
+        self.can_delete = permissions.get('can_delete', False)
+        self.can_share = permissions.get('can_share', False)

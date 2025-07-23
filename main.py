@@ -6,14 +6,14 @@ import logging
 import os
 from typing import Dict, Any
 
-from api.routes import document_routes, search_routes, vector_routes, library_routes, user_routes, auth_routes, health_routes, admin_routes, advanced_routes
+from api.routes import document_routes, search_routes, vector_routes, library_routes, user_routes, auth_routes, health_routes, admin_routes, advanced_routes, analytics_routes
 from api.middleware.auth import AuthMiddleware
 from api.middleware.error_handler import ErrorHandler
 from api.middleware.rate_limiter import RateLimiter
 from utils.monitoring.health_check import HealthChecker
 from utils.caching.redis_manager import RedisManager
 from utils.security.encryption import EncryptionManager, EncryptionConfig
-from utils.security.audit_logger import AuditLogger
+from utils.security.audit_logger import AuditLogger, AuditLoggerConfig
 from database.connection import create_tables
 from config import get_settings
 
@@ -68,12 +68,18 @@ async def lifespan(app: FastAPI):
         logger.info("Encryption manager initialized")
         
         # Initialize audit logger
-        audit_logger = AuditLogger()
+        audit_config = AuditLoggerConfig(
+            log_path=Path("data/audit_logs"),
+            rotation_size_mb=10,
+            retention_days=90
+        )
+        # Ensure audit log directory exists
+        Path("data/audit_logs").mkdir(parents=True, exist_ok=True)
+        audit_logger = AuditLogger(audit_config)
         logger.info("Audit logger initialized")
         
         # Initialize health check
         health_check = HealthChecker()
-        await health_check.initialize()
         logger.info("Health check system initialized")
         
         # Store instances in app state
@@ -84,6 +90,11 @@ async def lifespan(app: FastAPI):
         app.state.settings = settings
         
         logger.info("RAG Application startup completed successfully")
+        
+        # Print startup success message to console
+        host_display = "127.0.0.1" if settings.HOST == "0.0.0.0" else settings.HOST
+        print(f"\n🚀 RAG is running at http://{host_display}:{settings.PORT}")
+        print(f"📚 API docs available at http://{host_display}:{settings.PORT}/docs")
         yield
         
     except Exception as e:
@@ -97,7 +108,6 @@ async def lifespan(app: FastAPI):
                 logger.info("Redis connection closed")
             
             if health_check:
-                await health_check.cleanup()
                 logger.info("Health check cleanup completed")
                 
             logger.info("RAG Application shutdown completed")
@@ -137,15 +147,16 @@ def create_app() -> FastAPI:
     # app.add_middleware(RateLimiter)  # Disabled for testing - requires proper configuration
     
     # Include routers
-    app.include_router(auth_routes.router, prefix="/api/v1")
-    app.include_router(user_routes.router, prefix="/api/v1")
-    app.include_router(document_routes.router, prefix="/api/v1")
-    app.include_router(search_routes.router, prefix="/api/v1")
-    app.include_router(vector_routes.router, prefix="/api/v1")
-    app.include_router(library_routes.router, prefix="/api/v1")
-    app.include_router(health_routes.router, prefix="/api/v1")
-    app.include_router(admin_routes.router, prefix="/api/v1")
+    app.include_router(auth_routes.router)
+    app.include_router(user_routes.router)
+    app.include_router(document_routes.router)
+    app.include_router(search_routes.router)
+    app.include_router(vector_routes.router)
+    app.include_router(library_routes.router)
+    app.include_router(health_routes.router)
+    app.include_router(admin_routes.router)
     app.include_router(advanced_routes.router)
+    app.include_router(analytics_routes.router)
     
     @app.get("/")
     async def root():
@@ -162,7 +173,7 @@ def create_app() -> FastAPI:
         """Health check endpoint."""
         try:
             if health_check:
-                health_status = await health_check.check_all()
+                health_status = await health_check.run_all_checks()
                 return health_status
             else:
                 return {"status": "starting", "message": "Health check not yet initialized"}
@@ -175,8 +186,13 @@ def create_app() -> FastAPI:
         """Metrics endpoint for monitoring."""
         try:
             if health_check:
-                metrics = await health_check.get_metrics()
-                return metrics
+                # Return basic system metrics from health check
+                health_status = await health_check.run_all_checks()
+                return {
+                    "system_health": health_status,
+                    "timestamp": health_status.get("timestamp"),
+                    "overall_status": health_status.get("status").value if health_status.get("status") else "unknown"
+                }
             else:
                 return {"message": "Metrics not available"}
         except Exception as e:

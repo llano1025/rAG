@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from pydantic import BaseModel
 
 from database.connection import get_db
-from api.middleware.auth import get_current_user
+from api.middleware.auth import get_current_active_user
 from database.models import User, Document, DocumentChunk, VectorIndex, UserRole, Permission, SearchQuery
 from api.controllers.auth_controller import AuthController
 from vector_db.health_checker import get_vector_health_checker
@@ -50,9 +50,9 @@ class PermissionRequest(BaseModel):
     user_id: int
     permission_name: str
 
-async def verify_admin_user(current_user: User = Depends(get_current_user)) -> User:
+async def verify_admin_user(current_user: User = Depends(get_current_active_user)) -> User:
     """Verify that the current user is an admin."""
-    if not (current_user.is_superuser or current_user.has_role("admin")):
+    if not current_user.is_superuser:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Administrative privileges required"

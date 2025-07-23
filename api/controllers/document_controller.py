@@ -294,7 +294,7 @@ class DocumentController:
                 )
             
             # Check if user can edit this document
-            if document.user_id != user.id and not user.has_permission("edit_documents"):
+            if document.user_id != user.id and not user.is_superuser:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Permission denied: cannot edit this document"
@@ -642,7 +642,17 @@ class DocumentController:
 # Dependency injection
 def get_audit_logger() -> AuditLogger:
     """Get audit logger instance."""
-    return AuditLogger()
+    from utils.security.audit_logger import AuditLoggerConfig
+    from pathlib import Path
+    
+    config = AuditLoggerConfig(
+        log_path=Path("data/audit_logs"),
+        rotation_size_mb=10,
+        retention_days=90
+    )
+    # Ensure audit log directory exists
+    Path("data/audit_logs").mkdir(parents=True, exist_ok=True)
+    return AuditLogger(config)
 
 def get_document_controller() -> DocumentController:
     """Get document controller instance with dependencies."""

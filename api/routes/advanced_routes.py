@@ -8,7 +8,7 @@ from typing import List, Dict, Optional, Any
 from datetime import datetime
 import json
 
-from api.middleware.auth import get_current_user, verify_admin
+from api.middleware.auth import get_current_active_user, verify_admin
 from database.models import User
 from utils.data_quality.duplicate_detector import create_duplicate_detector, DuplicateType
 from plugins.plugin_system import plugin_manager, PluginType
@@ -24,7 +24,7 @@ router = APIRouter(prefix="/api/v1/advanced", tags=["Advanced Features"])
 @router.post("/duplicates/detect")
 async def detect_duplicates(
     document_ids: List[str],
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """Detect duplicates for specified documents"""
     try:
@@ -45,7 +45,7 @@ async def detect_duplicates(
 
 @router.get("/duplicates/groups")
 async def get_duplicate_groups(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """Get groups of duplicate documents"""
     try:
@@ -67,7 +67,7 @@ async def get_duplicate_groups(
 
 @router.get("/duplicates/statistics")
 async def get_duplicate_statistics(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """Get duplicate detection statistics"""
     try:
@@ -231,7 +231,7 @@ async def generate_analytics_report(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     filters: Optional[Dict] = None,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """Generate an analytics report"""
     try:
@@ -278,7 +278,7 @@ async def export_analytics_report(
     format: str = "json",
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """Export analytics report in specified format"""
     try:

@@ -43,7 +43,7 @@ class EmbeddedRedis:
 class EmbeddedVectorDB:
     """SQLite-based vector database for testing/development."""
     
-    def __init__(self, db_path: str = "./vector_storage.db"):
+    def __init__(self, db_path: str = "./runtime/databases/vector_storage.db"):
         self.db_path = db_path
         self.init_db()
         logger.info(f"Using embedded SQLite vector database at {db_path}")

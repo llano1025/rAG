@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from typing import List, Optional
 from pydantic import BaseModel
-from ..middleware.auth import get_current_user
+from ..middleware.auth import get_current_active_user
 from ..controllers import vector_controller
 from ..schemas.vector_schemas import (
     VectorUpsertRequest,
@@ -18,7 +18,7 @@ class BatchVectorRequest(BaseModel):
 @router.post("/upsert", response_model=VectorSearchResponse)
 async def upsert_vector(
     request: VectorUpsertRequest,
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
     """
     Create or update vector embeddings for a document or chunk.
@@ -35,7 +35,7 @@ async def upsert_vector(
 @router.post("/batch-upsert", response_model=List[VectorSearchResponse])
 async def batch_upsert_vectors(
     request: BatchVectorRequest,
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
     """
     Batch create or update vector embeddings.
@@ -52,7 +52,7 @@ async def batch_upsert_vectors(
 @router.post("/search", response_model=List[VectorSearchResponse])
 async def search_vectors(
     request: VectorSearchRequest,
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
     """
     Search for similar vectors using cosine similarity.
@@ -72,7 +72,7 @@ async def search_vectors(
 @router.get("/{vector_id}", response_model=VectorSearchResponse)
 async def get_vector(
     vector_id: str,
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
     """
     Retrieve a specific vector by ID.
@@ -88,7 +88,7 @@ async def get_vector(
 @router.delete("/{vector_id}")
 async def delete_vector(
     vector_id: str,
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
     """
     Delete a specific vector.
@@ -105,7 +105,7 @@ async def delete_vector(
 async def reindex_vectors(
     document_ids: List[str] = Body(...),
     model_name: Optional[str] = Body(None),
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
     """
     Reindex vectors for specified documents, optionally with a new model.
@@ -123,7 +123,7 @@ async def reindex_vectors(
 @router.get("/status/{task_id}")
 async def get_reindex_status(
     task_id: str,
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
     """
     Get status of a reindexing task.
@@ -136,7 +136,7 @@ async def get_reindex_status(
 
 @router.get("/metadata", response_model=VectorMetadata)
 async def get_vector_metadata(
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
     """
     Get metadata about vector store (models, dimensions, etc.).

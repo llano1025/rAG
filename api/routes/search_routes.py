@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
 from datetime import datetime
 from pydantic import BaseModel
-from ..middleware.auth import get_current_user
+from ..middleware.auth import get_current_active_user
 from ..controllers import search_controller
 from ..schemas.search_schemas import (
     SearchQuery,
@@ -21,7 +21,7 @@ class SearchMetadata(BaseModel):
 @router.post("/", response_model=SearchResponse)
 async def search_documents(
     request: SearchQuery,
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
     """
     Full-text search across documents with filtering and ranking.
@@ -42,7 +42,7 @@ async def search_documents(
 @router.post("/similarity", response_model=SearchResponse)
 async def similarity_search(
     request: SearchQuery,
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
     """
     Semantic similarity search using document vectors.
@@ -61,7 +61,7 @@ async def similarity_search(
 
 @router.get("/filters", response_model=List[SearchFilters])
 async def get_available_filters(
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
     """
     Get available search filters including folders, tags, and document types.
@@ -75,7 +75,7 @@ async def get_available_filters(
 async def save_search(
     request: SearchQuery,
     name: str = Query(..., description="Name for the saved search"),
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
     """
     Save a search query for later use.
@@ -89,7 +89,7 @@ async def save_search(
 
 @router.get("/saved", response_model=List[dict])
 async def get_saved_searches(
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
     """
     Retrieve user's saved searches.
@@ -102,7 +102,7 @@ async def get_saved_searches(
 @router.get("/recent", response_model=List[dict])
 async def get_recent_searches(
     limit: int = Query(10, ge=1, le=50),
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
     """
     Get user's recent search queries.
@@ -113,11 +113,25 @@ async def get_recent_searches(
     )
     return recent_searches
 
+@router.get("/history", response_model=List[dict])
+async def get_search_history(
+    limit: int = Query(20, ge=1, le=100),
+    current_user = Depends(get_current_active_user)
+):
+    """
+    Get user's search history.
+    """
+    history = await search_controller.get_recent_searches(
+        user_id=current_user.id,
+        limit=limit
+    )
+    return history
+
 @router.post("/suggest", response_model=List[str])
 async def get_search_suggestions(
     query: str = Query(..., min_length=1),
     limit: int = Query(5, ge=1, le=20),
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
     """
     Get search suggestions based on partial query.

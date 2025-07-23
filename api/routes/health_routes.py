@@ -12,7 +12,7 @@ import logging
 from database.connection import get_db
 from vector_db.health_checker import get_vector_health_checker, VectorHealthChecker
 from utils.monitoring.health_check import HealthChecker, HealthStatus
-from api.middleware.auth import get_current_user
+from api.middleware.auth import get_current_active_user
 from database.models import User
 
 logger = logging.getLogger(__name__)
@@ -75,7 +75,7 @@ async def get_system_health():
 @router.get("/vector")
 async def get_vector_health(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     Get comprehensive vector database health status.
@@ -83,7 +83,7 @@ async def get_vector_health(
     """
     try:
         # Check if user has permission to view system health
-        if not (current_user.is_superuser or current_user.has_role("admin")):
+        if not current_user.is_superuser:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied: admin privileges required"
@@ -128,7 +128,7 @@ async def get_vector_health(
 
 @router.get("/vector/quick")
 async def get_vector_quick_health(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     Get quick vector database health status without detailed checks.
@@ -136,7 +136,7 @@ async def get_vector_quick_health(
     """
     try:
         # Check if user has permission to view system health
-        if not (current_user.is_superuser or current_user.has_role("admin")):
+        if not current_user.is_superuser:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied: admin privileges required"
@@ -173,7 +173,7 @@ async def get_vector_quick_health(
 @router.get("/complete")
 async def get_complete_health(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     Get complete system health including both system and vector database checks.
@@ -181,7 +181,7 @@ async def get_complete_health(
     """
     try:
         # Check if user has permission to view system health
-        if not (current_user.is_superuser or current_user.has_role("admin")):
+        if not current_user.is_superuser:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied: admin privileges required"
@@ -271,7 +271,7 @@ async def get_complete_health(
 @router.get("/metrics")
 async def get_health_metrics(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     Get health metrics and statistics for monitoring dashboards.
@@ -279,7 +279,7 @@ async def get_health_metrics(
     """
     try:
         # Check if user has permission to view system metrics
-        if not (current_user.is_superuser or current_user.has_role("admin")):
+        if not current_user.is_superuser:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied: admin privileges required"

@@ -17,8 +17,17 @@ interface DocumentListProps {
   refreshTrigger?: number;
 }
 
+// Backend response structure
+interface DocumentsResponse {
+  documents: Document[];
+  total_count: number;
+  skip: number;
+  limit: number;
+  filters: Record<string, any>;
+}
+
 export default function DocumentList({ refreshTrigger }: DocumentListProps) {
-  const [documents, setDocuments] = useState<PaginatedResponse<Document> | null>(null);
+  const [documents, setDocuments] = useState<DocumentsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
   const [filterType, setFilterType] = useState<string>('all');
@@ -33,7 +42,7 @@ export default function DocumentList({ refreshTrigger }: DocumentListProps) {
     try {
       setLoading(true);
       const response = await documentsApi.getDocuments(currentPage, 20);
-      setDocuments(response);
+      setDocuments(response as DocumentsResponse);
     } catch (error: any) {
       toast.error('Failed to fetch documents');
     } finally {
@@ -126,7 +135,7 @@ export default function DocumentList({ refreshTrigger }: DocumentListProps) {
     );
   }
 
-  if (!documents || documents.items.length === 0) {
+  if (!documents || documents.documents.length === 0) {
     return (
       <div className="text-center py-12">
         <DocumentTextIcon className="mx-auto h-12 w-12 text-gray-400" />
@@ -173,13 +182,13 @@ export default function DocumentList({ refreshTrigger }: DocumentListProps) {
         </div>
         
         <p className="text-sm text-gray-500">
-          {documents.total} document{documents.total !== 1 ? 's' : ''}
+          {documents.total_count} document{documents.total_count !== 1 ? 's' : ''}
         </p>
       </div>
 
       {/* Document Grid */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {documents.items.map((doc) => (
+        {documents.documents.map((doc) => (
           <div key={doc.id} className="bg-white rounded-lg border border-gray-200 p-4 hover:shadow-md transition-shadow">
             <div className="flex items-start justify-between">
               <div className="flex items-start space-x-3 flex-1 min-w-0">
@@ -239,10 +248,10 @@ export default function DocumentList({ refreshTrigger }: DocumentListProps) {
       </div>
 
       {/* Pagination */}
-      {documents.total_pages > 1 && (
+      {documents.total_count > documents.limit && (
         <div className="flex items-center justify-between">
           <p className="text-sm text-gray-700">
-            Showing page {documents.page} of {documents.total_pages}
+            Showing {documents.skip + 1} to {Math.min(documents.skip + documents.limit, documents.total_count)} of {documents.total_count}
           </p>
           
           <div className="flex items-center space-x-2">
@@ -260,7 +269,7 @@ export default function DocumentList({ refreshTrigger }: DocumentListProps) {
             
             <button
               onClick={() => setCurrentPage(currentPage + 1)}
-              disabled={currentPage >= documents.total_pages}
+              disabled={documents.skip + documents.limit >= documents.total_count}
               className="px-3 py-1 text-sm border border-gray-300 rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
             >
               Next

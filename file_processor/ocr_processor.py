@@ -1,15 +1,37 @@
 # ocr_processor.py
 from typing import Union, Optional, Literal
 from pathlib import Path
-import pytesseract
-from PIL import Image
-import fitz  # PyMuPDF
 import logging
 import base64
 import requests
 from io import BytesIO
 import json
 from enum import Enum
+
+# Optional imports with availability flags
+try:
+    import pytesseract
+    PYTESSERACT_AVAILABLE = True
+except ImportError:
+    logging.warning("pytesseract not available, OCR functionality will be limited")
+    pytesseract = None
+    PYTESSERACT_AVAILABLE = False
+
+try:
+    from PIL import Image
+    PIL_AVAILABLE = True
+except ImportError:
+    logging.warning("PIL/Pillow not available, image processing will be limited")
+    Image = None
+    PIL_AVAILABLE = False
+
+try:
+    import fitz  # PyMuPDF
+    PYMUPDF_AVAILABLE = True
+except ImportError:
+    logging.warning("PyMuPDF not available for OCR, PDF processing will be limited")
+    fitz = None
+    PYMUPDF_AVAILABLE = False
 
 class OCRMethod(Enum):
     TESSERACT = "tesseract"
@@ -41,6 +63,12 @@ class OCRProcessor:
         self.method = method
         self.language = language
         self.vision_llm_config = vision_llm_config or {}
+        self.logger = logging.getLogger(__name__)
+        
+        # Check if dependencies are available for the selected method
+        if self.method == OCRMethod.TESSERACT:
+            if not PYTESSERACT_AVAILABLE or not PIL_AVAILABLE:
+                self.logger.warning("Tesseract OCR dependencies not available, method may not work")
         
         # Validate config if using Vision LLM
         if self.method == OCRMethod.VISION_LLM and not self._validate_llm_config():
@@ -65,6 +93,9 @@ class OCRProcessor:
             Extracted text from the image
         """
         try:
+            if not PIL_AVAILABLE:
+                raise OCRError("PIL/Pillow is required for image processing but is not available")
+            
             method = method or self.method
             image = Image.open(str(image_path))
             
@@ -76,7 +107,7 @@ class OCRProcessor:
                 raise OCRError(f"Unsupported OCR method: {method}")
                 
         except Exception as e:
-            logging.error(f"OCR processing failed: {str(e)}")
+            self.logger.error(f"OCR processing failed: {str(e)}")
             raise OCRError(f"Failed to process image: {str(e)}")
 
     def _process_with_tesseract(self, image: Image.Image) -> str:

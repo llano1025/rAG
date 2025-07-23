@@ -91,7 +91,7 @@ async def login_user(
             "sub": user.email,
             "user_id": user.id,
             "username": user.username,
-            "is_admin": user.has_role("admin")
+            "is_admin": user.is_superuser
         }
         access_token = auth_controller.create_access_token(token_data)
         
@@ -119,7 +119,7 @@ async def login_user(
                     "full_name": user.full_name,
                     "is_active": user.is_active,
                     "is_verified": user.is_verified,
-                    "roles": [role.name.value for role in user.roles]
+                    "roles": ["admin"] if user.is_superuser else ["user"]
                 }
             },
             message="Login successful"
@@ -136,7 +136,7 @@ async def login_user(
 @router.post("/logout", response_model=APIKeyResponse)
 async def logout_user(
     request: Request,
-    current_user: dict = Depends(AuthMiddleware.get_current_user),
+    current_user: dict = Depends(AuthMiddleware.get_current_active_user),
     db: Session = Depends(get_db),
     auth_controller: AuthController = Depends(get_auth_controller)
 ):
@@ -163,8 +163,8 @@ async def logout_user(
         )
 
 @router.get("/me", response_model=APIKeyResponse)
-async def get_current_user(
-    current_user: dict = Depends(AuthMiddleware.get_current_user),
+async def get_current_active_user(
+    current_user: dict = Depends(AuthMiddleware.get_current_active_user),
     db: Session = Depends(get_db),
     auth_controller: AuthController = Depends(get_auth_controller)
 ):
@@ -192,8 +192,8 @@ async def get_current_user(
                 "is_verified": user.is_verified,
                 "last_login": user.last_login.isoformat() if user.last_login else None,
                 "created_at": user.created_at.isoformat(),
-                "roles": [role.name.value for role in user.roles],
-                "permissions": [perm.name.value for role in user.roles for perm in role.permissions]
+                "roles": ["admin"] if user.is_superuser else ["user"],
+                "permissions": []
             },
             message="User information retrieved"
         )
@@ -210,7 +210,7 @@ async def get_current_user(
 async def update_current_user(
     user_update: UserUpdate,
     request: Request,
-    current_user: dict = Depends(AuthMiddleware.get_current_user),
+    current_user: dict = Depends(AuthMiddleware.get_current_active_user),
     db: Session = Depends(get_db),
     auth_controller: AuthController = Depends(get_auth_controller)
 ):
@@ -269,7 +269,7 @@ async def list_users(
                 "is_verified": user.is_verified,
                 "last_login": user.last_login.isoformat() if user.last_login else None,
                 "created_at": user.created_at.isoformat(),
-                "roles": [role.name.value for role in user.roles]
+                "roles": ["admin"] if user.is_superuser else ["user"]
             })
         
         return APIKeyResponse(
@@ -323,7 +323,7 @@ async def get_user(
                 "last_login": user.last_login.isoformat() if user.last_login else None,
                 "created_at": user.created_at.isoformat(),
                 "updated_at": user.updated_at.isoformat(),
-                "roles": [role.name.value for role in user.roles],
+                "roles": ["admin"] if user.is_superuser else ["user"],
                 "failed_login_attempts": user.failed_login_attempts,
                 "locked_until": user.locked_until.isoformat() if user.locked_until else None
             },
@@ -403,7 +403,7 @@ async def delete_user(
 @router.post("/api-keys", response_model=APIKeyResponse)
 async def create_api_key(
     api_key_data: APIKeyCreate,
-    current_user: dict = Depends(AuthMiddleware.get_current_user),
+    current_user: dict = Depends(AuthMiddleware.get_current_active_user),
     db: Session = Depends(get_db),
     auth_controller: AuthController = Depends(get_auth_controller)
 ):
@@ -442,7 +442,7 @@ async def create_api_key(
 
 @router.get("/api-keys", response_model=APIKeyResponse)
 async def list_api_keys(
-    current_user: dict = Depends(AuthMiddleware.get_current_user),
+    current_user: dict = Depends(AuthMiddleware.get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """List current user's API keys."""
@@ -482,7 +482,7 @@ async def list_api_keys(
 @router.delete("/api-keys/{key_id}", response_model=APIKeyResponse)
 async def revoke_api_key(
     key_id: int,
-    current_user: dict = Depends(AuthMiddleware.get_current_user),
+    current_user: dict = Depends(AuthMiddleware.get_current_active_user),
     db: Session = Depends(get_db),
     auth_controller: AuthController = Depends(get_auth_controller)
 ):

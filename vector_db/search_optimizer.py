@@ -1,10 +1,19 @@
 from typing import List, Tuple, Optional, Dict
-import numpy as np
-import faiss
 import logging
 from dataclasses import dataclass
 from enum import Enum
 import time
+
+try:
+    import numpy as np
+    import faiss
+    SEARCH_AVAILABLE = True
+except ImportError as e:
+    logging.warning(f"Search optimization dependencies not available: {e}")
+    np = None
+    faiss = None
+    SEARCH_AVAILABLE = False
+
 from .chunking import Chunk
 
 class MetricType(Enum):
@@ -38,6 +47,9 @@ class SearchOptimizer:
     """Enhanced vector similarity search with multiple index types and optimizations."""
     
     def __init__(self, config: SearchConfig):
+        if not SEARCH_AVAILABLE:
+            raise ImportError("numpy and faiss are required for search optimization functionality")
+        
         self.config = config
         self.index = None
         self.chunks = []

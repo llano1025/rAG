@@ -1,8 +1,17 @@
 import { apiClient } from './client';
 import { Document, DocumentUpload, PaginatedResponse } from '@/types';
 
+// Backend response structure for documents
+interface DocumentsResponse {
+  documents: Document[];
+  total_count: number;
+  skip: number;
+  limit: number;
+  filters: Record<string, any>;
+}
+
 export const documentsApi = {
-  getDocuments: async (page = 1, perPage = 20): Promise<PaginatedResponse<Document>> => {
+  getDocuments: async (page = 1, perPage = 20): Promise<DocumentsResponse> => {
     return apiClient.get(`/documents?page=${page}&per_page=${perPage}`);
   },
 

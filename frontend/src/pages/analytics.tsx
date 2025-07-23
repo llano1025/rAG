@@ -57,6 +57,99 @@ export default function Analytics() {
     }
   };
 
+  const getUsageColor = (percentage: number) => {
+    if (percentage < 50) return 'bg-green-500';
+    if (percentage < 80) return 'bg-yellow-500';
+    return 'bg-red-500';
+  };
+
+  const formatSystemResources = (details: any) => {
+    if (!details) return null;
+    
+    return (
+      <div className="space-y-3 mt-3">
+        {details.cpu_usage_percent !== undefined && (
+          <div>
+            <div className="flex justify-between text-sm">
+              <span>CPU Usage</span>
+              <span className="font-medium">{details.cpu_usage_percent.toFixed(1)}%</span>
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-2 mt-1">
+              <div 
+                className={`h-2 rounded-full ${getUsageColor(details.cpu_usage_percent)}`}
+                style={{ width: `${Math.min(details.cpu_usage_percent, 100)}%` }}
+              ></div>
+            </div>
+          </div>
+        )}
+        
+        {details.memory_usage_percent !== undefined && (
+          <div>
+            <div className="flex justify-between text-sm">
+              <span>Memory Usage</span>
+              <span className="font-medium">{details.memory_usage_percent.toFixed(1)}%</span>
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-2 mt-1">
+              <div 
+                className={`h-2 rounded-full ${getUsageColor(details.memory_usage_percent)}`}
+                style={{ width: `${Math.min(details.memory_usage_percent, 100)}%` }}
+              ></div>
+            </div>
+            {details.memory_available_gb && (
+              <div className="text-xs text-gray-500 mt-1">
+                Available: {details.memory_available_gb.toFixed(2)} GB
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const formatDiskUsage = (details: any) => {
+    if (!details) return null;
+
+    return (
+      <div className="space-y-3 mt-3">
+        {details.usage_percent !== undefined && (
+          <div>
+            <div className="flex justify-between text-sm">
+              <span>Disk Usage</span>
+              <span className="font-medium">{details.usage_percent.toFixed(1)}%</span>
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-2 mt-1">
+              <div 
+                className={`h-2 rounded-full ${getUsageColor(details.usage_percent)}`}
+                style={{ width: `${Math.min(details.usage_percent, 100)}%` }}
+              ></div>
+            </div>
+          </div>
+        )}
+        
+        <div className="grid grid-cols-3 gap-4 text-xs">
+          {details.total_gb && (
+            <div>
+              <div className="text-gray-500">Total</div>
+              <div className="font-medium">{details.total_gb.toFixed(1)} GB</div>
+            </div>
+          )}
+          {details.used_gb && (
+            <div>
+              <div className="text-gray-500">Used</div>
+              <div className="font-medium">{details.used_gb.toFixed(1)} GB</div>
+            </div>
+          )}
+          {details.free_gb && (
+            <div>
+              <div className="text-gray-500">Free</div>
+              <div className="font-medium text-green-600">{details.free_gb.toFixed(1)} GB</div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   if (loading) {
     return (
       <Layout>
@@ -178,24 +271,39 @@ export default function Analytics() {
           {systemHealth && (
             <div className="bg-white shadow rounded-lg">
               <div className="px-4 py-5 sm:p-6">
-                <h3 className="text-lg leading-6 font-medium text-gray-900 mb-4">
-                  System Health
-                </h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg leading-6 font-medium text-gray-900">
+                    System Health
+                  </h3>
+                  <span className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${getHealthStatusColor(systemHealth.status)}`}>
+                    <div className={`w-2 h-2 rounded-full mr-2 ${systemHealth.status === 'healthy' ? 'bg-green-500' : systemHealth.status === 'warning' ? 'bg-yellow-500' : 'bg-red-500'}`}></div>
+                    {systemHealth.status.charAt(0).toUpperCase() + systemHealth.status.slice(1)}
+                  </span>
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   {systemHealth.components?.map((component: any) => (
-                    <div key={component.name} className="border rounded-lg p-4">
-                      <div className="flex items-center justify-between">
-                        <h4 className="text-sm font-medium text-gray-900">
+                    <div key={component.name} className="border rounded-lg p-4 hover:shadow-sm transition-shadow">
+                      <div className="flex items-center justify-between mb-2">
+                        <h4 className="text-sm font-medium text-gray-900 flex items-center">
+                          {component.type === 'system_resources' && <ServerIcon className="h-4 w-4 mr-2 text-blue-500" />}
+                          {component.type === 'disk_usage' && <ChartBarIcon className="h-4 w-4 mr-2 text-green-500" />}
                           {component.name}
                         </h4>
-                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getHealthStatusColor(component.status)}`}>
+                        <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${getHealthStatusColor(component.status)}`}>
                           {component.status}
                         </span>
                       </div>
-                      {component.details && (
-                        <p className="mt-1 text-sm text-gray-500">
-                          {component.details}
-                        </p>
+                      
+                      {/* Render formatted details based on component type */}
+                      {component.type === 'system_resources' && formatSystemResources(component.details)}
+                      {component.type === 'disk_usage' && formatDiskUsage(component.details)}
+                      
+                      {/* Fallback for other component types */}
+                      {component.type === 'other' && component.details && (
+                        <div className="mt-2 text-sm text-gray-600">
+                          {typeof component.details === 'string' ? component.details : JSON.stringify(component.details, null, 2)}
+                        </div>
                       )}
                     </div>
                   ))}
@@ -213,15 +321,19 @@ export default function Analytics() {
                   Document Uploads (Last 30 Days)
                 </h3>
                 <div className="space-y-2">
-                  {stats.upload_trends?.slice(-10).map((trend, index) => (
-                    <div key={index} className="flex items-center justify-between">
-                      <span className="text-sm text-gray-600">{trend.date}</span>
-                      <div className="flex items-center space-x-2">
-                        <div className="bg-blue-200 h-2 rounded-full" style={{ width: `${Math.max(trend.count * 10, 10)}px` }}></div>
-                        <span className="text-sm font-medium text-gray-900">{trend.count}</span>
+                  {stats.upload_trends && stats.upload_trends.length > 0 ? (
+                    stats.upload_trends.slice(-10).map((trend, index) => (
+                      <div key={index} className="flex items-center justify-between">
+                        <span className="text-sm text-gray-600">{trend.date}</span>
+                        <div className="flex items-center space-x-2">
+                          <div className="bg-blue-200 h-2 rounded-full" style={{ width: `${Math.max(trend.count * 10, 10)}px` }}></div>
+                          <span className="text-sm font-medium text-gray-900">{trend.count}</span>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    ))
+                  ) : (
+                    <p className="text-sm text-gray-500">No upload data available</p>
+                  )}
                 </div>
               </div>
 
@@ -231,15 +343,19 @@ export default function Analytics() {
                   Search Activity (Last 30 Days)
                 </h3>
                 <div className="space-y-2">
-                  {stats.search_trends?.slice(-10).map((trend, index) => (
-                    <div key={index} className="flex items-center justify-between">
-                      <span className="text-sm text-gray-600">{trend.date}</span>
-                      <div className="flex items-center space-x-2">
-                        <div className="bg-green-200 h-2 rounded-full" style={{ width: `${Math.max(trend.count * 5, 10)}px` }}></div>
-                        <span className="text-sm font-medium text-gray-900">{trend.count}</span>
+                  {stats.search_trends && stats.search_trends.length > 0 ? (
+                    stats.search_trends.slice(-10).map((trend, index) => (
+                      <div key={index} className="flex items-center justify-between">
+                        <span className="text-sm text-gray-600">{trend.date}</span>
+                        <div className="flex items-center space-x-2">
+                          <div className="bg-green-200 h-2 rounded-full" style={{ width: `${Math.max(trend.count * 5, 10)}px` }}></div>
+                          <span className="text-sm font-medium text-gray-900">{trend.count}</span>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    ))
+                  ) : (
+                    <p className="text-sm text-gray-500">No search data available</p>
+                  )}
                 </div>
               </div>
             </div>

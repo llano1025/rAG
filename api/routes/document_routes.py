@@ -8,10 +8,10 @@ import io
 import json
 
 from database.connection import get_db
-from api.middleware.auth import get_current_user
+from api.middleware.auth import get_current_active_user
 from api.controllers.document_controller import DocumentController, get_document_controller
 from api.schemas.document_schemas import DocumentUpdate
-from database.models import User, Document
+from database.models import User, Document, DocumentShare
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -19,10 +19,11 @@ class BatchDeleteRequest(BaseModel):
     document_ids: List[int]
 
 class DocumentShareRequest(BaseModel):
-    document_id: int
     share_with_users: Optional[List[int]] = None
     make_public: Optional[bool] = None
-    permissions: Optional[List[str]] = ["read"]  # read, write, delete
+    permissions: Optional[Dict[str, bool]] = None  # {"can_read": True, "can_write": False, etc.}
+    share_message: Optional[str] = None
+    expires_at: Optional[datetime] = None
 
 class DocumentPermissionRequest(BaseModel):
     user_id: int
@@ -46,7 +47,7 @@ async def upload_document(
     folder_id: Optional[str] = Form(None),
     tags: Optional[str] = Form(None),  # JSON string of tags
     metadata: Optional[str] = Form(None),  # JSON string of metadata
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
     controller: DocumentController = Depends(get_document_controller)
 ):
@@ -89,7 +90,7 @@ async def batch_upload_documents(
     files: List[UploadFile] = File(...),
     folder_id: Optional[str] = Form(None),
     tags: Optional[str] = Form(None),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
     controller: DocumentController = Depends(get_document_controller)
 ):
@@ -120,7 +121,7 @@ async def batch_upload_documents(
 @router.get("/{document_id}")
 async def get_document(
     document_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
     controller: DocumentController = Depends(get_document_controller)
 ):
@@ -138,7 +139,7 @@ async def get_document(
 async def update_document(
     document_id: int,
     update_data: DocumentUpdate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
     controller: DocumentController = Depends(get_document_controller)
 ):
@@ -157,7 +158,7 @@ async def update_document(
 async def delete_document(
     document_id: int,
     hard_delete: bool = Query(False, description="Permanently delete the document"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
     controller: DocumentController = Depends(get_document_controller)
 ):
@@ -180,7 +181,7 @@ async def delete_document(
 async def batch_delete_documents(
     request: BatchDeleteRequest,
     hard_delete: bool = Query(False, description="Permanently delete the documents"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
     controller: DocumentController = Depends(get_document_controller)
 ):
@@ -196,7 +197,7 @@ async def batch_delete_documents(
 @router.get("/{document_id}/versions")
 async def get_document_versions(
     document_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
     controller: DocumentController = Depends(get_document_controller)
 ):
@@ -216,7 +217,7 @@ async def list_documents(
     folder_id: Optional[str] = Query(None, description="Filter by folder ID"),
     tags: Optional[str] = Query(None, description="Filter by tags (comma-separated)"),
     search: Optional[str] = Query(None, description="Search query for document content"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
     controller: DocumentController = Depends(get_document_controller)
 ):
@@ -242,7 +243,7 @@ async def list_documents(
 async def download_document(
     document_id: int,
     format: str = Query("original", description="Download format: original, text, json"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
     controller: DocumentController = Depends(get_document_controller)
 ):
@@ -324,7 +325,7 @@ async def export_document(
     document_id: int,
     include_chunks: bool = Query(False, description="Include document chunks in export"),
     include_vectors: bool = Query(False, description="Include vector information"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
     controller: DocumentController = Depends(get_document_controller)
 ):
@@ -393,7 +394,7 @@ async def export_document(
 async def get_document_content(
     document_id: int,
     chunk_id: Optional[str] = Query(None, description="Get specific chunk content"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
     controller: DocumentController = Depends(get_document_controller)
 ):
@@ -451,9 +452,8 @@ async def get_document_content(
 async def share_document(
     document_id: int,
     share_request: DocumentShareRequest,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-    controller: DocumentController = Depends(get_document_controller)
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
 ):
     """Share a document with other users or make it public."""
     try:
@@ -466,11 +466,11 @@ async def share_document(
         if not document:
             raise HTTPException(status_code=404, detail="Document not found")
         
-        # Check if user owns the document or has admin privileges
-        if document.user_id != current_user.id and not current_user.has_permission("manage_documents"):
+        # Check if user can share the document
+        if not document.can_share(current_user):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only document owner or admin can share documents"
+                detail="You don't have permission to share this document"
             )
         
         sharing_results = {
@@ -488,15 +488,62 @@ async def share_document(
                 sharing_results["public_status_changed"] = True
                 sharing_results["is_public"] = share_request.make_public
         
-        # Share with specific users (this would require a document_shares table in a full implementation)
+        # Share with specific users
         if share_request.share_with_users:
-            # For now, we'll return the list of users it would be shared with
-            # In a full implementation, this would create records in a document_shares table
-            sharing_results["shared_with"] = share_request.share_with_users
-            sharing_results["permissions"] = share_request.permissions
+            shared_users = []
+            
+            # Get default permissions
+            default_permissions = {
+                "can_read": True,
+                "can_write": False,
+                "can_delete": False,
+                "can_share": False
+            }
+            
+            # Override with requested permissions
+            if share_request.permissions:
+                default_permissions.update(share_request.permissions)
+            
+            for user_id in share_request.share_with_users:
+                # Check if user exists
+                target_user = db.query(User).filter(User.id == user_id, User.is_deleted == False).first()
+                if not target_user:
+                    continue
+                
+                # Check if share already exists
+                existing_share = db.query(DocumentShare).filter(
+                    DocumentShare.document_id == document_id,
+                    DocumentShare.shared_with_user_id == user_id
+                ).first()
+                
+                if existing_share:
+                    # Update existing share
+                    existing_share.set_permissions(default_permissions)
+                    existing_share.share_message = share_request.share_message
+                    existing_share.expires_at = share_request.expires_at
+                    existing_share.is_active = True
+                    existing_share.shared_by_user_id = current_user.id
+                else:
+                    # Create new share
+                    new_share = DocumentShare(
+                        document_id=document_id,
+                        shared_with_user_id=user_id,
+                        shared_by_user_id=current_user.id,
+                        share_message=share_request.share_message,
+                        expires_at=share_request.expires_at,
+                        **default_permissions
+                    )
+                    db.add(new_share)
+                
+                shared_users.append({
+                    "user_id": user_id,
+                    "username": target_user.username,
+                    "permissions": default_permissions
+                })
+            
+            sharing_results["shared_with"] = shared_users
         
         db.commit()
-        
         return sharing_results
         
     except HTTPException:
@@ -511,7 +558,7 @@ async def share_document(
 @router.get("/{document_id}/permissions")
 async def get_document_permissions(
     document_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """Get document sharing permissions and access information."""
@@ -535,6 +582,28 @@ async def get_document_permissions(
         # Get owner information
         owner = db.query(User).filter(User.id == document.user_id).first()
         
+        # Get document shares
+        shares = db.query(DocumentShare).filter(
+            DocumentShare.document_id == document_id,
+            DocumentShare.is_active == True
+        ).all()
+        
+        shared_with = []
+        for share in shares:
+            if share.is_valid():
+                shared_user = db.query(User).filter(User.id == share.shared_with_user_id).first()
+                if shared_user:
+                    shared_with.append({
+                        "user_id": shared_user.id,
+                        "username": shared_user.username,
+                        "email": shared_user.email,
+                        "permissions": share.get_permissions(),
+                        "shared_by": share.shared_by_user_id,
+                        "share_message": share.share_message,
+                        "expires_at": share.expires_at.isoformat() if share.expires_at else None,
+                        "shared_at": share.created_at.isoformat()
+                    })
+        
         permissions_info = {
             "document_id": document_id,
             "owner": {
@@ -545,14 +614,13 @@ async def get_document_permissions(
             "is_public": document.is_public,
             "current_user_permissions": {
                 "can_read": document.can_access(current_user),
-                "can_write": document.user_id == current_user.id or current_user.has_permission("edit_documents"),
-                "can_delete": document.user_id == current_user.id or current_user.has_permission("delete_documents"),
-                "can_share": document.user_id == current_user.id or current_user.has_permission("manage_documents")
-            }
+                "can_write": document.can_edit(current_user),
+                "can_delete": document.can_delete(current_user),
+                "can_share": document.can_share(current_user)
+            },
+            "shared_with": shared_with,
+            "total_shares": len(shared_with)
         }
-        
-        # In a full implementation, this would also include shared users from a document_shares table
-        permissions_info["shared_with"] = []  # Placeholder
         
         return permissions_info
         
@@ -568,7 +636,7 @@ async def get_document_permissions(
 async def unshare_document(
     document_id: int,
     user_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """Remove sharing access for a specific user."""
@@ -582,34 +650,178 @@ async def unshare_document(
         if not document:
             raise HTTPException(status_code=404, detail="Document not found")
         
-        # Check if user owns the document or has admin privileges
-        if document.user_id != current_user.id and not current_user.has_permission("manage_documents"):
+        # Check if user can share the document
+        if not document.can_share(current_user):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only document owner or admin can unshare documents"
+                detail="You don't have permission to unshare this document"
             )
         
-        # In a full implementation, this would remove the record from document_shares table
-        # For now, we'll just return success
+        # Find the share record
+        share = db.query(DocumentShare).filter(
+            DocumentShare.document_id == document_id,
+            DocumentShare.shared_with_user_id == user_id,
+            DocumentShare.is_active == True
+        ).first()
+        
+        if not share:
+            raise HTTPException(
+                status_code=404,
+                detail="Document share not found"
+            )
+        
+        # Remove the share (soft delete by setting is_active to False)
+        share.is_active = False
+        
+        # Get shared user info for response
+        shared_user = db.query(User).filter(User.id == user_id).first()
+        
+        db.commit()
         
         return {
-            "message": f"Document unshared from user {user_id}",
+            "message": f"Document unshared from user {shared_user.username if shared_user else user_id}",
             "document_id": document_id,
-            "unshared_user_id": user_id
+            "unshared_user_id": user_id,
+            "unshared_username": shared_user.username if shared_user else None
         }
         
     except HTTPException:
         raise
     except Exception as e:
+        db.rollback()
         raise HTTPException(
             status_code=500,
             detail=f"Failed to unshare document: {str(e)}"
         )
 
+@router.get("/shared-with-me")
+async def get_shared_documents(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=100)
+):
+    """Get documents shared with current user."""
+    try:
+        # Get active shares for current user
+        shares = db.query(DocumentShare).filter(
+            DocumentShare.shared_with_user_id == current_user.id,
+            DocumentShare.is_active == True
+        ).offset(skip).limit(limit).all()
+        
+        shared_documents = []
+        for share in shares:
+            if share.is_valid():
+                document = db.query(Document).filter(
+                    Document.id == share.document_id,
+                    Document.is_deleted == False
+                ).first()
+                
+                if document:
+                    owner = db.query(User).filter(User.id == document.user_id).first()
+                    
+                    shared_documents.append({
+                        "document_id": document.id,
+                        "filename": document.filename,
+                        "title": document.title,
+                        "content_type": document.content_type,
+                        "file_size": document.file_size,
+                        "created_at": document.created_at.isoformat(),
+                        "owner": {
+                            "id": owner.id,
+                            "username": owner.username
+                        } if owner else None,
+                        "permissions": share.get_permissions(),
+                        "shared_at": share.created_at.isoformat(),
+                        "share_message": share.share_message,
+                        "expires_at": share.expires_at.isoformat() if share.expires_at else None
+                    })
+        
+        return {
+            "documents": shared_documents,
+            "total": len(shared_documents),
+            "skip": skip,
+            "limit": limit
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get shared documents: {str(e)}"
+        )
+
+@router.put("/{document_id}/share/{user_id}/permissions")
+async def update_share_permissions(
+    document_id: int,
+    user_id: int,
+    permission_request: DocumentPermissionRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Update permissions for a specific document share."""
+    try:
+        # Get document
+        document = db.query(Document).filter(
+            Document.id == document_id,
+            Document.is_deleted == False
+        ).first()
+        
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        # Check if user can share the document
+        if not document.can_share(current_user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You don't have permission to modify document shares"
+            )
+        
+        # Find the share record
+        share = db.query(DocumentShare).filter(
+            DocumentShare.document_id == document_id,
+            DocumentShare.shared_with_user_id == user_id,
+            DocumentShare.is_active == True
+        ).first()
+        
+        if not share:
+            raise HTTPException(
+                status_code=404,
+                detail="Document share not found"
+            )
+        
+        # Convert permission list to dictionary
+        permissions = {
+            "can_read": "read" in permission_request.permissions,
+            "can_write": "write" in permission_request.permissions,
+            "can_delete": "delete" in permission_request.permissions,
+            "can_share": "share" in permission_request.permissions
+        }
+        
+        # Update permissions
+        share.set_permissions(permissions)
+        
+        db.commit()
+        
+        return {
+            "message": "Share permissions updated successfully",
+            "document_id": document_id,
+            "user_id": user_id,
+            "permissions": permissions
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update share permissions: {str(e)}"
+        )
+
 @router.post("/{document_id}/public")
 async def make_document_public(
     document_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """Make a document publicly accessible."""
@@ -624,7 +836,7 @@ async def make_document_public(
             raise HTTPException(status_code=404, detail="Document not found")
         
         # Check if user owns the document or has admin privileges
-        if document.user_id != current_user.id and not current_user.has_permission("manage_documents"):
+        if document.user_id != current_user.id and not current_user.is_superuser:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only document owner or admin can make documents public"
@@ -651,7 +863,7 @@ async def make_document_public(
 @router.delete("/{document_id}/public")
 async def make_document_private(
     document_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """Make a document private (remove public access)."""
@@ -666,7 +878,7 @@ async def make_document_private(
             raise HTTPException(status_code=404, detail="Document not found")
         
         # Check if user owns the document or has admin privileges
-        if document.user_id != current_user.id and not current_user.has_permission("manage_documents"):
+        if document.user_id != current_user.id and not current_user.is_superuser:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only document owner or admin can make documents private"

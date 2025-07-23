@@ -12,8 +12,26 @@ from sqlalchemy import desc
 
 from database.models import Document, DocumentChunk, VectorIndex, DocumentStatusEnum
 from .storage_manager import VectorStorageManager, get_storage_manager
-from .embedding_manager import EmbeddingManager
-from .chunking import AdaptiveChunker
+
+# Lazy import for chunking
+def _get_adaptive_chunker():
+    """Lazy import of AdaptiveChunker."""
+    try:
+        from .chunking import AdaptiveChunker
+        return AdaptiveChunker
+    except ImportError as e:
+        logging.warning(f"AdaptiveChunker not available: {e}")
+        return None
+
+# Lazy import for EmbeddingManager
+def _get_embedding_manager():
+    """Lazy import of EmbeddingManager."""
+    try:
+        from .embedding_manager import EmbeddingManager
+        return EmbeddingManager
+    except ImportError as e:
+        logging.warning(f"EmbeddingManager not available: {e}")
+        return None
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +53,28 @@ class DocumentVersionManager:
     def __init__(self, storage_manager: VectorStorageManager = None):
         """Initialize document version manager."""
         self.storage_manager = storage_manager or get_storage_manager()
-        self.embedding_manager = EmbeddingManager()
-        self.chunker = AdaptiveChunker()
+        self.embedding_manager = None  # Will be initialized lazily
+        self.chunker = None  # Will be initialized lazily
+    
+    def _get_embedding_manager_instance(self):
+        """Get embedding manager instance, initializing if needed."""
+        if self.embedding_manager is None:
+            EmbeddingManager = _get_embedding_manager()
+            if EmbeddingManager:
+                self.embedding_manager = EmbeddingManager()
+            else:
+                raise ImportError("EmbeddingManager not available")
+        return self.embedding_manager
+    
+    def _get_chunker_instance(self):
+        """Get chunker instance, initializing if needed."""
+        if self.chunker is None:
+            AdaptiveChunker = _get_adaptive_chunker()
+            if AdaptiveChunker:
+                self.chunker = AdaptiveChunker()
+            else:
+                raise ImportError("AdaptiveChunker not available")
+        return self.chunker
     
     def _calculate_content_hash(self, content: str) -> str:
         """Calculate SHA-256 hash of document content."""
@@ -206,7 +244,8 @@ class DocumentVersionManager:
             texts = [chunk_data['text'] for chunk_data in chunks_data]
             
             # Generate content embeddings
-            content_embeddings = await self.embedding_manager.generate_embeddings(texts)
+            embedding_manager = self._get_embedding_manager_instance()
+            content_embeddings = await embedding_manager.generate_embeddings(texts)
             
             # Generate context embeddings (text + context)
             context_texts = []
@@ -215,7 +254,7 @@ class DocumentVersionManager:
                 context_text = f"{context.get('before', '')} {chunk_data['text']} {context.get('after', '')}".strip()
                 context_texts.append(context_text)
             
-            context_embeddings = await self.embedding_manager.generate_embeddings(context_texts)
+            context_embeddings = await embedding_manager.generate_embeddings(context_texts)
             
             # Create vector index
             await self.storage_manager.create_index(

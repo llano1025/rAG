@@ -1,8 +1,15 @@
 from typing import Union, BinaryIO, Dict, Set
 from pathlib import Path
-import magic
 import logging
 from enum import Enum
+
+try:
+    import magic
+    MAGIC_AVAILABLE = True
+except ImportError:
+    logging.warning("python-magic not available, file type detection will use basic methods")
+    magic = None
+    MAGIC_AVAILABLE = False
 
 class FileType(Enum):
     """Enumeration of supported file types."""
@@ -49,7 +56,10 @@ class FileTypeDetector:
 
     def __init__(self):
         """Initialize the FileTypeDetector with magic for MIME type detection."""
-        self.mime = magic.Magic(mime=True)
+        if MAGIC_AVAILABLE:
+            self.mime = magic.Magic(mime=True)
+        else:
+            self.mime = None
         self.logger = logging.getLogger(__name__)
 
     def detect(self, file_path: Union[str, Path, BinaryIO]) -> str:
@@ -67,6 +77,10 @@ class FileTypeDetector:
             IOError: If there are issues reading the file
         """
         try:
+            if not MAGIC_AVAILABLE:
+                # Fallback to extension-based detection
+                return self._detect_by_extension(file_path)
+            
             if isinstance(file_path, (str, Path)):
                 mime_type = self.mime.from_file(str(file_path))
             else:
@@ -170,6 +184,13 @@ class FileTypeDetector:
         elif file_content is not None:
             # Detect from bytes content
             try:
+                if not MAGIC_AVAILABLE:
+                    # Use filename extension if available
+                    if filename:
+                        return self._detect_by_filename(filename)
+                    else:
+                        raise UnsupportedFileType("Cannot detect file type without python-magic library and no filename provided")
+                
                 mime_type = self.mime.from_buffer(file_content)
                 self.logger.debug(f"Detected MIME type from content: {mime_type}")
                 
@@ -214,3 +235,34 @@ class FileTypeDetector:
         self.logger.debug(f"Extension validation: {extension} -> {normalized_extension} vs {expected_extension} -> {is_valid}")
         
         return is_valid
+    
+    def _detect_by_extension(self, file_path: Union[str, Path, BinaryIO]) -> str:
+        """Fallback method to detect MIME type by file extension when magic is not available."""
+        if isinstance(file_path, (str, Path)):
+            filename = str(file_path)
+        else:
+            # For file-like objects, we can't determine extension without filename
+            raise UnsupportedFileType("Cannot determine file type from file-like object without python-magic library")
+        
+        return self._detect_by_filename(filename)
+    
+    def _detect_by_filename(self, filename: str) -> str:
+        """Detect MIME type based on file extension."""
+        extension = Path(filename).suffix.lower()
+        
+        # Handle common extension variations
+        extension_mappings = {
+            '.jpeg': '.jpg',
+            '.htm': '.html',
+            '.tif': '.tiff'
+        }
+        
+        normalized_extension = extension_mappings.get(extension, extension)
+        
+        # Find MIME type by extension
+        for mime_type, expected_ext in self.MIME_TO_EXTENSION.items():
+            if expected_ext == normalized_extension:
+                self.logger.debug(f"Detected MIME type by extension: {mime_type}")
+                return mime_type
+        
+        raise UnsupportedFileType(f"Unsupported file extension: {extension}")

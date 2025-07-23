@@ -11,10 +11,24 @@ export const analyticsApi = {
     components: Array<{
       name: string;
       status: 'healthy' | 'warning' | 'error';
-      details?: string;
+      details?: any;
+      type: 'system_resources' | 'disk_usage' | 'other';
     }>;
   }> => {
-    return apiClient.get('/health');
+    const healthData = await apiClient.get('/health');
+    
+    // Transform the health data format with better parsing
+    const components = Object.entries(healthData.components || {}).map(([name, component]: [string, any]) => ({
+      name: name.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+      status: component.status || 'healthy',
+      details: component.details || {},
+      type: name as 'system_resources' | 'disk_usage' | 'other'
+    }));
+    
+    return {
+      status: healthData.status || 'healthy',
+      components
+    };
   },
 
   getPerformanceMetrics: async (): Promise<{

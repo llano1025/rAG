@@ -35,6 +35,34 @@ The RAG system follows a layered architecture pattern with clear separation of c
 - **Secure**: Authentication, authorization, and audit logging
 - **Performant**: Multi-level caching and optimization
 
+### Core Application Structure
+
+**FastAPI Application Entry Point** (`main.py`):
+```python
+from fastapi import FastAPI, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from api.middleware.auth import AuthMiddleware
+from api.middleware.error_handler import ErrorHandlerMiddleware
+from api.middleware.rate_limiter import RateLimiterMiddleware
+
+app = FastAPI(
+    title="RAG Document Processing API",
+    description="A comprehensive Retrieval-Augmented Generation system",
+    version="1.0.0"
+)
+
+# Middleware stack
+app.add_middleware(CORSMiddleware, allow_origins=["*"])
+app.add_middleware(AuthMiddleware)
+app.add_middleware(ErrorHandlerMiddleware)
+app.add_middleware(RateLimiterMiddleware)
+
+# Route registration
+app.include_router(auth_routes.router, prefix="/api/auth")
+app.include_router(document_routes.router, prefix="/api/documents")
+app.include_router(search_routes.router, prefix="/api/search")
+```
+
 ---
 
 ## Component Hierarchy and Data Flow
@@ -55,6 +83,111 @@ The RAG system follows a layered architecture pattern with clear separation of c
 │ ├── LibraryController (manages document libraries)                          │
 │ └── AdminController (system administration)                                 │
 └─────────────────────────────────────────────────────────────────────────────┘
+
+### Controller Implementation Examples
+
+**DocumentController** (`api/controllers/document_controller.py`):
+```python
+class DocumentController:
+    """Document controller for handling document CRUD operations."""
+    
+    def __init__(self, vector_controller: VectorController = None, audit_logger: AuditLogger = None):
+        self.vector_controller = vector_controller or get_vector_controller()
+        self.audit_logger = audit_logger
+        self.type_detector = FileTypeDetector()
+        self.text_extractor = TextExtractor()
+        self.metadata_extractor = MetadataExtractor()
+
+    async def upload_document(self, file: UploadFile, user: User, db: Session) -> Document:
+        """Process and upload a document with full pipeline."""
+        try:
+            # File type detection and validation
+            file_content = await file.read()
+            content_type = self.type_detector.detect_type(
+                file_content=file_content, filename=file.filename
+            )
+            
+            # Text extraction
+            extracted_text = await self.text_extractor.extract_text(
+                file_content, content_type, file.filename
+            )
+            
+            # Metadata extraction
+            metadata = await self.metadata_extractor.extract_metadata(
+                file_content, content_type, file.filename
+            )
+            
+            # Vector processing
+            vector_result = await self.vector_controller.process_document(
+                extracted_text, metadata, user.id
+            )
+            
+            # Database storage
+            document = Document(
+                filename=file.filename,
+                content_type=content_type,
+                user_id=user.id,
+                extracted_text=extracted_text,
+                status=DocumentStatusEnum.COMPLETED
+            )
+            
+            return await self._save_document(document, db)
+            
+        except Exception as e:
+            logger.error(f"Document upload failed: {e}")
+            raise DocumentProcessingError(f"Failed to process document: {e}")
+```
+
+**SearchController** (`api/controllers/search_controller.py`):
+```python
+class SearchController:
+    """Controller for all search operations with user access control."""
+    
+    def __init__(self, embedding_manager: EmbeddingManager, db: AsyncSession, audit_logger: AuditLogger):
+        self.embedding_manager = embedding_manager
+        self.content_search = SearchOptimizer()
+        self.context_search = SearchOptimizer()
+        self.context_processor = ContextProcessor()
+        self.db = db
+        self.audit_logger = audit_logger
+
+    async def search(self, query: str, user: User, k: int = 5, **kwargs) -> List[Dict]:
+        """Unified search endpoint with user access control."""
+        start_time = datetime.utcnow()
+        
+        try:
+            # Check cached results
+            query_hash = SearchQuery.create_query_hash(query, kwargs.get('filters'))
+            cached_query = await self._get_cached_search(query_hash, user.id)
+            
+            if cached_query and cached_query.is_cache_valid():
+                return cached_query.get_cached_results()
+            
+            # Generate embeddings
+            query_emb, context_emb = await self.embedding_manager.generate_query_embeddings(
+                query, kwargs.get('query_context')
+            )
+            
+            # Add user access control filters
+            user_filters = await self._add_user_access_filters(kwargs.get('filters'), user)
+            
+            # Perform search with access control
+            results = await self._search_with_access_control(
+                query_emb, context_emb, user_filters, user, k
+            )
+            
+            # Cache and audit log results
+            search_time = (datetime.utcnow() - start_time).total_seconds() * 1000
+            await self._save_search_query(query, user, query_hash, results, search_time)
+            
+            return results
+            
+        except Exception as e:
+            await self.audit_logger.log_event(
+                user_id=user.id, action="search_error", error_message=str(e)
+            )
+            raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+```
                                       │
                                       ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -72,6 +205,104 @@ The RAG system follows a layered architecture pattern with clear separation of c
 │ ├── Pipeline          │ └── AlertManager     │ └── MemoryOptimizer          │
 │ └── ResourceManager   │                      │                              │
 └─────────────────────────────────────────────────────────────────────────────┘
+
+### Performance Layer Implementation Examples
+
+**BatchProcessor** (`utils/performance/batch_processor.py`):
+```python
+class BatchProcessor:
+    """Enhanced batch processing system for large-scale operations."""
+    
+    def __init__(self, max_workers: int = 10, queue_size: int = 1000):
+        self.max_workers = max_workers
+        self.queue_size = queue_size
+        self.job_queue = asyncio.Queue(maxsize=queue_size)
+        self.worker_pool = []
+        self.jobs: Dict[str, BatchJob] = {}
+        self.statistics = BatchStatistics()
+        
+    async def submit_batch(self, items: List[BatchItem], processor: Callable, **kwargs) -> str:
+        """Submit a batch job for processing."""
+        job_id = f"batch_{int(time.time())}_{hash(str(items))}"
+        
+        job = BatchJob(
+            id=job_id,
+            items=items,
+            processor=processor,
+            total_items=len(items),
+            created_at=datetime.now(timezone.utc),
+            **kwargs
+        )
+        
+        self.jobs[job_id] = job
+        await self.job_queue.put(job)
+        logger.info(f"Batch job {job_id} submitted with {len(items)} items")
+        return job_id
+```
+
+**LoadBalancer** (`utils/performance/load_balancer.py`):
+```python
+class LoadBalancer:
+    """Advanced load balancer with multiple strategies and health monitoring."""
+    
+    def __init__(self, strategy: str = "adaptive"):
+        self.strategy = strategy
+        self.services: Dict[str, ServiceEndpoint] = {}
+        self.health_monitor = HealthMonitor()
+        self.circuit_breakers: Dict[str, CircuitBreaker] = {}
+        
+    async def route_request(self, request_type: str, **kwargs) -> Any:
+        """Route request using configured load balancing strategy."""
+        available_services = await self.get_healthy_services(request_type)
+        
+        if not available_services:
+            raise ServiceUnavailableError(f"No healthy services for {request_type}")
+        
+        selected_service = await self._select_service(available_services, request_type)
+        
+        try:
+            result = await selected_service.execute(**kwargs)
+            self.request_stats.record_success(selected_service.id)
+            return result
+        except Exception as e:
+            self.request_stats.record_failure(selected_service.id)
+            raise LoadBalancingError(f"Request failed on {selected_service.id}: {e}")
+```
+
+**QueryOptimizer** (`utils/performance/query_optimizer.py`):
+```python
+class QueryOptimizer:
+    """Advanced query optimization with caching and planning."""
+    
+    def __init__(self, cache_ttl: int = 3600, max_cache_size: int = 1000):
+        self.query_cache = {}
+        self.result_cache = {}
+        self.plan_cache = {}
+        self.statistics = QueryStatistics()
+        
+    async def optimize_query(self, query: str, parameters: Dict = None) -> OptimizedQuery:
+        """Optimize query with caching and planning."""
+        query_hash = self._generate_query_hash(query, parameters)
+        
+        # Check plan cache
+        if query_hash in self.plan_cache:
+            plan = self.plan_cache[query_hash]
+            self.statistics.increment_plan_cache_hit()
+        else:
+            plan = await self._create_execution_plan(query, parameters)
+            self.plan_cache[query_hash] = plan
+            
+        # Execute optimized query
+        result = await self._execute_optimized_query(plan)
+        
+        # Cache result
+        self.result_cache[query_hash] = CachedResult(
+            data=result,
+            expires_at=datetime.utcnow() + timedelta(seconds=self.cache_ttl)
+        )
+        
+        return result
+```
                                       │
                                       ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -95,6 +326,137 @@ The RAG system follows a layered architecture pattern with clear separation of c
 │ ├── ResponseHandler (processes LLM responses)                               │
 │ └── ModelLoadBalancer (distributes LLM requests)                            │
 └─────────────────────────────────────────────────────────────────────────────┘
+
+### Processing Layers Implementation Examples
+
+**FileTypeDetector** (`file_processor/type_detector.py`):
+```python
+class FileTypeDetector:
+    """Detects and validates file types using magic numbers and extensions."""
+    
+    def __init__(self):
+        self.mime = magic.Magic(mime=True)
+        self.logger = logging.getLogger(__name__)
+
+    def detect_type(self, file_path: Union[str, Path] = None, 
+                   file_content: bytes = None, filename: str = None) -> str:
+        """Detect MIME type from file path or content bytes."""
+        if file_path is not None:
+            return self.detect(file_path)
+        elif file_content is not None:
+            try:
+                mime_type = self.mime.from_buffer(file_content)
+                self.logger.debug(f"Detected MIME type from content: {mime_type}")
+                
+                if mime_type not in self.MIME_TO_EXTENSION:
+                    raise UnsupportedFileType(f"Unsupported file type: {mime_type}")
+                
+                return mime_type
+            except Exception as e:
+                self.logger.error(f"Error detecting type from content: {e}")
+                raise UnsupportedFileType(f"Failed to detect file type: {e}")
+        else:
+            raise ValueError("Either file_path or file_content must be provided")
+```
+
+**TextExtractor** (`file_processor/text_extractor.py`):
+```python
+class TextExtractor:
+    """Extracts text content from various document formats."""
+    
+    def __init__(self):
+        self.type_detector = FileTypeDetector()
+
+    async def extract_text(self, file_content: bytes, content_type: str, filename: str = None) -> str:
+        """Extract text from document content bytes (async method expected by controllers)."""
+        with tempfile.NamedTemporaryFile(delete=False, suffix=self._get_file_extension(content_type)) as temp_file:
+            temp_file.write(file_content)
+            temp_file.flush()
+            temp_path = temp_file.name
+        
+        try:
+            return self.extract(temp_path, content_type)
+        finally:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+
+    def extract(self, file_path: Union[str, Path], mime_type: Optional[str] = None) -> str:
+        """Extract text from a document based on its type."""
+        if mime_type is None:
+            mime_type = self.type_detector.detect_type(file_path)
+
+        extractors = {
+            'application/pdf': self._extract_from_pdf,
+            'application/msword': self._extract_from_doc,
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document': self._extract_from_docx,
+            'text/plain': self._extract_from_text,
+            'text/html': self._extract_from_html,
+            'image/jpeg': self._extract_from_image,
+            'image/png': self._extract_from_image,
+            'image/tiff': self._extract_from_image
+        }
+
+        extractor = extractors.get(mime_type)
+        if not extractor:
+            raise UnsupportedFileType(f"No text extractor for MIME type: {mime_type}")
+
+        return extractor(file_path)
+```
+
+**EmbeddingManager** (`vector_db/embedding_manager.py`):
+```python
+class EmbeddingManager:
+    """Advanced embedding management with caching and optimization."""
+    
+    def __init__(self, model_name: str = "sentence-transformers/all-mpnet-base-v2"):
+        self.model_name = model_name
+        self.model = SentenceTransformer(model_name)
+        self.cache = EmbeddingCache()
+        self.batch_size = 32
+        
+    async def generate_embeddings(self, texts: List[str], batch_size: Optional[int] = None) -> np.ndarray:
+        """Generate embeddings for a list of texts with caching."""
+        batch_size = batch_size or self.batch_size
+        
+        # Check cache for existing embeddings
+        cached_embeddings = {}
+        uncached_texts = []
+        
+        for i, text in enumerate(texts):
+            text_hash = hashlib.md5(text.encode()).hexdigest()
+            cached_embedding = await self.cache.get(text_hash)
+            
+            if cached_embedding is not None:
+                cached_embeddings[i] = cached_embedding
+            else:
+                uncached_texts.append((i, text))
+        
+        # Generate embeddings for uncached texts
+        if uncached_texts:
+            indices, texts_to_embed = zip(*uncached_texts)
+            new_embeddings = self.model.encode(list(texts_to_embed), batch_size=batch_size)
+            
+            # Cache new embeddings
+            for idx, embedding in zip(indices, new_embeddings):
+                text_hash = hashlib.md5(texts[idx].encode()).hexdigest()
+                await self.cache.set(text_hash, embedding)
+                cached_embeddings[idx] = embedding
+        
+        # Reconstruct full embedding array
+        embeddings = np.array([cached_embeddings[i] for i in range(len(texts))])
+        return embeddings
+
+    async def generate_query_embeddings(self, query: str, context: Optional[str] = None) -> Tuple[np.ndarray, np.ndarray]:
+        """Generate dual embeddings for query and context."""
+        query_embedding = await self.generate_embeddings([query])
+        
+        if context:
+            context_embedding = await self.generate_embeddings([context])
+        else:
+            context_embedding = query_embedding
+            
+        return query_embedding[0], context_embedding[0]
+```
                                       │
                                       ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -443,6 +805,151 @@ API Key → Role Check → RBAC Evaluation → Access Control → Compliance
     │           │               │               │               │
     ▼           ▼               ▼               ▼               ▼
 OAuth2 → Session Mgmt → Document Security → Encryption → Monitoring
+
+### Security Architecture Implementation Examples
+
+**AuthController** (`api/controllers/auth_controller.py`):
+```python
+class AuthController:
+    """Authentication controller with comprehensive security features."""
+    
+    def __init__(self, db_session, pwd_context, encryption_manager, audit_logger):
+        self.db_session = db_session
+        self.pwd_context = pwd_context
+        self.encryption_manager = encryption_manager
+        self.audit_logger = audit_logger
+
+    async def authenticate_user(self, username: str, password: str, ip_address: str) -> Optional[User]:
+        """Authenticate user with security checks."""
+        user = await self._get_user_by_username(username)
+        
+        if not user:
+            await self.audit_logger.log_event(
+                user_id=None, action="login_failed", 
+                details={"reason": "user_not_found", "username": username},
+                ip_address=ip_address, status="failed"
+            )
+            return None
+
+        # Check account lock status
+        if user.is_account_locked():
+            await self.audit_logger.log_event(
+                user_id=user.id, action="login_blocked",
+                details={"reason": "account_locked"},
+                ip_address=ip_address, status="blocked"
+            )
+            raise AuthenticationError("Account is locked due to failed login attempts")
+
+        # Verify password
+        if not self.pwd_context.verify(password, user.hashed_password):
+            user.failed_login_attempts += 1
+            
+            # Lock account after max attempts
+            if user.failed_login_attempts >= 5:
+                user.locked_until = datetime.utcnow() + timedelta(minutes=30)
+                
+            await self.db_session.commit()
+            
+            await self.audit_logger.log_event(
+                user_id=user.id, action="login_failed",
+                details={"reason": "invalid_password", "attempts": user.failed_login_attempts},
+                ip_address=ip_address, status="failed"
+            )
+            return None
+
+        # Reset failed attempts on successful login
+        user.failed_login_attempts = 0
+        user.last_login = datetime.utcnow()
+        await self.db_session.commit()
+
+        return user
+```
+
+**AuditLogger** (`utils/security/audit_logger.py`):
+```python
+class AuditLogger:
+    """Comprehensive audit logging system for security compliance."""
+    
+    def __init__(self, db_session, encryption_manager):
+        self.db_session = db_session
+        self.encryption_manager = encryption_manager
+        self.logger = logging.getLogger(__name__)
+
+    async def log_event(self, user_id: Optional[int], action: str, 
+                       resource_type: Optional[str] = None,
+                       resource_id: Optional[str] = None,
+                       details: Optional[Dict] = None,
+                       ip_address: Optional[str] = None,
+                       user_agent: Optional[str] = None,
+                       status: str = "success",
+                       error_message: Optional[str] = None) -> None:
+        """Log security event with encryption for sensitive data."""
+        
+        try:
+            # Encrypt sensitive details
+            encrypted_details = None
+            if details:
+                details_json = json.dumps(details)
+                encrypted_details = self.encryption_manager.encrypt_data(details_json)
+
+            # Create audit log entry
+            log_entry = UserActivityLog(
+                user_id=user_id,
+                action=action,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                details=encrypted_details,
+                ip_address=ip_address,
+                user_agent=user_agent,
+                status=status,
+                error_message=error_message
+            )
+
+            self.db_session.add(log_entry)
+            await self.db_session.commit()
+
+            # Also log to file for backup
+            self.logger.info(f"Audit: user={user_id}, action={action}, status={status}")
+
+        except Exception as e:
+            self.logger.error(f"Failed to log audit event: {e}")
+            # Don't raise exception to avoid breaking main functionality
+```
+
+**EncryptionManager** (`utils/security/encryption.py`):
+```python
+class EncryptionManager:
+    """Advanced encryption manager for data protection."""
+    
+    def __init__(self, key_path: str = "data/encryption.key"):
+        self.key_path = key_path
+        self.cipher_suite = self._load_or_create_key()
+
+    def encrypt_data(self, data: str) -> str:
+        """Encrypt sensitive data."""
+        if not data:
+            return data
+            
+        try:
+            encrypted_data = self.cipher_suite.encrypt(data.encode())
+            return base64.b64encode(encrypted_data).decode()
+        except Exception as e:
+            logger.error(f"Encryption failed: {e}")
+            raise EncryptionError(f"Failed to encrypt data: {e}")
+
+    def decrypt_data(self, encrypted_data: str) -> str:
+        """Decrypt sensitive data."""
+        if not encrypted_data:
+            return encrypted_data
+            
+        try:
+            decoded_data = base64.b64decode(encrypted_data.encode())
+            decrypted_data = self.cipher_suite.decrypt(decoded_data)
+            return decrypted_data.decode()
+        except Exception as e:
+            logger.error(f"Decryption failed: {e}")
+            raise EncryptionError(f"Failed to decrypt data: {e}")
+```
 ```
 
 ### Data Security Flow
@@ -968,5 +1475,199 @@ Complete RAG System Architecture:
 - ✅ Performance optimization throughout
 - ✅ Complete API documentation
 - ✅ Automated testing and quality assurance
+
+**Database Layer Code Examples:**
+
+```python
+# User model with comprehensive role-based access control
+class User(BaseModel):
+    __tablename__ = "users"
+    
+    id = Column(Integer, primary_key=True)
+    email = Column(String, unique=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    is_active = Column(Boolean, default=True)
+    is_locked = Column(Boolean, default=False)
+    failed_login_attempts = Column(Integer, default=0)
+    last_login_at = Column(DateTime(timezone=True))
+    
+    # Relationships
+    roles = relationship("UserRole", back_populates="user")
+    documents = relationship("Document", back_populates="user")
+    sessions = relationship("UserSession", back_populates="user")
+    
+    def has_permission(self, permission: PermissionEnum) -> bool:
+        """Check if user has specific permission."""
+        for user_role in self.roles:
+            if user_role.role.has_permission(permission):
+                return True
+        return False
+    
+    def has_role(self, role_name: UserRoleEnum) -> bool:
+        """Check if user has specific role."""
+        return any(user_role.role.name == role_name for user_role in self.roles)
+    
+    def get_permissions(self) -> List[str]:
+        """Get all permissions for user."""
+        permissions = set()
+        for user_role in self.roles:
+            role_permissions = user_role.role.get_permissions()
+            permissions.update(role_permissions)
+        return list(permissions)
+```
+
+```python
+# Document model with versioning and access control
+class Document(BaseModel):
+    __tablename__ = "documents"
+    
+    id = Column(Integer, primary_key=True)
+    filename = Column(String, nullable=False)
+    title = Column(String)
+    description = Column(Text)
+    file_size = Column(Integer, nullable=False)
+    content_type = Column(String, nullable=False)
+    checksum = Column(String, nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    
+    # Status and metadata
+    status = Column(Enum(DocumentStatusEnum), default=DocumentStatusEnum.PROCESSING)
+    is_public = Column(Boolean, default=False)
+    is_deleted = Column(Boolean, default=False)
+    tags_json = Column(JSON, default=list)
+    metadata_json = Column(JSON, default=dict)
+    
+    # Relationships
+    user = relationship("User", back_populates="documents")
+    versions = relationship("DocumentVersion", back_populates="document")
+    chunks = relationship("DocumentChunk", back_populates="document")
+    
+    def can_access(self, user: User) -> bool:
+        """Check if user can access this document."""
+        if self.user_id == user.id:
+            return True
+        if self.is_public and not self.is_deleted:
+            return True
+        if user.has_role(UserRoleEnum.ADMIN):
+            return True
+        return False
+    
+    def get_metadata_dict(self) -> dict:
+        """Get metadata as dictionary."""
+        return self.metadata_json or {}
+    
+    def set_tags(self, tags: list):
+        """Set tags list."""
+        self.tags_json = tags or []
+```
+
+**Monitoring System Code Examples:**
+
+```python
+# Real-time usage statistics tracking
+class UsageStatistics:
+    def __init__(self):
+        self.redis_client = redis.Redis()
+        self.db_session = get_database_session
+    
+    async def track_search(self, user_id: int, query: str, results_count: int, 
+                          response_time: float, search_type: str):
+        """Track search query statistics."""
+        timestamp = datetime.utcnow()
+        
+        # Store in Redis for real-time metrics
+        await self._update_redis_metrics({
+            'searches_today': 1,
+            'avg_response_time': response_time,
+            'total_results_returned': results_count
+        })
+        
+        # Store detailed record in database
+        search_log = SearchLog(
+            user_id=user_id,
+            query=query,
+            search_type=search_type,
+            results_count=results_count,
+            response_time=response_time,
+            timestamp=timestamp
+        )
+        
+        async with self.db_session() as session:
+            session.add(search_log)
+            await session.commit()
+    
+    async def get_usage_report(self, start_date: datetime, end_date: datetime) -> Dict:
+        """Generate comprehensive usage report."""
+        async with self.db_session() as session:
+            search_stats = await session.execute(
+                select(
+                    func.count(SearchLog.id).label('total_searches'),
+                    func.avg(SearchLog.response_time).label('avg_response_time'),
+                    func.sum(SearchLog.results_count).label('total_results')
+                ).where(SearchLog.timestamp.between(start_date, end_date))
+            )
+            
+            stats = search_stats.first()
+            
+            return {
+                'period': {
+                    'start': start_date.isoformat(),
+                    'end': end_date.isoformat()
+                },
+                'search_metrics': {
+                    'total_searches': stats.total_searches or 0,
+                    'average_response_time': float(stats.avg_response_time or 0),
+                    'total_results_returned': stats.total_results or 0
+                }
+            }
+```
+
+```python
+# Advanced health monitoring system
+class HealthMonitor:
+    def __init__(self):
+        self.checks = {
+            'database': self._check_database_health,
+            'vector_db': self._check_vector_db_health,
+            'redis': self._check_redis_health,
+            'llm_services': self._check_llm_health
+        }
+        
+    async def run_health_checks(self) -> Dict[str, Any]:
+        """Run comprehensive health checks."""
+        results = {}
+        overall_status = 'healthy'
+        
+        for check_name, check_func in self.checks.items():
+            try:
+                start_time = time.time()
+                status = await check_func()
+                response_time = time.time() - start_time
+                
+                results[check_name] = {
+                    'status': status['status'],
+                    'response_time': response_time,
+                    'details': status.get('details', {}),
+                    'last_checked': datetime.utcnow().isoformat()
+                }
+                
+                if status['status'] != 'healthy':
+                    overall_status = 'degraded' if overall_status == 'healthy' else 'unhealthy'
+                    
+            except Exception as e:
+                results[check_name] = {
+                    'status': 'unhealthy',
+                    'error': str(e),
+                    'last_checked': datetime.utcnow().isoformat()
+                }
+                overall_status = 'unhealthy'
+        
+        return {
+            'overall_status': overall_status,
+            'timestamp': datetime.utcnow().isoformat(),
+            'checks': results,
+            'system_info': await self._get_system_info()
+        }
+```
 
 This design document provides a comprehensive overview of the complete RAG system architecture, covering all phases from foundation setup through advanced features. The system is designed for enterprise deployment with scalability, security, and maintainability as core principles.

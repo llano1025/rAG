@@ -1,9 +1,18 @@
 from typing import List, Dict, Optional
 from dataclasses import dataclass
-import numpy as np
-from transformers import AutoTokenizer
 import re
 from collections import deque
+
+try:
+    import numpy as np
+    from transformers import AutoTokenizer
+    CHUNKING_DEPENDENCIES_AVAILABLE = True
+except ImportError as e:
+    import logging
+    logging.warning(f"Chunking dependencies not available: {e}")
+    np = None
+    AutoTokenizer = None
+    CHUNKING_DEPENDENCIES_AVAILABLE = False
 
 @dataclass
 class Chunk:
@@ -31,6 +40,9 @@ class AdaptiveChunker:
         context_window: int = 200,
         tokenizer_name: str = "bert-base-uncased"
     ):
+        if not CHUNKING_DEPENDENCIES_AVAILABLE:
+            raise ImportError("NumPy and transformers are required for chunking functionality")
+        
         self.max_chunk_size = max_chunk_size
         self.overlap = overlap
         self.context_window = context_window

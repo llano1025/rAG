@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from typing import List, Optional
 from pydantic import BaseModel
-from ..middleware.auth import get_current_user
+from ..middleware.auth import get_current_active_user
 from ..controllers import library_controller
 from ..schemas.library_schemas import (
     FolderCreate,
@@ -19,7 +19,7 @@ router = APIRouter(prefix="/library", tags=["library"])
 @router.post("/folders", response_model=Folder)
 async def create_folder(
     folder: FolderCreate,
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
     """Create a new folder in the library."""
     try:
@@ -34,7 +34,7 @@ async def create_folder(
 @router.get("/folders", response_model=List[Folder])
 async def list_folders(
     parent_id: Optional[str] = Query(None),
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
     """List all folders, optionally filtered by parent folder."""
     folders = await library_controller.list_folders(
@@ -47,7 +47,7 @@ async def list_folders(
 async def update_folder(
     folder_id: str,
     folder_update: FolderUpdate,
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
     """Update folder details."""
     updated_folder = await library_controller.update_folder(
@@ -63,7 +63,7 @@ async def update_folder(
 async def delete_folder(
     folder_id: str,
     recursive: bool = Query(False),
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
     """Delete a folder and optionally its contents."""
     success = await library_controller.delete_folder(
@@ -79,7 +79,7 @@ async def delete_folder(
 @router.post("/tags", response_model=Tag)
 async def create_tag(
     tag: TagCreate,
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
     """Create a new tag."""
     try:
@@ -93,7 +93,7 @@ async def create_tag(
 
 @router.get("/tags", response_model=List[Tag])
 async def list_tags(
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
     """List all available tags."""
     tags = await library_controller.list_tags(
@@ -105,7 +105,7 @@ async def list_tags(
 async def update_tag(
     tag_id: str,
     tag_update: TagUpdate,
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
     """Update tag details."""
     updated_tag = await library_controller.update_tag(
@@ -120,7 +120,7 @@ async def update_tag(
 @router.delete("/tags/{tag_id}")
 async def delete_tag(
     tag_id: str,
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
     """Delete a tag."""
     success = await library_controller.delete_tag(
@@ -140,7 +140,7 @@ class DocumentMoveRequest(BaseModel):
 @router.post("/move-documents")
 async def move_documents(
     move_request: DocumentMoveRequest,
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
     """Move documents to a different folder."""
     try:
@@ -157,7 +157,7 @@ async def move_documents(
 async def add_tag_to_document(
     document_id: str,
     tag_id: str,
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
     """Add a tag to a document."""
     success = await library_controller.add_document_tag(
@@ -173,7 +173,7 @@ async def add_tag_to_document(
 async def remove_tag_from_document(
     document_id: str,
     tag_id: str,
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
     """Remove a tag from a document."""
     success = await library_controller.remove_document_tag(
@@ -187,7 +187,7 @@ async def remove_tag_from_document(
 
 @router.get("/stats", response_model=LibraryStats)
 async def get_library_stats(
-    current_user = Depends(get_current_user)
+    current_user = Depends(get_current_active_user)
 ):
     """Get statistics about the library (document count, storage used, etc.)."""
     stats = await library_controller.get_library_stats(

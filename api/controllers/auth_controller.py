@@ -114,6 +114,19 @@ class AuthController:
     async def get_user_by_email(self, email: str, db: Session) -> Optional[User]:
         """Get user by email."""
         return db.query(User).filter(User.email == email, User.is_deleted == False).first()
+    
+    async def get_user_by_username(self, username: str, db: Session) -> Optional[User]:
+        """Get user by username."""
+        return db.query(User).filter(User.username == username, User.is_deleted == False).first()
+    
+    async def get_user_by_email_or_username(self, identifier: str, db: Session) -> Optional[User]:
+        """Get user by email or username."""
+        # First try email
+        user = await self.get_user_by_email(identifier, db)
+        if user:
+            return user
+        # Then try username
+        return await self.get_user_by_username(identifier, db)
 
     async def get_user_by_id(self, user_id: int, db: Session) -> Optional[User]:
         """Get user by ID."""
@@ -168,9 +181,9 @@ class AuthController:
         
         return db_user
 
-    async def authenticate_user(self, email: str, password: str, db: Session) -> Optional[User]:
-        """Authenticate user with email and password."""
-        user = await self.get_user_by_email(email, db)
+    async def authenticate_user(self, identifier: str, password: str, db: Session) -> Optional[User]:
+        """Authenticate user with email/username and password."""
+        user = await self.get_user_by_email_or_username(identifier, db)
         if not user:
             return None
         

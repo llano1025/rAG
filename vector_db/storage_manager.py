@@ -11,11 +11,35 @@ from typing import List, Dict, Any, Optional, Tuple, Union
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
 from sqlalchemy.orm import Session
 
-from .search_optimizer import SearchOptimizer
-from .qdrant_client import QdrantManager, get_qdrant_manager
+try:
+    import numpy as np
+    NUMPY_AVAILABLE = True
+except ImportError as e:
+    logging.warning(f"NumPy not available: {e}")
+    np = None
+    NUMPY_AVAILABLE = False
+
+def _get_search_optimizer():
+    """Lazy import of SearchOptimizer."""
+    try:
+        from .search_optimizer import SearchOptimizer
+        return SearchOptimizer
+    except ImportError as e:
+        logging.warning(f"SearchOptimizer not available: {e}")
+        return None
+
+def _get_qdrant_manager():
+    """Lazy import of QdrantManager."""
+    try:
+        from .qdrant_client import QdrantManager, get_qdrant_manager
+        return QdrantManager, get_qdrant_manager
+    except ImportError as e:
+        logging.warning(f"QdrantClient not available: {e}")
+        return None, None
+
+VECTOR_DEPENDENCIES_AVAILABLE = NUMPY_AVAILABLE
 from database.models import VectorIndex, Document, DocumentChunk
 from config import get_settings
 
@@ -35,8 +59,9 @@ class VectorStorageManager:
     def __init__(self, storage_path: str = None):
         """Initialize storage manager."""
         self.storage_path = storage_path or "./vector_storage"
-        self.faiss_indices: Dict[str, SearchOptimizer] = {}
+        self.faiss_indices: Dict[str, Any] = {}  # SearchOptimizer instances when available
         self.qdrant_manager: Optional[QdrantManager] = None
+        self.vector_dependencies_available = VECTOR_DEPENDENCIES_AVAILABLE
         
         # Ensure storage directory exists
         Path(self.storage_path).mkdir(parents=True, exist_ok=True)
@@ -45,12 +70,21 @@ class VectorStorageManager:
         self.content_collection_suffix = "_content"
         self.context_collection_suffix = "_context"
     
+    def _check_vector_dependencies(self):
+        """Check if vector dependencies are available."""
+        if not self.vector_dependencies_available:
+            raise ImportError("Vector dependencies (numpy, faiss) are not available. Please install them to use vector operations.")
+    
     async def initialize(self) -> bool:
         """Initialize all storage backends."""
         try:
             # Initialize Qdrant connection
-            self.qdrant_manager = get_qdrant_manager()
-            await self.qdrant_manager.connect()
+            QdrantManager, get_qdrant_manager_func = _get_qdrant_manager()
+            if get_qdrant_manager_func:
+                self.qdrant_manager = get_qdrant_manager_func()
+                await self.qdrant_manager.connect()
+            else:
+                logging.warning("Qdrant not available, vector operations will be limited")
             
             logger.info("Vector storage manager initialized successfully")
             return True
@@ -95,6 +129,14 @@ class VectorStorageManager:
             True if index was created successfully
         """
         try:
+            # Check dependencies
+            self._check_vector_dependencies()
+            
+            # Get SearchOptimizer class
+            SearchOptimizer = _get_search_optimizer()
+            if not SearchOptimizer:
+                raise ImportError("SearchOptimizer not available")
+            
             # Create FAISS search optimizers
             content_optimizer = SearchOptimizer(
                 embedding_dim=embedding_dimension,
@@ -173,6 +215,9 @@ class VectorStorageManager:
             List of point IDs that were added
         """
         try:
+            # Check dependencies
+            self._check_vector_dependencies()
+            
             if len(content_vectors) != len(context_vectors) or len(content_vectors) != len(metadata_list):
                 raise ValueError("All input lists must have the same length")
             

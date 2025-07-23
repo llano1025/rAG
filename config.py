@@ -78,13 +78,16 @@ class Settings(BaseSettings):
     ENABLE_METRICS: bool = Field(default=True, env="ENABLE_METRICS")
     METRICS_PORT: int = Field(default=9090, env="METRICS_PORT")
     
-    # File storage
-    UPLOAD_DIRECTORY: str = Field(default="./uploads", env="UPLOAD_DIRECTORY")
-    TEMP_DIRECTORY: str = Field(default="./temp", env="TEMP_DIRECTORY")
+    # File storage - Updated for organized runtime structure
+    UPLOAD_DIRECTORY: str = Field(default="./runtime/storage/uploads", env="UPLOAD_DIRECTORY")
+    TEMP_DIRECTORY: str = Field(default="./runtime/storage/temp", env="TEMP_DIRECTORY")
+    PROCESSED_DIRECTORY: str = Field(default="./runtime/storage/processed", env="PROCESSED_DIRECTORY")
+    CACHE_DIRECTORY: str = Field(default="./runtime/storage/cache", env="CACHE_DIRECTORY")
     
-    # Audit and security
+    # Audit and security - Updated for organized runtime structure  
     ENABLE_AUDIT_LOG: bool = Field(default=True, env="ENABLE_AUDIT_LOG")
-    AUDIT_LOG_PATH: str = Field(default="./logs/audit.log", env="AUDIT_LOG_PATH")
+    AUDIT_LOG_PATH: str = Field(default="./runtime/logs/audit.log", env="AUDIT_LOG_PATH")
+    LOG_DIRECTORY: str = Field(default="./runtime/logs", env="LOG_DIRECTORY")
     PII_DETECTION_ENABLED: bool = Field(default=True, env="PII_DETECTION_ENABLED")
     
     # Worker settings
@@ -121,9 +124,9 @@ class Settings(BaseSettings):
     USAGE_STATS_FLUSH_INTERVAL: int = Field(default=300, env="USAGE_STATS_FLUSH_INTERVAL")  # 5 minutes
     USAGE_STATS_MAX_EVENTS: int = Field(default=10000, env="USAGE_STATS_MAX_EVENTS")
     
-    # Backup Configuration
+    # Backup Configuration - Updated for organized runtime structure
     BACKUP_ENABLED: bool = Field(default=True, env="BACKUP_ENABLED")
-    BACKUP_DIRECTORY: str = Field(default="backups", env="BACKUP_DIRECTORY")
+    BACKUP_DIRECTORY: str = Field(default="./runtime/backups", env="BACKUP_DIRECTORY")
     BACKUP_RETENTION_DAYS: int = Field(default=30, env="BACKUP_RETENTION_DAYS")
     BACKUP_COMPRESSION: bool = Field(default=True, env="BACKUP_COMPRESSION")
     BACKUP_SCHEDULE_DAILY: str = Field(default="0 2 * * *", env="BACKUP_SCHEDULE_DAILY")  # Daily at 2 AM
@@ -141,10 +144,19 @@ class Settings(BaseSettings):
     DASHBOARD_MAX_HISTORY: int = Field(default=100, env="DASHBOARD_MAX_HISTORY")
     DASHBOARD_THEME: str = Field(default="auto", env="DASHBOARD_THEME")
     
-    # Export Configuration
-    EXPORT_DIRECTORY: str = Field(default="exports", env="EXPORT_DIRECTORY")
+    # Export Configuration - Updated for organized runtime structure
+    EXPORT_DIRECTORY: str = Field(default="./runtime/storage/exports", env="EXPORT_DIRECTORY") 
     EXPORT_MAX_FILE_SIZE_MB: int = Field(default=500, env="EXPORT_MAX_FILE_SIZE_MB")
     EXPORT_COMPRESSION_DEFAULT: bool = Field(default=True, env="EXPORT_COMPRESSION_DEFAULT")
+    
+    # Vector Database Storage - Updated for organized runtime structure
+    FAISS_INDEX_DIRECTORY: str = Field(default="./runtime/storage/faiss_index", env="FAISS_INDEX_DIRECTORY")
+    QDRANT_STORAGE_DIRECTORY: str = Field(default="./runtime/storage/qdrant_storage", env="QDRANT_STORAGE_DIRECTORY")
+    EMBEDDINGS_CACHE_DIRECTORY: str = Field(default="./runtime/storage/embeddings", env="EMBEDDINGS_CACHE_DIRECTORY")
+    VECTOR_INDICES_DIRECTORY: str = Field(default="./runtime/storage/vector_indices", env="VECTOR_INDICES_DIRECTORY")
+    
+    # Database Storage - Updated for organized runtime structure  
+    DATABASE_DIRECTORY: str = Field(default="./runtime/databases", env="DATABASE_DIRECTORY")
     
     @validator("SECRET_KEY")
     def validate_secret_key(cls, v):
@@ -203,8 +215,8 @@ class TestSettings(Settings):
     LOG_LEVEL: str = "DEBUG"
     DATABASE_URL: str = "sqlite:///:memory:"
     REDIS_DB: int = 15  # Use separate Redis DB for tests
-    UPLOAD_DIRECTORY: str = "./test_uploads"
-    TEMP_DIRECTORY: str = "./test_temp"
+    UPLOAD_DIRECTORY: str = "./runtime/storage/test_uploads"
+    TEMP_DIRECTORY: str = "./runtime/storage/test_temp"
 
 def get_settings_for_environment(env: str = None) -> Settings:
     """Get settings based on environment."""

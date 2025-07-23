@@ -12,9 +12,18 @@ from sqlalchemy import and_, or_, func
 
 from database.models import Document, DocumentChunk, User, SearchQuery
 from .storage_manager import VectorStorageManager, get_storage_manager
-from .embedding_manager import EmbeddingManager
 from .context_processor import ContextProcessor
 from config import get_settings
+
+# Lazy import for EmbeddingManager
+def _get_embedding_manager():
+    """Lazy import of EmbeddingManager."""
+    try:
+        from .embedding_manager import EmbeddingManager
+        return EmbeddingManager
+    except ImportError as e:
+        logging.warning(f"EmbeddingManager not available: {e}")
+        return None
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -105,13 +114,23 @@ class EnhancedSearchEngine:
     def __init__(self, storage_manager: VectorStorageManager = None):
         """Initialize enhanced search engine."""
         self.storage_manager = storage_manager or get_storage_manager()
-        self.embedding_manager = EmbeddingManager()
+        self.embedding_manager = None  # Will be initialized lazily
         self.context_processor = ContextProcessor()
         
         # Search configuration
         self.default_limit = 10
         self.max_limit = 100
         self.cache_duration_hours = 24
+    
+    def _get_embedding_manager_instance(self):
+        """Get embedding manager instance, initializing if needed."""
+        if self.embedding_manager is None:
+            EmbeddingManager = _get_embedding_manager()
+            if EmbeddingManager:
+                self.embedding_manager = EmbeddingManager()
+            else:
+                raise ImportError("EmbeddingManager not available")
+        return self.embedding_manager
     
     async def search(
         self,
@@ -225,7 +244,8 @@ class EnhancedSearchEngine:
         """Perform semantic vector search."""
         try:
             # Generate query embedding
-            query_embeddings = await self.embedding_manager.generate_embeddings([query])
+            embedding_manager = self._get_embedding_manager_instance()
+            query_embeddings = await embedding_manager.generate_embeddings([query])
             query_vector = query_embeddings[0]
             
             # Search across all accessible document indices
@@ -268,7 +288,8 @@ class EnhancedSearchEngine:
         """Perform contextual search combining content and context vectors."""
         try:
             # Generate query embedding
-            query_embeddings = await self.embedding_manager.generate_embeddings([query])
+            embedding_manager = self._get_embedding_manager_instance()
+            query_embeddings = await embedding_manager.generate_embeddings([query])
             query_vector = query_embeddings[0]
             
             # Search across all accessible document indices

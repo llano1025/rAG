@@ -389,3 +389,50 @@ class SearchController:
                 ip_address=ip_address,
                 user_agent=user_agent
             )
+
+# Module-level functions for compatibility with routes
+async def search_documents(query: str, filters: Optional[Dict] = None, sort: Optional[str] = None, 
+                         page: int = 1, page_size: int = 10, user_id: int = None):
+    """Search documents with text and filtering."""
+    # This is a placeholder - implement actual search logic
+    return {
+        "results": [],
+        "total": 0,
+        "page": page,
+        "page_size": page_size,
+        "query": query
+    }
+
+async def similarity_search(query_text: str, filters: Optional[Dict] = None, top_k: int = 5, 
+                          threshold: float = 0.0, user_id: int = None):
+    """Perform semantic similarity search."""
+    # This is a placeholder - implement actual similarity search logic
+    return {
+        "results": [],
+        "total": 0,
+        "query": query_text
+    }
+
+async def get_available_filters(user_id: int):
+    """Get available search filters."""
+    return []
+
+async def save_search(name: str, search_request: Dict, user_id: int):
+    """Save a search query."""
+    # Placeholder search object
+    class SavedSearch:
+        def __init__(self):
+            self.id = 1
+    return SavedSearch()
+
+async def get_saved_searches(user_id: int):
+    """Get user's saved searches."""
+    return []
+
+async def get_recent_searches(user_id: int, limit: int = 10):
+    """Get user's recent searches."""
+    return []
+
+async def get_search_suggestions(query: str, limit: int = 5, user_id: int = None):
+    """Get search suggestions."""
+    return []
