@@ -42,14 +42,30 @@ class Settings(BaseSettings):
     
     # LLM Provider settings
     OPENAI_API_KEY: Optional[str] = Field(default=None, env="OPENAI_API_KEY")
-    OPENAI_MODEL: str = Field(default="gpt-3.5-turbo", env="OPENAI_MODEL")
-    OPENAI_MAX_TOKENS: int = Field(default=1000, env="OPENAI_MAX_TOKENS")
+    OPENAI_MODEL: str = Field(default="gpt-4o-2024-08-06", env="OPENAI_MODEL")
+    OPENAI_MAX_TOKENS: int = Field(default=4096, env="OPENAI_MAX_TOKENS")
+    OPENAI_TEMPERATURE: float = Field(default=0.7, env="OPENAI_TEMPERATURE")
+    OPENAI_TOP_P: float = Field(default=1.0, env="OPENAI_TOP_P")
     
     OLLAMA_BASE_URL: str = Field(default="http://localhost:11434", env="OLLAMA_BASE_URL")
     OLLAMA_MODEL: str = Field(default="llama2", env="OLLAMA_MODEL")
     
     LMSTUDIO_BASE_URL: str = Field(default="http://localhost:1234", env="LMSTUDIO_BASE_URL")
     LMSTUDIO_MODEL: str = Field(default="local-model", env="LMSTUDIO_MODEL")
+    
+    # Google Gemini settings
+    GEMINI_API_KEY: Optional[str] = Field(default=None, env="GEMINI_API_KEY")
+    GEMINI_MODEL: str = Field(default="gemini-2.5-flash", env="GEMINI_MODEL")
+    GEMINI_MAX_TOKENS: int = Field(default=8192, env="GEMINI_MAX_TOKENS")
+    GEMINI_TEMPERATURE: float = Field(default=0.7, env="GEMINI_TEMPERATURE")
+    GEMINI_TOP_P: float = Field(default=0.95, env="GEMINI_TOP_P")
+    
+    # Anthropic Claude settings
+    ANTHROPIC_API_KEY: Optional[str] = Field(default=None, env="ANTHROPIC_API_KEY")
+    ANTHROPIC_MODEL: str = Field(default="claude-sonnet-4-20250514", env="ANTHROPIC_MODEL")
+    ANTHROPIC_MAX_TOKENS: int = Field(default=8192, env="ANTHROPIC_MAX_TOKENS")
+    ANTHROPIC_TEMPERATURE: float = Field(default=0.7, env="ANTHROPIC_TEMPERATURE")
+    ANTHROPIC_TOP_P: float = Field(default=1.0, env="ANTHROPIC_TOP_P")
     
     # Embedding settings
     EMBEDDING_MODEL: str = Field(default="sentence-transformers/all-mpnet-base-v2", env="EMBEDDING_MODEL")

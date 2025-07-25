@@ -3,9 +3,9 @@
 from typing import Dict, List, Optional, Union, AsyncGenerator
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
-from .model_manager import LLMResponse
+from .base.models import LLMResponse
 
 class ResponseError(Exception):
     """Raised when response processing fails."""
@@ -66,7 +66,7 @@ class ResponseHandler:
     def _log_response(self, response: Union[str, LLMResponse]):
         """Log response for history tracking."""
         entry = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "response": response.text if isinstance(response, LLMResponse) else response
         }
         

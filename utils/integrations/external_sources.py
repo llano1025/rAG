@@ -321,9 +321,10 @@ class ExternalSourcesManager:
         """Process a document from external source"""
         try:
             # Check if document already exists
-            from database.connection import get_db_session
+            from database.connection import SessionLocal
             
-            async with get_db_session() as session:
+            session = SessionLocal()
+            try:
                 existing_doc = await session.execute(
                     "SELECT id FROM documents WHERE source_id = ? AND source_type = ?",
                     (doc_data['source_id'], doc_data['source_type'])
@@ -381,6 +382,8 @@ class ExternalSourcesManager:
                     )
                     
                     return "added"
+            finally:
+                session.close()
         
         except Exception as e:
             logger.error(f"Error processing external document: {e}")

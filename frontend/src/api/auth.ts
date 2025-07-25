@@ -7,7 +7,7 @@ export const authApi = {
     formData.append('username', credentials.username);
     formData.append('password', credentials.password);
     
-    return apiClient.post('/auth/login', formData, {
+    return apiClient.post('/api/auth/login', formData, {
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
       },
@@ -15,23 +15,23 @@ export const authApi = {
   },
 
   register: async (data: RegisterData): Promise<User> => {
-    return apiClient.post('/auth/register', data);
+    return apiClient.post('/api/auth/register', data);
   },
 
   getCurrentUser: async (): Promise<User> => {
-    return apiClient.get('/auth/me');
+    return apiClient.get('/api/auth/me');
   },
 
   logout: async (): Promise<void> => {
-    return apiClient.post('/auth/logout');
+    return apiClient.post('/api/auth/logout');
   },
 
   requestPasswordReset: async (email: string): Promise<void> => {
-    return apiClient.post('/auth/request-password-reset', { email });
+    return apiClient.post('/api/auth/request-password-reset', { email });
   },
 
   resetPassword: async (token: string, newPassword: string): Promise<void> => {
-    return apiClient.post('/auth/reset-password', {
+    return apiClient.post('/api/auth/reset-password', {
       token,
       new_password: newPassword,
     });

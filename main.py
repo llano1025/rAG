@@ -6,7 +6,7 @@ import logging
 import os
 from typing import Dict, Any
 
-from api.routes import document_routes, search_routes, vector_routes, library_routes, user_routes, auth_routes, health_routes, admin_routes, advanced_routes, analytics_routes
+from api.routes import document_routes, search_routes, vector_routes, library_routes, user_routes, auth_routes, health_routes, admin_routes, advanced_routes, analytics_routes, chat_routes
 from api.middleware.auth import AuthMiddleware
 from api.middleware.error_handler import ErrorHandler
 from api.middleware.rate_limiter import RateLimiter
@@ -146,17 +146,18 @@ def create_app() -> FastAPI:
     app.add_middleware(ErrorHandler)
     # app.add_middleware(RateLimiter)  # Disabled for testing - requires proper configuration
     
-    # Include routers
-    app.include_router(auth_routes.router)
-    app.include_router(user_routes.router)
-    app.include_router(document_routes.router)
-    app.include_router(search_routes.router)
-    app.include_router(vector_routes.router)
-    app.include_router(library_routes.router)
-    app.include_router(health_routes.router)
-    app.include_router(admin_routes.router)
-    app.include_router(advanced_routes.router)
-    app.include_router(analytics_routes.router)
+    # Include routers with /api prefix
+    app.include_router(auth_routes.router, prefix="/api")
+    app.include_router(user_routes.router, prefix="/api")
+    app.include_router(document_routes.router, prefix="/api")
+    app.include_router(search_routes.router, prefix="/api")
+    app.include_router(vector_routes.router, prefix="/api")
+    app.include_router(library_routes.router, prefix="/api")
+    app.include_router(chat_routes.router, prefix="/api")
+    app.include_router(health_routes.router, prefix="/api")
+    app.include_router(admin_routes.router, prefix="/api")
+    app.include_router(advanced_routes.router, prefix="/api")
+    app.include_router(analytics_routes.router, prefix="/api")
     
     @app.get("/")
     async def root():

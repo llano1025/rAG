@@ -289,3 +289,60 @@ class AuditLogger:
                 self._write_batch(remaining_events)
 
         self._clean_old_logs()
+
+
+# Global audit logger instance
+_audit_logger = None
+
+def get_audit_logger() -> AuditLogger:
+    """Get or create the global audit logger instance."""
+    global _audit_logger
+    if _audit_logger is None:
+        from config import get_settings
+        settings = get_settings()
+        config = AuditLoggerConfig(
+            log_path=Path(settings.AUDIT_LOG_PATH),
+            rotation_size_mb=10,
+            retention_days=90,
+            batch_size=100,
+            flush_interval_seconds=5,
+            enable_async=True
+        )
+        _audit_logger = AuditLogger(config)
+    return _audit_logger
+
+async def log_user_action(
+    user_id: int,
+    action: str,
+    resource_id: Optional[str] = None,
+    resource_type: Optional[str] = None,
+    details: Optional[Dict[str, Any]] = None,
+    status: str = "success",
+    db=None  # Database session (not used but kept for compatibility)
+) -> None:
+    """
+    Convenience function to log user actions.
+    
+    Args:
+        user_id: ID of the user performing the action
+        action: Action being performed
+        resource_id: Optional resource identifier
+        resource_type: Optional resource type
+        details: Optional additional details
+        status: Status of the action (default: "success")
+        db: Database session (kept for compatibility, not used)
+    """
+    try:
+        audit_logger = get_audit_logger()
+        audit_logger.log_event(
+            event_type="user_action",
+            user_id=str(user_id),
+            action=action,
+            resource_id=resource_id,
+            resource_type=resource_type,
+            status=status,
+            details=details
+        )
+    except Exception as e:
+        # Don't let audit logging failures break the main application
+        logging.error(f"Failed to log user action: {str(e)}")

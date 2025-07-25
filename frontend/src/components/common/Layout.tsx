@@ -9,6 +9,7 @@ import {
   ChartBarIcon,
   Cog6ToothIcon,
   ArrowRightOnRectangleIcon,
+  ChatBubbleLeftRightIcon,
 } from '@heroicons/react/24/outline';
 import { useAuth } from '@/hooks/useAuth';
 
@@ -20,6 +21,7 @@ const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: HomeIcon },
   { name: 'Documents', href: '/dashboard', icon: DocumentTextIcon },
   { name: 'Search', href: '/search', icon: MagnifyingGlassIcon },
+  { name: 'Chat', href: '/chat', icon: ChatBubbleLeftRightIcon },
   { name: 'Analytics', href: '/analytics', icon: ChartBarIcon },
 ];
 

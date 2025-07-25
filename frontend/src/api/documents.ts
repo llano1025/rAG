@@ -12,11 +12,11 @@ interface DocumentsResponse {
 
 export const documentsApi = {
   getDocuments: async (page = 1, perPage = 20): Promise<DocumentsResponse> => {
-    return apiClient.get(`/documents?page=${page}&per_page=${perPage}`);
+    return apiClient.get(`/api/documents?page=${page}&per_page=${perPage}`);
   },
 
   getDocument: async (id: string): Promise<Document> => {
-    return apiClient.get(`/documents/${id}`);
+    return apiClient.get(`/api/documents/${id}`);
   },
 
   uploadDocument: async (
@@ -30,7 +30,7 @@ export const documentsApi = {
       formData.append('metadata', JSON.stringify(upload.metadata));
     }
 
-    return apiClient.upload('/documents/upload', formData, onProgress);
+    return apiClient.upload('/api/documents/upload', formData, onProgress);
   },
 
   uploadBatchDocuments: async (
@@ -42,28 +42,28 @@ export const documentsApi = {
       formData.append('files', file);
     });
 
-    return apiClient.upload('/documents/batch-upload', formData, onProgress);
+    return apiClient.upload('/api/documents/batch-upload', formData, onProgress);
   },
 
   updateDocument: async (id: string, updates: Partial<Document>): Promise<Document> => {
-    return apiClient.put(`/documents/${id}`, updates);
+    return apiClient.put(`/api/documents/${id}`, updates);
   },
 
   deleteDocument: async (id: string): Promise<void> => {
-    return apiClient.delete(`/documents/${id}`);
+    return apiClient.delete(`/api/documents/${id}`);
   },
 
   downloadDocument: async (id: string): Promise<Blob> => {
-    return apiClient.get(`/documents/${id}/download`, {
+    return apiClient.get(`/api/documents/${id}/download`, {
       responseType: 'blob',
     });
   },
 
   shareDocument: async (id: string, permissions: string[]): Promise<void> => {
-    return apiClient.post(`/documents/${id}/share`, { permissions });
+    return apiClient.post(`/api/documents/${id}/share`, { permissions });
   },
 
   getSharedDocuments: async (): Promise<Document[]> => {
-    return apiClient.get('/documents/shared');
+    return apiClient.get('/api/documents/shared');
   },
 };
