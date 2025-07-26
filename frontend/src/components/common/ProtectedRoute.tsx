@@ -19,7 +19,7 @@ export default function ProtectedRoute({ children, requireAdmin = false }: Prote
       }
 
       if (requireAdmin && user?.role !== 'admin') {
-        router.replace('/dashboard');
+        router.replace('/documents');
         return;
       }
     }

@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 import logging
 import os
 from typing import Dict, Any
+from pathlib import Path
 
 from api.routes import document_routes, search_routes, vector_routes, library_routes, user_routes, auth_routes, health_routes, admin_routes, advanced_routes, analytics_routes, chat_routes
 from api.middleware.auth import AuthMiddleware
@@ -127,12 +128,14 @@ def create_app() -> FastAPI:
     )
     
     # Configure CORS
+    allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=os.getenv("ALLOWED_ORIGINS", "*").split(","),
+        allow_origins=allowed_origins,
         allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
         allow_headers=["*"],
+        expose_headers=["*"],
     )
     
     # Add trusted host middleware
@@ -207,14 +210,30 @@ def get_encryption_manager() -> EncryptionManager:
     """Get the global encryption manager instance."""
     global encryption_manager
     if encryption_manager is None:
-        encryption_manager = EncryptionManager()
+        # Create encryption config similar to startup process
+        from pathlib import Path
+        encryption_config = EncryptionConfig(
+            key_path=Path("data/encryption.key"),
+            salt_path=Path("data/encryption.salt")
+        )
+        # Ensure data directory exists
+        Path("data").mkdir(exist_ok=True)
+        encryption_manager = EncryptionManager(encryption_config)
     return encryption_manager
 
 def get_audit_logger() -> AuditLogger:
     """Get the global audit logger instance."""
     global audit_logger
     if audit_logger is None:
-        audit_logger = AuditLogger()
+        # Create audit logger with default configuration
+        audit_config = AuditLoggerConfig(
+            log_path=Path("data/audit_logs"),
+            rotation_size_mb=10,
+            retention_days=90
+        )
+        # Ensure audit log directory exists
+        Path("data/audit_logs").mkdir(parents=True, exist_ok=True)
+        audit_logger = AuditLogger(audit_config)
     return audit_logger
 
 def get_redis_manager() -> RedisManager:

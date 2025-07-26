@@ -20,6 +20,11 @@ class SearchQuery(BaseModel):
         ge=0.0,
         le=1.0
     )
+    # Pagination fields
+    page: int = Field(1, description="Page number for pagination", ge=1)
+    page_size: int = Field(10, description="Number of results per page", ge=1, le=100)
+    # Sorting field
+    sort: Optional[str] = Field(None, description="Sort order (relevance, date, title)")
 
 from pydantic import BaseModel, Field
 from typing import List, Tuple, Dict

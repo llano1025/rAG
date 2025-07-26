@@ -9,7 +9,7 @@ export default function Register() {
 
   useEffect(() => {
     if (isAuthenticated) {
-      router.replace('/dashboard');
+      router.replace('/documents');
     }
   }, [isAuthenticated, router]);
 

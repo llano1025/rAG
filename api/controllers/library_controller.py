@@ -8,7 +8,7 @@ from sqlalchemy import and_, or_, func
 from database.models import Document, User, DocumentChunk
 from utils.security.encryption import EncryptionManager
 from utils.security.audit_logger import AuditLogger
-from utils.security.pii_detector import PIIDetector
+from utils.security.pii_detector import PIIDetector, PIIConfig
 
 class LibraryController:
     """Controller for document library management and organization."""
@@ -571,3 +571,20 @@ class LibraryController:
                 
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Operation failed: {str(e)}")
+
+
+# Dependency injection
+def get_library_controller() -> LibraryController:
+    """Get library controller instance with dependencies."""
+    # Import global dependency functions from main.py
+    from main import get_encryption_manager, get_audit_logger
+    
+    # Create PII detector with default configuration
+    pii_config = PIIConfig()
+    pii_detector = PIIDetector(pii_config)
+    
+    return LibraryController(
+        encryption=get_encryption_manager(),
+        audit_logger=get_audit_logger(),
+        pii_detector=pii_detector
+    )

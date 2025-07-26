@@ -49,10 +49,10 @@ async def similarity_search(
     """
     try:
         results = await search_controller.similarity_search(
-            query_text=request.query_text,
+            query_text=request.query,
             filters=request.filters,
             top_k=request.top_k,
-            threshold=request.threshold,
+            threshold=request.similarity_threshold or 0.0,
             user_id=current_user.id
         )
         return results

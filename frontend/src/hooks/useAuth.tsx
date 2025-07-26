@@ -33,11 +33,30 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
   }, []);
 
+  // Prevent race conditions during navigation
+  useEffect(() => {
+    const handleRouteChange = () => {
+      // Don't interrupt auth checks during navigation
+      return true;
+    };
+
+    router.events.on('routeChangeStart', handleRouteChange);
+    return () => {
+      router.events.off('routeChangeStart', handleRouteChange);
+    };
+  }, [router]);
+
   const refreshUser = async () => {
     try {
       const userData = await authApi.getCurrentUser();
+      // Only update state if component is still mounted
+      if (!router.events) return; // Router is being destroyed
       setUser(userData);
-    } catch (error) {
+    } catch (error: any) {
+      // Don't handle auth errors during navigation
+      if (error.name === 'AbortError' || error.code === 'ERR_CANCELED') {
+        return;
+      }
       Cookies.remove('access_token');
       setUser(null);
     } finally {
@@ -58,7 +77,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       
       setUser(response.user);
       toast.success('Login successful!');
-      router.push('/dashboard');
+      // Use replace instead of push to prevent back button issues
+      router.replace('/documents');
     } catch (error: any) {
       toast.error(error.response?.data?.detail || 'Login failed');
       throw error;

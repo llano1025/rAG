@@ -33,16 +33,20 @@ export interface AuthResponse {
 export interface Document {
   id: string;
   filename: string;
-  original_filename: string;
-  file_type: string;
+  title: string;
+  description?: string;
+  content_type: string;
   file_size: number;
-  upload_date: string;
-  processed_date?: string;
   status: 'uploading' | 'processing' | 'completed' | 'failed';
-  metadata?: Record<string, any>;
-  owner_id: string;
-  is_shared: boolean;
-  permissions: string[];
+  version: number;
+  is_public: boolean;
+  user_id: string;
+  created_at: string;
+  updated_at: string;
+  processed_at?: string;
+  language?: string;
+  tags: string[];
+  chunks_count: number;
 }
 
 export interface DocumentUpload {

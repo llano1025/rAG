@@ -9,7 +9,7 @@ export default function Login() {
 
   useEffect(() => {
     if (isAuthenticated) {
-      router.replace('/dashboard');
+      router.replace('/documents');
     }
   }, [isAuthenticated, router]);
 

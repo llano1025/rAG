@@ -43,7 +43,7 @@ class DocumentController:
         audit_logger: AuditLogger = None
     ):
         """Initialize document controller with dependencies."""
-        self.vector_controller = vector_controller or get_vector_controller()
+        self.vector_controller = vector_controller or get_vector_controller(audit_logger=audit_logger)
         self.audit_logger = audit_logger
         
         # File processing components
@@ -91,6 +91,14 @@ class DocumentController:
             # Validate file
             await self._validate_file(file)
             
+            # Check if vector controller is available
+            if self.vector_controller is None:
+                logger.error("Vector controller not available for document processing")
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Document processing service is currently unavailable"
+                )
+            
             # Read file content
             file_content = await file.read()
             await file.seek(0)  # Reset file pointer
@@ -106,11 +114,12 @@ class DocumentController:
             
             # Log successful upload
             if self.audit_logger:
-                await self.audit_logger.log(
+                self.audit_logger.log_event(
+                    event_type="user_action",
+                    user_id=str(user.id),
                     action="document_uploaded",
                     resource_type="document",
                     resource_id=str(result['document_id']),
-                    user_id=user.id,
                     details={
                         'filename': file.filename,
                         'file_size': result['file_size'],
@@ -187,10 +196,11 @@ class DocumentController:
             
             # Log batch upload results
             if self.audit_logger:
-                await self.audit_logger.log(
+                self.audit_logger.log_event(
+                    event_type="user_action",
+                    user_id=str(user.id),
                     action="batch_documents_uploaded",
                     resource_type="batch_upload",
-                    user_id=user.id,
                     details={
                         'total_files': len(files),
                         'successful_uploads': len(successful_uploads),
@@ -327,11 +337,12 @@ class DocumentController:
             
             # Log document update
             if self.audit_logger:
-                await self.audit_logger.log(
+                self.audit_logger.log_event(
+                    event_type="user_action",
+                    user_id=str(user.id),
                     action="document_updated",
                     resource_type="document",
                     resource_id=str(document_id),
-                    user_id=user.id,
                     details={
                         'updated_fields': list(update_fields.keys()),
                         'changes': update_fields
@@ -436,10 +447,11 @@ class DocumentController:
             
             # Log batch delete
             if self.audit_logger:
-                await self.audit_logger.log(
+                self.audit_logger.log_event(
+                    event_type="user_action",
+                    user_id=str(user.id),
                     action="batch_documents_deleted",
                     resource_type="batch_delete",
-                    user_id=user.id,
                     details={
                         'total_documents': len(document_ids),
                         'successful_deletes': len(successful_deletes),
@@ -631,7 +643,7 @@ class DocumentController:
             )
         
         # Check content type
-        content_type = self.type_detector.detect_type(file_content, file.filename)
+        content_type = self.type_detector.detect_type(file_content=file_content, filename=file.filename)
         if content_type not in self.allowed_content_types:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -656,4 +668,18 @@ def get_audit_logger() -> AuditLogger:
 
 def get_document_controller() -> DocumentController:
     """Get document controller instance with dependencies."""
-    return DocumentController(audit_logger=get_audit_logger())
+    try:
+        # Get audit logger
+        audit_logger = get_audit_logger()
+        
+        # Get vector controller with proper initialization
+        vector_controller = get_vector_controller(audit_logger=audit_logger)
+        
+        return DocumentController(
+            vector_controller=vector_controller,
+            audit_logger=audit_logger
+        )
+    except Exception as e:
+        logger.error(f"Failed to initialize document controller: {e}")
+        # Return a minimal controller without vector functionality
+        return DocumentController(audit_logger=get_audit_logger())

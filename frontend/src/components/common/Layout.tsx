@@ -4,7 +4,6 @@ import { useRouter } from 'next/router';
 import {
   DocumentTextIcon,
   MagnifyingGlassIcon,
-  HomeIcon,
   UserGroupIcon,
   ChartBarIcon,
   Cog6ToothIcon,
@@ -18,8 +17,7 @@ interface LayoutProps {
 }
 
 const navigation = [
-  { name: 'Dashboard', href: '/dashboard', icon: HomeIcon },
-  { name: 'Documents', href: '/dashboard', icon: DocumentTextIcon },
+  { name: 'Documents', href: '/documents', icon: DocumentTextIcon },
   { name: 'Search', href: '/search', icon: MagnifyingGlassIcon },
   { name: 'Chat', href: '/chat', icon: ChatBubbleLeftRightIcon },
   { name: 'Analytics', href: '/analytics', icon: ChartBarIcon },

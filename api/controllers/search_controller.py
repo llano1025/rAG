@@ -54,7 +54,7 @@ class SearchController:
             cached_query = await self._get_cached_search(query_hash, user.id)
             
             if cached_query and cached_query.is_cache_valid():
-                await self.audit_logger.log_event(
+                self.audit_logger.log_event(
                     user_id=user.id,
                     action="search_cache_hit",
                     resource_type="search",
@@ -108,7 +108,7 @@ class SearchController:
             
         except Exception as e:
             # Log search error
-            await self.audit_logger.log_event(
+            self.audit_logger.log_event(
                 user_id=user.id,
                 action="search_error",
                 resource_type="search",
@@ -190,7 +190,7 @@ class SearchController:
                 )
             
             # Log batch search event
-            await self.audit_logger.log_event(
+            self.audit_logger.log_event(
                 user_id=user.id,
                 action="batch_search",
                 resource_type="search",
@@ -203,7 +203,7 @@ class SearchController:
             
         except Exception as e:
             # Log batch search error
-            await self.audit_logger.log_event(
+            self.audit_logger.log_event(
                 user_id=user.id,
                 action="batch_search_error",
                 resource_type="search",
@@ -365,7 +365,7 @@ class SearchController:
             await self.db.commit()
             
             # Log search event
-            await self.audit_logger.log_event(
+            self.audit_logger.log_event(
                 user_id=user.id,
                 action="search" if not is_batch else "batch_search_item",
                 resource_type="search",
@@ -381,7 +381,7 @@ class SearchController:
             
         except Exception as e:
             # Don't fail search if logging fails
-            await self.audit_logger.log_event(
+            self.audit_logger.log_event(
                 user_id=user.id,
                 action="search_logging_error",
                 resource_type="search",
@@ -391,26 +391,54 @@ class SearchController:
             )
 
 # Module-level functions for compatibility with routes
-async def search_documents(query: str, filters: Optional[Dict] = None, sort: Optional[str] = None, 
+async def search_documents(query: str, filters=None, sort: Optional[str] = None, 
                          page: int = 1, page_size: int = 10, user_id: int = None):
     """Search documents with text and filtering."""
+    from ..schemas.search_schemas import SearchFilters
+    
+    # Handle filters parameter - could be SearchFilters object or dict or None
+    if filters is None:
+        filters_applied = SearchFilters()
+    elif hasattr(filters, 'dict'):  # It's a SearchFilters object
+        filters_applied = filters
+    else:  # It's a dict
+        try:
+            filters_applied = SearchFilters(**filters)
+        except:
+            filters_applied = SearchFilters()
+    
     # This is a placeholder - implement actual search logic
     return {
         "results": [],
-        "total": 0,
-        "page": page,
-        "page_size": page_size,
-        "query": query
+        "total_hits": 0,
+        "execution_time_ms": 0.0,
+        "filters_applied": filters_applied,
+        "query_vector_id": None
     }
 
-async def similarity_search(query_text: str, filters: Optional[Dict] = None, top_k: int = 5, 
+async def similarity_search(query_text: str, filters=None, top_k: int = 5, 
                           threshold: float = 0.0, user_id: int = None):
     """Perform semantic similarity search."""
+    from ..schemas.search_schemas import SearchFilters
+    
+    # Handle filters parameter - could be SearchFilters object or dict or None
+    if filters is None:
+        filters_applied = SearchFilters()
+    elif hasattr(filters, 'dict'):  # It's a SearchFilters object
+        filters_applied = filters
+    else:  # It's a dict
+        try:
+            filters_applied = SearchFilters(**filters)
+        except:
+            filters_applied = SearchFilters()
+    
     # This is a placeholder - implement actual similarity search logic
     return {
         "results": [],
-        "total": 0,
-        "query": query_text
+        "total_hits": 0,
+        "execution_time_ms": 0.0,
+        "filters_applied": filters_applied,
+        "query_vector_id": None
     }
 
 async def get_available_filters(user_id: int):

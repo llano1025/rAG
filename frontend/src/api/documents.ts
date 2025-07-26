@@ -21,7 +21,8 @@ export const documentsApi = {
 
   uploadDocument: async (
     upload: DocumentUpload,
-    onProgress?: (progress: number) => void
+    onProgress?: (progress: number) => void,
+    tags?: string[]
   ): Promise<Document> => {
     const formData = new FormData();
     formData.append('file', upload.file);
@@ -30,17 +31,31 @@ export const documentsApi = {
       formData.append('metadata', JSON.stringify(upload.metadata));
     }
 
+    if (tags && tags.length > 0) {
+      formData.append('tags', JSON.stringify(tags));
+    }
+
     return apiClient.upload('/api/documents/upload', formData, onProgress);
   },
 
   uploadBatchDocuments: async (
     files: File[],
-    onProgress?: (progress: number) => void
+    onProgress?: (progress: number) => void,
+    tags?: string[],
+    metadata?: Record<string, any>
   ): Promise<Document[]> => {
     const formData = new FormData();
     files.forEach((file) => {
       formData.append('files', file);
     });
+
+    if (tags && tags.length > 0) {
+      formData.append('tags', JSON.stringify(tags));
+    }
+
+    if (metadata) {
+      formData.append('metadata', JSON.stringify(metadata));
+    }
 
     return apiClient.upload('/api/documents/batch-upload', formData, onProgress);
   },

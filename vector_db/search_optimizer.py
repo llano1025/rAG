@@ -432,3 +432,69 @@ class SearchOptimizer:
                 return False
         
         return True
+
+    def add_vectors(self, vectors: np.ndarray, metadata_list: List[Dict]):
+        """Add vectors directly to the FAISS index."""
+        try:
+            if self.index is None:
+                # Create index if it doesn't exist
+                self.config.dimension = vectors.shape[1]
+                self.index = self._create_index()
+                
+                if not self.index.is_trained:
+                    self.index.train(vectors)
+            
+            # Normalize if using cosine similarity
+            if self.config.metric == MetricType.COSINE:
+                vectors = self._normalize_vectors(vectors)
+            
+            self.index.add(vectors)
+            
+            # Store metadata (simple approach for now)
+            start_id = len(self.chunks)
+            for i, metadata in enumerate(metadata_list):
+                # Create dummy chunk for metadata storage
+                chunk = Chunk(
+                    document_id=metadata.get('document_id', 0),
+                    chunk_id=metadata.get('chunk_id', f'chunk_{start_id + i}'),
+                    start_idx=0,
+                    end_idx=0,
+                    text=metadata.get('text', ''),
+                    embedding=vectors[i],
+                    metadata=metadata
+                )
+                self.chunks.append(chunk)
+                self.id_to_chunk[start_id + i] = chunk
+                
+        except Exception as e:
+            self.logger.error(f"Failed to add vectors: {e}")
+            raise SearchError(f"Adding vectors failed: {e}")
+
+    def save_index(self, file_path: str):
+        """Save FAISS index to disk."""
+        try:
+            if self.index is None:
+                raise ValueError("No index to save")
+            
+            faiss.write_index(self.index, file_path)
+            self.logger.info(f"Index saved to {file_path}")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to save index: {e}")
+            raise SearchError(f"Saving index failed: {e}")
+
+    def load_index(self, file_path: str):
+        """Load FAISS index from disk."""
+        try:
+            self.index = faiss.read_index(file_path)
+            self.logger.info(f"Index loaded from {file_path}")
+            
+        except Exception as e:
+            self.logger.error(f"Failed to load index: {e}")
+            raise SearchError(f"Loading index failed: {e}")
+
+    def get_index_size(self) -> int:
+        """Get the number of vectors in the index."""
+        if self.index is None:
+            return 0
+        return self.index.ntotal

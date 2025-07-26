@@ -5,6 +5,7 @@ Provides version control for documents with database persistence and vector sync
 
 import logging
 import hashlib
+import asyncio
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
@@ -25,12 +26,12 @@ def _get_adaptive_chunker():
 
 # Lazy import for EmbeddingManager
 def _get_embedding_manager():
-    """Lazy import of EmbeddingManager."""
+    """Lazy import of EnhancedEmbeddingManager."""
     try:
-        from .embedding_manager import EmbeddingManager
-        return EmbeddingManager
+        from .enhanced_embedding_manager import EnhancedEmbeddingManager
+        return EnhancedEmbeddingManager
     except ImportError as e:
-        logging.warning(f"EmbeddingManager not available: {e}")
+        logging.warning(f"EnhancedEmbeddingManager not available: {e}")
         return None
 
 logger = logging.getLogger(__name__)
@@ -52,19 +53,119 @@ class DocumentVersionManager:
     
     def __init__(self, storage_manager: VectorStorageManager = None):
         """Initialize document version manager."""
-        self.storage_manager = storage_manager or get_storage_manager()
+        logger.info("Initializing DocumentVersionManager")
+        
+        try:
+            self.storage_manager = storage_manager or get_storage_manager()
+            if self.storage_manager is None:
+                logger.error("Failed to initialize storage manager")
+                raise RuntimeError("Storage manager initialization failed")
+        except Exception as e:
+            logger.error(f"Failed to get storage manager: {e}")
+            raise RuntimeError(f"Storage manager initialization failed: {e}")
+        
         self.embedding_manager = None  # Will be initialized lazily
         self.chunker = None  # Will be initialized lazily
+        
+        logger.info(f"DocumentVersionManager initialized - storage_manager: {self.storage_manager is not None}")
     
     def _get_embedding_manager_instance(self):
         """Get embedding manager instance, initializing if needed."""
         if self.embedding_manager is None:
-            EmbeddingManager = _get_embedding_manager()
-            if EmbeddingManager:
-                self.embedding_manager = EmbeddingManager()
-            else:
-                raise ImportError("EmbeddingManager not available")
+            try:
+                EnhancedEmbeddingManager = _get_embedding_manager()
+                if not EnhancedEmbeddingManager:
+                    raise ImportError("EnhancedEmbeddingManager not available")
+                
+                # Try different embedding providers in order of preference
+                providers_to_try = [
+                    ("huggingface", self._create_huggingface_manager),
+                    ("ollama", self._create_ollama_manager),
+                    ("openai", self._create_openai_manager)
+                ]
+                
+                last_error = None
+                for provider_name, create_func in providers_to_try:
+                    try:
+                        logger.info(f"Attempting to initialize {provider_name} embedding manager")
+                        self.embedding_manager = create_func(EnhancedEmbeddingManager)
+                        if self.embedding_manager:
+                            logger.info(f"Successfully initialized {provider_name} embedding manager")
+                            break
+                    except Exception as e:
+                        last_error = e
+                        logger.warning(f"Failed to initialize {provider_name} embedding manager: {e}")
+                        continue
+                
+                if self.embedding_manager is None:
+                    error_msg = f"Failed to initialize any embedding provider. Last error: {last_error}"
+                    logger.error(error_msg)
+                    raise RuntimeError(error_msg)
+                    
+            except Exception as e:
+                logger.error(f"Failed to get embedding manager: {e}")
+                raise RuntimeError(f"Embedding manager initialization failed: {e}")
+        
         return self.embedding_manager
+    
+    def _create_huggingface_manager(self, EnhancedEmbeddingManager):
+        """Create HuggingFace embedding manager with error handling."""
+        try:
+            import torch
+            # Check if torch is available and working
+            if not torch.cuda.is_available():
+                logger.info("CUDA not available, using CPU for embeddings")
+            
+            # Use a lightweight model by default for better reliability
+            manager = EnhancedEmbeddingManager.create_huggingface_manager(
+                model_name="sentence-transformers/all-MiniLM-L6-v2",  # Smaller, faster model
+                batch_size=16  # Smaller batch size for stability
+            )
+            
+            # Validate that the manager was created successfully
+            if manager is None:
+                raise RuntimeError("HuggingFace embedding manager creation returned None")
+            
+            return manager
+            
+        except ImportError as e:
+            logger.warning(f"PyTorch/transformers not available for HuggingFace embeddings: {e}")
+            raise
+        except Exception as e:
+            logger.warning(f"Failed to create HuggingFace embedding manager: {e}")
+            raise
+    
+    def _create_ollama_manager(self, EnhancedEmbeddingManager):
+        """Create Ollama embedding manager with error handling."""
+        try:
+            # Try to create Ollama manager with default settings
+            manager = EnhancedEmbeddingManager.create_ollama_manager(
+                base_url="http://localhost:11434",
+                model_name="nomic-embed-text",
+                batch_size=8
+            )
+            return manager
+        except Exception as e:
+            logger.warning(f"Failed to create Ollama embedding manager: {e}")
+            raise
+    
+    def _create_openai_manager(self, EnhancedEmbeddingManager):
+        """Create OpenAI embedding manager with error handling."""
+        try:
+            import os
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                raise ValueError("OPENAI_API_KEY environment variable not set")
+            
+            manager = EnhancedEmbeddingManager.create_openai_manager(
+                api_key=api_key,
+                model_name="text-embedding-ada-002",
+                batch_size=32
+            )
+            return manager
+        except Exception as e:
+            logger.warning(f"Failed to create OpenAI embedding manager: {e}")
+            raise
     
     def _get_chunker_instance(self):
         """Get chunker instance, initializing if needed."""
@@ -195,8 +296,9 @@ class DocumentVersionManager:
     ) -> List[Dict]:
         """Process document content into chunks and store in database."""
         try:
-            # Chunk the content
-            chunks = self.chunker.chunk_text(content)
+            # Get chunker instance and chunk the content
+            chunker = self._get_chunker_instance()
+            chunks = chunker.chunk_document(content, {})
             
             chunks_data = []
             for i, chunk in enumerate(chunks):
@@ -207,20 +309,29 @@ class DocumentVersionManager:
                     chunk_id=f"doc_{document_id}_chunk_{i}",
                     text=chunk.text,
                     text_length=len(chunk.text),
-                    start_char=chunk.start_char,
-                    end_char=chunk.end_char,
-                    context_before=chunk.context.get('before', '') if chunk.context else '',
-                    context_after=chunk.context.get('after', '') if chunk.context else '',
+                    start_char=chunk.start_idx,
+                    end_char=chunk.end_idx,
+                    context_before=chunk.context_text[:200] if chunk.context_text else '',
+                    context_after=chunk.context_text[-200:] if chunk.context_text else '',
                     metadata=self._serialize_metadata(chunk.metadata) if chunk.metadata else None
                 )
                 
                 db.add(doc_chunk)
                 
                 # Prepare chunk data for vector processing
+                # Convert context_text to context dict format
+                context_dict = {}
+                if chunk.context_text:
+                    # Split context_text into before/after if it contains the main text
+                    context_dict = {
+                        'before': chunk.context_text[:200] if chunk.context_text else '',
+                        'after': chunk.context_text[-200:] if chunk.context_text else ''
+                    }
+                
                 chunks_data.append({
                     'chunk': doc_chunk,
                     'text': chunk.text,
-                    'context': chunk.context or {},
+                    'context': context_dict,
                     'metadata': chunk.metadata or {}
                 })
             
@@ -240,11 +351,20 @@ class DocumentVersionManager:
     ):
         """Create vector index and embeddings for document chunks."""
         try:
+            # Check if storage manager is available
+            if self.storage_manager is None:
+                logger.error("Storage manager not available for vector indexing")
+                raise RuntimeError("Vector storage service is currently unavailable")
+            
             # Generate embeddings for all chunks
             texts = [chunk_data['text'] for chunk_data in chunks_data]
             
             # Generate content embeddings
             embedding_manager = self._get_embedding_manager_instance()
+            if embedding_manager is None:
+                logger.error("Embedding manager not available for vector generation")
+                raise RuntimeError("Embedding generation service is currently unavailable")
+                
             content_embeddings = await embedding_manager.generate_embeddings(texts)
             
             # Generate context embeddings (text + context)
@@ -366,9 +486,17 @@ class DocumentVersionManager:
                 raise DocumentVersionError("Document not found or access denied")
             
             if hard_delete:
-                # Delete vector index
+                # Try to delete vector index if storage manager is available
                 index_name = f"doc_{document.id}"
-                await self.storage_manager.delete_index(index_name, db)
+                if self.storage_manager is not None:
+                    try:
+                        await self.storage_manager.delete_index(index_name, db)
+                        logger.info(f"Successfully deleted vector index {index_name}")
+                    except Exception as e:
+                        logger.warning(f"Failed to delete vector index {index_name}: {e}")
+                        # Continue with document deletion even if vector deletion fails
+                else:
+                    logger.warning(f"Storage manager not available, skipping vector index deletion for {index_name}")
                 
                 # Hard delete from database
                 # First delete chunks
@@ -393,9 +521,16 @@ class DocumentVersionManager:
             logger.info(f"Deleted document {document_id} ({'hard' if hard_delete else 'soft'} delete)")
             return True
             
+        except DocumentVersionError:
+            # Re-raise specific document version errors
+            db.rollback()
+            raise
         except Exception as e:
             db.rollback()
-            logger.error(f"Failed to delete document version: {e}")
+            logger.error(f"Failed to delete document version {document_id}: {e}")
+            # Provide more specific error information
+            if "storage_manager" in str(e).lower() or "vector" in str(e).lower():
+                logger.error("Vector storage operations failed, but document deletion may still proceed")
             return False
     
     async def restore_document_version(

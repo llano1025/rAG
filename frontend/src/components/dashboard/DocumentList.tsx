@@ -7,10 +7,13 @@ import {
   ShareIcon,
   ArrowDownTrayIcon,
   FunnelIcon,
+  TagIcon,
 } from '@heroicons/react/24/outline';
 import { documentsApi } from '@/api/documents';
+import { libraryApi, Tag } from '@/api/library';
 import { Document, PaginatedResponse } from '@/types';
 import DocumentPreview from './DocumentPreview';
+import TagInput from '@/components/common/TagInput';
 import toast from 'react-hot-toast';
 
 interface DocumentListProps {
@@ -33,10 +36,31 @@ export default function DocumentList({ refreshTrigger }: DocumentListProps) {
   const [filterType, setFilterType] = useState<string>('all');
   const [sortBy, setSortBy] = useState<'name' | 'date' | 'size'>('date');
   const [previewDocument, setPreviewDocument] = useState<Document | null>(null);
+  const [tagFilter, setTagFilter] = useState<string[]>([]);
+  const [availableTags, setAvailableTags] = useState<Tag[]>([]);
 
   useEffect(() => {
     fetchDocuments();
   }, [currentPage, refreshTrigger]);
+
+  // Reset to first page when filters change
+  useEffect(() => {
+    if (currentPage !== 1) {
+      setCurrentPage(1);
+    }
+  }, [filterType, tagFilter]);
+
+  useEffect(() => {
+    const loadTags = async () => {
+      try {
+        const tags = await libraryApi.getTags();
+        setAvailableTags(tags);
+      } catch (error) {
+        console.error('Failed to load tags:', error);
+      }
+    };
+    loadTags();
+  }, []);
 
   const fetchDocuments = async () => {
     try {
@@ -44,11 +68,65 @@ export default function DocumentList({ refreshTrigger }: DocumentListProps) {
       const response = await documentsApi.getDocuments(currentPage, 20);
       setDocuments(response as DocumentsResponse);
     } catch (error: any) {
-      toast.error('Failed to fetch documents');
+      // Handle different error types
+      if (error.code === 'ERR_CANCELED' || error.name === 'AbortError') {
+        // Request was cancelled, don't show error
+        return;
+      }
+      
+      const errorMessage = error.response?.data?.detail || 'Failed to fetch documents';
+      toast.error(errorMessage);
+      
+      // Set empty state on error to prevent crashes
+      setDocuments({
+        documents: [],
+        total_count: 0,
+        skip: 0,
+        limit: 20,
+        filters: {}
+      });
     } finally {
       setLoading(false);
     }
   };
+
+  // Filter documents based on current filters
+  const filteredDocuments = documents?.documents?.filter(doc => {
+    // Filter by file type
+    if (filterType !== 'all') {
+      const docType = doc.content_type.toLowerCase();
+      if (filterType === 'pdf' && !docType.includes('pdf')) return false;
+      if (filterType === 'docx' && !docType.includes('word')) return false;
+      if (filterType === 'txt' && !docType.includes('text')) return false;
+      if (filterType === 'html' && !docType.includes('html')) return false;
+    }
+
+    // Filter by tags
+    if (tagFilter.length > 0) {
+      if (!doc.tags || doc.tags.length === 0) return false;
+      const hasMatchingTag = tagFilter.some(filterTag => 
+        doc.tags.some(docTag => docTag.toLowerCase().includes(filterTag.toLowerCase()))
+      );
+      if (!hasMatchingTag) return false;
+    }
+
+    return true;
+  }) || [];
+
+  // Sort filtered documents
+  const sortedDocuments = [...filteredDocuments].sort((a, b) => {
+    switch (sortBy) {
+      case 'name':
+        return a.filename.localeCompare(b.filename);
+      case 'size':
+        return b.file_size - a.file_size;
+      case 'date':
+      default:
+        const dateA = new Date(a.created_at || 0).getTime();
+        const dateB = new Date(b.created_at || 0).getTime();
+        return dateB - dateA;
+    }
+  });
 
   const handleDelete = async (id: string, filename: string) => {
     if (!confirm(`Are you sure you want to delete "${filename}"?`)) return;
@@ -115,6 +193,29 @@ export default function DocumentList({ refreshTrigger }: DocumentListProps) {
     );
   };
 
+  const renderTags = (tags: string[]) => {
+    if (!tags || tags.length === 0) return null;
+
+    return (
+      <div className="flex flex-wrap items-center gap-1 mt-1">
+        <TagIcon className="h-3 w-3 text-gray-400" />
+        {tags.slice(0, 3).map((tag) => (
+          <span
+            key={tag}
+            className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-blue-50 text-blue-700"
+          >
+            {tag}
+          </span>
+        ))}
+        {tags.length > 3 && (
+          <span className="text-xs text-gray-500">
+            +{tags.length - 3} more
+          </span>
+        )}
+      </div>
+    );
+  };
+
   if (loading) {
     return (
       <div className="animate-pulse">
@@ -147,62 +248,92 @@ export default function DocumentList({ refreshTrigger }: DocumentListProps) {
     );
   }
 
+  // Show filtered empty state
+  if (sortedDocuments.length === 0) {
+    return (
+      <div className="text-center py-12">
+        <DocumentTextIcon className="mx-auto h-12 w-12 text-gray-400" />
+        <h3 className="mt-2 text-sm font-medium text-gray-900">No matching documents</h3>
+        <p className="mt-1 text-sm text-gray-500">
+          Try adjusting your filters to see more documents.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       {/* Filters and Sort */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-4">
-          <div className="flex items-center space-x-2">
-            <FunnelIcon className="h-5 w-5 text-gray-400" />
-            <select
-              value={filterType}
-              onChange={(e) => setFilterType(e.target.value)}
-              className="border border-gray-300 rounded-md px-3 py-1 text-sm"
-            >
-              <option value="all">All Types</option>
-              <option value="pdf">PDF</option>
-              <option value="docx">Word</option>
-              <option value="txt">Text</option>
-              <option value="html">HTML</option>
-            </select>
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-4">
+            <div className="flex items-center space-x-2">
+              <FunnelIcon className="h-5 w-5 text-gray-400" />
+              <select
+                value={filterType}
+                onChange={(e) => setFilterType(e.target.value)}
+                className="border border-gray-300 rounded-md px-3 py-1 text-sm"
+              >
+                <option value="all">All Types</option>
+                <option value="pdf">PDF</option>
+                <option value="docx">Word</option>
+                <option value="txt">Text</option>
+                <option value="html">HTML</option>
+              </select>
+            </div>
+            
+            <div className="flex items-center space-x-2">
+              <span className="text-sm text-gray-500">Sort by:</span>
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as 'name' | 'date' | 'size')}
+                className="border border-gray-300 rounded-md px-3 py-1 text-sm"
+              >
+                <option value="date">Date</option>
+                <option value="name">Name</option>
+                <option value="size">Size</option>
+              </select>
+            </div>
           </div>
           
-          <div className="flex items-center space-x-2">
-            <span className="text-sm text-gray-500">Sort by:</span>
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value as 'name' | 'date' | 'size')}
-              className="border border-gray-300 rounded-md px-3 py-1 text-sm"
-            >
-              <option value="date">Date</option>
-              <option value="name">Name</option>
-              <option value="size">Size</option>
-            </select>
-          </div>
+          <p className="text-sm text-gray-500">
+            {sortedDocuments.length} of {documents ? documents.total_count : 0} document{documents && documents.total_count !== 1 ? 's' : ''}
+          </p>
         </div>
         
-        <p className="text-sm text-gray-500">
-          {documents.total_count} document{documents.total_count !== 1 ? 's' : ''}
-        </p>
+        {/* Tag filter */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Filter by tags:
+          </label>
+          <TagInput
+            value={tagFilter}
+            onChange={setTagFilter}
+            placeholder="Filter documents by tags..."
+            className="max-w-md"
+            maxTags={10}
+          />
+        </div>
       </div>
 
       {/* Document Grid */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {documents.documents.map((doc) => (
+        {sortedDocuments.map((doc) => (
           <div key={doc.id} className="bg-white rounded-lg border border-gray-200 p-4 hover:shadow-md transition-shadow">
             <div className="flex items-start justify-between">
               <div className="flex items-start space-x-3 flex-1 min-w-0">
-                {getFileIcon(doc.file_type)}
+                {getFileIcon(doc.content_type)}
                 <div className="flex-1 min-w-0">
-                  <h3 className="text-sm font-medium text-gray-900 truncate" title={doc.original_filename}>
-                    {doc.original_filename}
+                  <h3 className="text-sm font-medium text-gray-900 truncate" title={doc.filename}>
+                    {doc.filename}
                   </h3>
                   <p className="text-xs text-gray-500 mt-1">
-                    {formatFileSize(doc.file_size)} • {format(new Date(doc.upload_date), 'MMM d, yyyy')}
+                    {formatFileSize(doc.file_size)} • {doc.created_at ? format(new Date(doc.created_at), 'MMM d, yyyy') : 'Unknown date'}
                   </p>
                   <div className="mt-2">
                     {getStatusBadge(doc.status)}
                   </div>
+                  {renderTags(doc.tags)}
                 </div>
               </div>
             </div>
@@ -211,7 +342,7 @@ export default function DocumentList({ refreshTrigger }: DocumentListProps) {
             <div className="mt-4 flex items-center justify-between">
               <div className="flex items-center space-x-2">
                 <button
-                  onClick={() => handleDownload(doc.id, doc.original_filename)}
+                  onClick={() => handleDownload(doc.id, doc.filename)}
                   className="p-1 text-gray-400 hover:text-gray-600"
                   title="Download"
                 >
@@ -236,7 +367,7 @@ export default function DocumentList({ refreshTrigger }: DocumentListProps) {
               </div>
               
               <button
-                onClick={() => handleDelete(doc.id, doc.original_filename)}
+                onClick={() => handleDelete(doc.id, doc.filename)}
                 className="p-1 text-gray-400 hover:text-red-600"
                 title="Delete"
               >

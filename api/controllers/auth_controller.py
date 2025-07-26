@@ -45,10 +45,11 @@ class AuthController:
             auth_result = await self._verify_credentials(encrypted_creds)
             
             # Log authentication attempt
-            await self.audit_logger.log(
+            self.audit_logger.log_event(
+                event_type="user_action",
+                user_id=str(auth_result.get("user_id")) if auth_result.get("user_id") else "unknown",
                 action="authentication",
                 resource_type="user",
-                user_id=auth_result.get("user_id"),
                 details={"status": auth_result.get("status")}
             )
             
@@ -171,7 +172,8 @@ class AuthController:
         db.refresh(db_user)
         
         # Log user creation
-        await self.audit_logger.log(
+        self.audit_logger.log_event(
+                    event_type="user_action",
             action="user_created",
             resource_type="user",
             resource_id=str(db_user.id),
@@ -202,7 +204,8 @@ class AuthController:
             db.commit()
             
             # Log failed authentication
-            await self.audit_logger.log(
+            self.audit_logger.log_event(
+                    event_type="user_action",
                 action="authentication_failed",
                 resource_type="user",
                 resource_id=str(user.id),
@@ -243,7 +246,8 @@ class AuthController:
         db.refresh(user)
         
         # Log user update
-        await self.audit_logger.log(
+        self.audit_logger.log_event(
+                    event_type="user_action",
             action="user_updated",
             resource_type="user",
             resource_id=str(user.id),
@@ -270,7 +274,8 @@ class AuthController:
         db.commit()
         
         # Log user deletion
-        await self.audit_logger.log(
+        self.audit_logger.log_event(
+                    event_type="user_action",
             action="user_deleted",
             resource_type="user",
             resource_id=str(user.id),
@@ -377,7 +382,8 @@ class AuthController:
         db.refresh(api_key)
         
         # Log API key creation
-        await self.audit_logger.log(
+        self.audit_logger.log_event(
+                    event_type="user_action",
             action="api_key_created",
             resource_type="api_key",
             resource_id=str(api_key.id),
@@ -421,7 +427,8 @@ class AuthController:
             db.commit()
             
             # Log API key revocation
-            await self.audit_logger.log(
+            self.audit_logger.log_event(
+                    event_type="user_action",
                 action="api_key_revoked",
                 resource_type="api_key",
                 resource_id=str(api_key.id),

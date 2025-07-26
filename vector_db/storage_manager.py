@@ -129,6 +129,10 @@ class VectorStorageManager:
             True if index was created successfully
         """
         try:
+            # Lazy initialization - ensure qdrant_manager is initialized
+            if self.qdrant_manager is None:
+                await self.initialize()
+                
             # Check dependencies
             self._check_vector_dependencies()
             
@@ -137,18 +141,32 @@ class VectorStorageManager:
             if not SearchOptimizer:
                 raise ImportError("SearchOptimizer not available")
             
-            # Create FAISS search optimizers
-            content_optimizer = SearchOptimizer(
-                embedding_dim=embedding_dimension,
-                index_type=faiss_index_type,
-                similarity_metric="cosine"
+            # Create FAISS search optimizers with proper SearchConfig
+            from .search_optimizer import SearchConfig, IndexType, MetricType
+            
+            # Map string index type to enum
+            index_type_enum = IndexType.FLAT
+            if faiss_index_type.upper() == "HNSW":
+                index_type_enum = IndexType.HNSW
+            elif faiss_index_type.upper() == "IVF":
+                index_type_enum = IndexType.IVF
+            elif faiss_index_type.upper() == "IVF_PQ":
+                index_type_enum = IndexType.IVF_PQ
+            
+            content_config = SearchConfig(
+                dimension=embedding_dimension,
+                index_type=index_type_enum,
+                metric=MetricType.COSINE
             )
             
-            context_optimizer = SearchOptimizer(
-                embedding_dim=embedding_dimension,
-                index_type=faiss_index_type,
-                similarity_metric="cosine"
+            context_config = SearchConfig(
+                dimension=embedding_dimension,
+                index_type=index_type_enum,
+                metric=MetricType.COSINE
             )
+            
+            content_optimizer = SearchOptimizer(content_config)
+            context_optimizer = SearchOptimizer(context_config)
             
             # Store FAISS optimizers
             self.faiss_indices[f"{index_name}_content"] = content_optimizer
@@ -215,6 +233,10 @@ class VectorStorageManager:
             List of point IDs that were added
         """
         try:
+            # Lazy initialization - ensure qdrant_manager is initialized
+            if self.qdrant_manager is None:
+                await self.initialize()
+                
             # Check dependencies
             self._check_vector_dependencies()
             
@@ -487,13 +509,25 @@ class VectorStorageManager:
             content_path, context_path = self._get_faiss_paths(index_name)
             
             if os.path.exists(content_path):
-                content_optimizer = SearchOptimizer(embedding_dim=embedding_dimension)
+                from .search_optimizer import SearchConfig, IndexType, MetricType
+                content_config = SearchConfig(
+                    dimension=embedding_dimension,
+                    index_type=IndexType.FLAT,  # Default to FLAT for loading
+                    metric=MetricType.COSINE
+                )
+                content_optimizer = SearchOptimizer(content_config)
                 content_optimizer.load_index(content_path)
                 self.faiss_indices[f"{index_name}_content"] = content_optimizer
                 logger.info(f"Loaded content index from {content_path}")
             
             if os.path.exists(context_path):
-                context_optimizer = SearchOptimizer(embedding_dim=embedding_dimension)
+                from .search_optimizer import SearchConfig, IndexType, MetricType
+                context_config = SearchConfig(
+                    dimension=embedding_dimension,
+                    index_type=IndexType.FLAT,  # Default to FLAT for loading
+                    metric=MetricType.COSINE
+                )
+                context_optimizer = SearchOptimizer(context_config)
                 context_optimizer.load_index(context_path)
                 self.faiss_indices[f"{index_name}_context"] = context_optimizer
                 logger.info(f"Loaded context index from {context_path}")

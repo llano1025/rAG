@@ -48,7 +48,7 @@ export default function DocumentPreview({ document, isOpen, onClose }: DocumentP
       const url = window.URL.createObjectURL(blob);
       const a = window.document.createElement('a');
       a.href = url;
-      a.download = document.original_filename;
+      a.download = document.filename;
       window.document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
@@ -92,9 +92,9 @@ export default function DocumentPreview({ document, isOpen, onClose }: DocumentP
     }
 
     // Handle different file types
-    const fileType = document.file_type.toLowerCase();
+    const contentType = document.content_type ? document.content_type.toLowerCase() : '';
     
-    if (fileType === 'pdf') {
+    if (contentType === 'application/pdf') {
       return (
         <iframe
           src={previewUrl}
@@ -104,7 +104,7 @@ export default function DocumentPreview({ document, isOpen, onClose }: DocumentP
       );
     }
     
-    if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(fileType)) {
+    if (['image/png', 'image/jpg', 'image/jpeg', 'image/gif', 'image/webp'].includes(contentType)) {
       return (
         <img
           src={previewUrl}
@@ -114,7 +114,7 @@ export default function DocumentPreview({ document, isOpen, onClose }: DocumentP
       );
     }
     
-    if (['txt', 'html', 'csv'].includes(fileType)) {
+    if (['text/plain', 'text/html', 'text/csv'].includes(contentType)) {
       return (
         <iframe
           src={previewUrl}
@@ -157,10 +157,10 @@ export default function DocumentPreview({ document, isOpen, onClose }: DocumentP
           <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
             <div className="flex-1 min-w-0">
               <h3 className="text-lg font-medium text-gray-900 truncate">
-                {document.original_filename}
+                {document.filename}
               </h3>
               <p className="text-sm text-gray-500">
-                {document.file_type.toUpperCase()} • {(document.file_size / 1024 / 1024).toFixed(1)} MB
+                {document.content_type ? document.content_type.toUpperCase() : 'Unknown'} • {(document.file_size / 1024 / 1024).toFixed(1)} MB
               </p>
             </div>
             
@@ -192,7 +192,7 @@ export default function DocumentPreview({ document, isOpen, onClose }: DocumentP
           <div className="px-6 py-4 border-t border-gray-200 bg-gray-50">
             <div className="flex items-center justify-between text-sm text-gray-500">
               <div>
-                Uploaded: {new Date(document.upload_date).toLocaleDateString()}
+                Created: {document.created_at ? new Date(document.created_at).toLocaleDateString() : 'Unknown'}
               </div>
               <div>
                 Status: <span className="capitalize">{document.status}</span>

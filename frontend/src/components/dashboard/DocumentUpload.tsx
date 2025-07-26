@@ -1,7 +1,8 @@
 import { useState, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { CloudArrowUpIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { CloudArrowUpIcon, XMarkIcon, FolderIcon } from '@heroicons/react/24/outline';
 import { documentsApi } from '@/api/documents';
+import TagInput from '@/components/common/TagInput';
 import toast from 'react-hot-toast';
 
 interface UploadFile {
@@ -18,6 +19,8 @@ interface DocumentUploadProps {
 export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps) {
   const [files, setFiles] = useState<UploadFile[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [tags, setTags] = useState<string[]>([]);
+  const [folderPath, setFolderPath] = useState<string>('');
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     const newFiles = acceptedFiles.map(file => ({
@@ -61,12 +64,16 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
         ));
 
         await documentsApi.uploadDocument(
-          { file: uploadFile.file },
+          { 
+            file: uploadFile.file,
+            metadata: { folder_path: folderPath || undefined }
+          },
           (progress) => {
             setFiles(prev => prev.map(f => 
               f.id === uploadFile.id ? { ...f, progress } : f
             ));
-          }
+          },
+          tags.length > 0 ? tags : undefined
         );
 
         setFiles(prev => prev.map(f => 
@@ -90,7 +97,9 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
                 f.id === uploadFile.id ? { ...f, progress } : f
               ));
             });
-          }
+          },
+          tags.length > 0 ? tags : undefined,
+          folderPath ? { folder_path: folderPath } : undefined
         );
 
         pendingFiles.forEach(uploadFile => {
@@ -109,7 +118,17 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
       }, 2000);
       
     } catch (error: any) {
-      toast.error('Upload failed: ' + (error.response?.data?.detail || error.message));
+      // Handle cancellation gracefully
+      if (error.code === 'ERR_CANCELED' || error.name === 'AbortError') {
+        // Mark cancelled files as pending so they can be retried
+        setFiles(prev => prev.map(f => 
+          f.status === 'uploading' ? { ...f, status: 'pending', progress: 0 } : f
+        ));
+        return;
+      }
+      
+      const errorMessage = error.response?.data?.detail || error.message || 'Upload failed';
+      toast.error('Upload failed: ' + errorMessage);
       
       // Mark failed files
       setFiles(prev => prev.map(f => 
@@ -147,6 +166,45 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
         <p className="text-xs text-gray-500 mt-1">
           Supports PDF, Word, Text, HTML, and Images (max 50MB each)
         </p>
+      </div>
+
+      {/* Upload options */}
+      <div className="space-y-4">
+        {/* Tags input */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Tags (optional)
+          </label>
+          <TagInput
+            value={tags}
+            onChange={setTags}
+            placeholder="Add tags to organize your documents..."
+            className="w-full"
+          />
+          <p className="text-xs text-gray-500 mt-1">
+            Press Enter or comma to add tags. Tags help organize and find your documents.
+          </p>
+        </div>
+
+        {/* Folder input */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-2">
+            Folder (optional)
+          </label>
+          <div className="relative">
+            <FolderIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <input
+              type="text"
+              value={folderPath}
+              onChange={(e) => setFolderPath(e.target.value)}
+              placeholder="e.g., projects/research/ai"
+              className="pl-10 w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            />
+          </div>
+          <p className="text-xs text-gray-500 mt-1">
+            Use forward slashes to create nested folders (e.g., "work/projects/2024").
+          </p>
+        </div>
       </div>
 
       {/* File list */}

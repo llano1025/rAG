@@ -9,9 +9,10 @@ from typing import List, Dict, Optional, Any, Union
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 from datetime import datetime
+from dataclasses import asdict
 
-from database.models import User, Document, DocumentChunk, VectorIndex, DocumentStatusEnum
-from vector_db.storage_manager import VectorStorageManager, get_storage_manager
+from database.models import User, Document, DocumentChunk, VectorIndex, DocumentStatusEnum, PermissionEnum
+from vector_db.storage_manager import VectorStorageManager, get_storage_manager, init_storage_manager
 from vector_db.document_version_manager import DocumentVersionManager, get_version_manager
 from vector_db.enhanced_search_engine import EnhancedSearchEngine, get_search_engine, SearchFilter, SearchType
 from file_processor.text_extractor import TextExtractor
@@ -45,15 +46,31 @@ class VectorController:
         audit_logger: AuditLogger = None
     ):
         """Initialize vector controller with dependencies."""
+        logger.info("Initializing VectorController with dependencies")
+        
         self.storage_manager = storage_manager or get_storage_manager()
         self.version_manager = version_manager or get_version_manager()
         self.search_engine = search_engine or get_search_engine()
         self.audit_logger = audit_logger
+        self._initialized = False
+        
+        # Log dependency initialization status
+        logger.info(f"VectorController initialized - storage_manager: {self.storage_manager is not None}, "
+                   f"version_manager: {self.version_manager is not None}, "
+                   f"search_engine: {self.search_engine is not None}, "
+                   f"audit_logger: {self.audit_logger is not None}")
         
         # File processing components
         self.text_extractor = TextExtractor()
         self.type_detector = FileTypeDetector()
         self.metadata_extractor = MetadataExtractor()
+    
+    async def _ensure_initialized(self):
+        """Ensure storage manager is properly initialized."""
+        if not self._initialized:
+            await self.storage_manager.initialize()
+            self._initialized = True
+            logger.info("Storage manager initialized successfully")
     
     async def upload_document(
         self,
@@ -77,15 +94,26 @@ class VectorController:
             Dictionary with document processing results
         """
         try:
+            # Ensure storage manager is initialized
+            await self._ensure_initialized()
+            
+            # Check if dependencies are available
+            if self.storage_manager is None or self.version_manager is None:
+                logger.error("Storage or version manager not available for document upload")
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Document upload service is currently unavailable"
+                )
+            
             # Validate user permissions
-            if not user.has_permission("write_documents"):
+            if not user.has_permission(PermissionEnum.WRITE_DOCUMENTS):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="User does not have permission to upload documents"
                 )
             
             # Detect file type
-            content_type = self.type_detector.detect_type(file_content, filename)
+            content_type = self.type_detector.detect_type(file_content=file_content, filename=filename)
             file_size = len(file_content)
             
             # Validate file type and size
@@ -113,9 +141,18 @@ class VectorController:
             # Extract metadata
             file_metadata = await self.metadata_extractor.extract_metadata(file_content, content_type)
             
+            # Convert DocumentMetadata dataclass to dictionary
+            file_metadata_dict = asdict(file_metadata)
+            
+            # Convert datetime objects to ISO format strings for JSON serialization
+            if 'creation_date' in file_metadata_dict and file_metadata_dict['creation_date']:
+                file_metadata_dict['creation_date'] = file_metadata_dict['creation_date'].isoformat()
+            if 'modification_date' in file_metadata_dict and file_metadata_dict['modification_date']:
+                file_metadata_dict['modification_date'] = file_metadata_dict['modification_date'].isoformat()
+            
             # Combine metadata
             combined_metadata = metadata or {}
-            combined_metadata.update(file_metadata)
+            combined_metadata.update(file_metadata_dict)
             combined_metadata.update({
                 'original_filename': filename,
                 'uploaded_at': datetime.utcnow().isoformat(),
@@ -138,11 +175,12 @@ class VectorController:
             
             # Log successful upload
             if self.audit_logger:
-                await self.audit_logger.log(
+                self.audit_logger.log_event(
+                    event_type="user_action",
+                    user_id=str(user.id),
                     action="document_uploaded",
                     resource_type="document",
                     resource_id=str(document.id),
-                    user_id=user.id,
                     details={
                         'filename': filename,
                         'content_type': content_type,
@@ -198,7 +236,7 @@ class VectorController:
         """
         try:
             # Validate user permissions
-            if not user.has_permission("read_documents"):
+            if not user.has_permission(PermissionEnum.READ_DOCUMENTS):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="User does not have permission to search documents"
@@ -244,10 +282,11 @@ class VectorController:
             
             # Log search
             if self.audit_logger:
-                await self.audit_logger.log(
+                self.audit_logger.log_event(
+                    event_type="user_action",
+                    user_id=str(user.id),
                     action="documents_searched",
                     resource_type="search",
-                    user_id=user.id,
                     details={
                         'query': query,
                         'search_type': search_type,
@@ -457,6 +496,17 @@ class VectorController:
             Dictionary with deletion status
         """
         try:
+            # Ensure storage manager is initialized
+            await self._ensure_initialized()
+            
+            # Check if version manager is available
+            if self.version_manager is None:
+                logger.error("Version manager not available for document deletion")
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Document deletion service is currently unavailable"
+                )
+            
             # Get document
             document = db.query(Document).filter(
                 Document.id == document_id,
@@ -470,7 +520,7 @@ class VectorController:
                 )
             
             # Check permissions
-            if document.user_id != user.id and not user.has_permission("delete_documents"):
+            if document.user_id != user.id and not user.has_permission(PermissionEnum.DELETE_DOCUMENTS):
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Access denied: cannot delete this document"
@@ -492,11 +542,12 @@ class VectorController:
             
             # Log deletion
             if self.audit_logger:
-                await self.audit_logger.log(
+                self.audit_logger.log_event(
+                    event_type="user_action",
+                    user_id=str(user.id),
                     action="document_deleted",
                     resource_type="document",
                     resource_id=str(document_id),
-                    user_id=user.id,
                     details={
                         'filename': document.filename,
                         'hard_delete': hard_delete
@@ -535,6 +586,9 @@ class VectorController:
             Dictionary with vector statistics
         """
         try:
+            # Ensure storage manager is initialized
+            await self._ensure_initialized()
+            
             # Get user's documents
             user_docs = db.query(Document).filter(
                 Document.user_id == user.id,
@@ -613,4 +667,19 @@ class VectorController:
 # Dependency injection
 def get_vector_controller(audit_logger: AuditLogger = None) -> VectorController:
     """Get vector controller instance with dependencies."""
-    return VectorController(audit_logger=audit_logger)
+    try:
+        # Initialize all dependencies first to ensure they work
+        storage_manager = get_storage_manager()
+        version_manager = get_version_manager()
+        search_engine = get_search_engine()
+        
+        # Create controller with verified dependencies
+        return VectorController(
+            storage_manager=storage_manager,
+            version_manager=version_manager,
+            search_engine=search_engine,
+            audit_logger=audit_logger
+        )
+    except Exception as e:
+        logger.error(f"Failed to initialize vector controller: {e}")
+        raise VectorControllerError(f"Vector controller initialization failed: {e}")

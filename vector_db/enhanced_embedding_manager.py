@@ -53,18 +53,28 @@ class HuggingFaceEmbeddingProvider(BaseEmbeddingProvider):
         batch_size: int = 32
     ):
         if not TORCH_AVAILABLE:
-            raise EmbeddingError("PyTorch and transformers are required for HuggingFace embeddings")
+            raise EmbeddingError("PyTorch and transformers are required for HuggingFace embeddings. Please install: pip install torch transformers sentence-transformers")
+        
+        # Validate inputs
+        if not model_name or not isinstance(model_name, str):
+            raise EmbeddingError("model_name must be a non-empty string")
+        
+        if batch_size <= 0:
+            raise EmbeddingError("batch_size must be positive")
         
         self.model_name = model_name
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.batch_size = batch_size
+        self.batch_size = min(batch_size, 64)  # Cap batch size for stability
         
         try:
+            logging.info(f"Initializing HuggingFace model {model_name} on {self.device}")
+            
             # Try sentence-transformers first for better performance
             if "sentence-transformers" in model_name:
                 self.model = SentenceTransformer(model_name, device=self.device)
                 self.model_type = "sentence_transformer"
                 self.embedding_dim = self.model.get_sentence_embedding_dimension()
+                logging.info(f"Successfully loaded sentence-transformer model with {self.embedding_dim} dimensions")
             else:
                 # Fallback to raw transformers
                 self.model = AutoModel.from_pretrained(model_name)
@@ -74,36 +84,70 @@ class HuggingFaceEmbeddingProvider(BaseEmbeddingProvider):
                 self.model_type = "transformer"
                 # Estimate embedding dimension (common values)
                 self.embedding_dim = self.model.config.hidden_size
+                logging.info(f"Successfully loaded transformer model with {self.embedding_dim} dimensions")
                 
         except Exception as e:
-            raise EmbeddingError(f"Failed to initialize HuggingFace model {model_name}: {e}")
+            error_msg = f"Failed to initialize HuggingFace model {model_name}: {e}"
+            logging.error(error_msg)
+            raise EmbeddingError(error_msg) from e
 
     async def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings using HuggingFace models."""
+        # Validate inputs
+        if not texts:
+            raise EmbeddingError("No texts provided for embedding generation")
+        
+        if not all(isinstance(text, str) for text in texts):
+            raise EmbeddingError("All texts must be strings")
+        
+        # Filter out empty texts
+        valid_texts = [text.strip() for text in texts if text and text.strip()]
+        if not valid_texts:
+            raise EmbeddingError("No valid non-empty texts provided")
+        
         try:
             if self.model_type == "sentence_transformer":
                 # Use sentence-transformers for better performance
                 loop = asyncio.get_event_loop()
                 with ThreadPoolExecutor() as executor:
-                    embeddings = await loop.run_in_executor(
-                        executor,
-                        self.model.encode,
-                        texts,
-                        self.batch_size,
-                        True,  # normalize_embeddings
-                        True   # convert_to_numpy
-                    )
-                return embeddings.tolist()
+                    # Create a wrapper function to properly pass keyword arguments
+                    def encode_with_params():
+                        try:
+                            return self.model.encode(
+                                valid_texts,
+                                batch_size=self.batch_size,
+                                normalize_embeddings=True,
+                                convert_to_numpy=True
+                            )
+                        except Exception as encode_error:
+                            logger.error(f"Model encoding failed: {encode_error}")
+                            raise encode_error
+                    
+                    embeddings = await loop.run_in_executor(executor, encode_with_params)
+                    
+                # Validate embeddings output
+                if embeddings is None or len(embeddings) == 0:
+                    raise EmbeddingError("Model returned empty embeddings")
+                
+                # Convert to list and validate dimensions
+                embeddings_list = embeddings.tolist()
+                if len(embeddings_list) != len(valid_texts):
+                    logger.warning(f"Embedding count mismatch: {len(embeddings_list)} vs {len(valid_texts)}")
+                
+                return embeddings_list
             else:
                 # Use raw transformers
                 all_embeddings = []
-                for i in range(0, len(texts), self.batch_size):
-                    batch_texts = texts[i:i + self.batch_size]
+                for i in range(0, len(valid_texts), self.batch_size):
+                    batch_texts = valid_texts[i:i + self.batch_size]
                     batch_embeddings = await self._encode_batch_transformer(batch_texts)
                     all_embeddings.extend(batch_embeddings)
                 return all_embeddings
                 
+        except EmbeddingError:
+            raise
         except Exception as e:
+            logger.error(f"Unexpected error in embedding generation: {e}")
             raise EmbeddingError(f"HuggingFace embedding generation failed: {str(e)}")
 
     async def _encode_batch_transformer(self, texts: List[str]) -> List[List[float]]:
@@ -159,11 +203,23 @@ class OllamaEmbeddingProvider(BaseEmbeddingProvider):
         model_name: str = "nomic-embed-text",
         batch_size: int = 32
     ):
+        # Validate inputs
+        if not base_url or not isinstance(base_url, str):
+            raise EmbeddingError("base_url must be a non-empty string")
+        
+        if not model_name or not isinstance(model_name, str):
+            raise EmbeddingError("model_name must be a non-empty string")
+            
+        if batch_size <= 0:
+            raise EmbeddingError("batch_size must be positive")
+        
         self.base_url = base_url.rstrip('/')
         self.model_name = model_name
-        self.batch_size = batch_size
+        self.batch_size = min(batch_size, 32)  # Cap batch size for Ollama
         self.session = None
         self.embedding_dim = None  # Will be determined dynamically
+        
+        logging.info(f"Initializing Ollama provider with {base_url} and model {model_name}")
         
     async def _get_session(self):
         """Get or create aiohttp session."""
@@ -248,11 +304,26 @@ class OpenAIEmbeddingProvider(BaseEmbeddingProvider):
         try:
             import openai
         except ImportError:
-            raise EmbeddingError("openai package required for OpenAI embeddings")
+            raise EmbeddingError("openai package required for OpenAI embeddings. Please install: pip install openai")
         
-        self.client = openai.AsyncOpenAI(api_key=api_key)
-        self.model_name = model_name
-        self.batch_size = batch_size
+        # Validate inputs
+        if not api_key or not isinstance(api_key, str):
+            raise EmbeddingError("api_key must be a non-empty string")
+            
+        if not model_name or not isinstance(model_name, str):
+            raise EmbeddingError("model_name must be a non-empty string")
+            
+        if batch_size <= 0:
+            raise EmbeddingError("batch_size must be positive")
+        
+        try:
+            self.client = openai.AsyncOpenAI(api_key=api_key)
+            self.model_name = model_name
+            self.batch_size = min(batch_size, 100)  # OpenAI has higher batch limits
+            
+            logging.info(f"Initializing OpenAI provider with model {model_name}")
+        except Exception as e:
+            raise EmbeddingError(f"Failed to initialize OpenAI client: {e}") from e
         
         # Model dimension mapping
         self.model_dimensions = {
@@ -317,8 +388,12 @@ class EnhancedEmbeddingManager:
         batch_size: int = 32
     ):
         """Create manager with HuggingFace provider."""
-        provider = HuggingFaceEmbeddingProvider(model_name, device, batch_size)
-        return cls(provider)
+        try:
+            provider = HuggingFaceEmbeddingProvider(model_name, device, batch_size)
+            return cls(provider)
+        except Exception as e:
+            logging.error(f"Failed to create HuggingFace embedding manager: {e}")
+            raise EmbeddingError(f"HuggingFace embedding manager creation failed: {e}")from e
     
     @classmethod
     def create_ollama_manager(
@@ -328,8 +403,12 @@ class EnhancedEmbeddingManager:
         batch_size: int = 32
     ):
         """Create manager with Ollama provider."""
-        provider = OllamaEmbeddingProvider(base_url, model_name, batch_size)
-        return cls(provider)
+        try:
+            provider = OllamaEmbeddingProvider(base_url, model_name, batch_size)
+            return cls(provider)
+        except Exception as e:
+            logging.error(f"Failed to create Ollama embedding manager: {e}")
+            raise EmbeddingError(f"Ollama embedding manager creation failed: {e}") from e
     
     @classmethod
     def create_openai_manager(
@@ -339,8 +418,12 @@ class EnhancedEmbeddingManager:
         batch_size: int = 32
     ):
         """Create manager with OpenAI provider."""
-        provider = OpenAIEmbeddingProvider(api_key, model_name, batch_size)
-        return cls(provider)
+        try:
+            provider = OpenAIEmbeddingProvider(api_key, model_name, batch_size)
+            return cls(provider)
+        except Exception as e:
+            logging.error(f"Failed to create OpenAI embedding manager: {e}")
+            raise EmbeddingError(f"OpenAI embedding manager creation failed: {e}") from e
 
     async def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings using the configured provider."""

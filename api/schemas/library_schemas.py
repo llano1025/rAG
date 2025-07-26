@@ -51,6 +51,10 @@ class Tag(TagBase):
     class Config:
         from_attributes = True
 
+class TagSummary(BaseModel):
+    tag_name: str = Field(..., description="Name of the tag")
+    document_count: int = Field(..., description="Number of documents with this tag")
+
 class LibraryStats(BaseModel):
     total_documents: int
     total_folders: int
