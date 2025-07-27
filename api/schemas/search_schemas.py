@@ -36,30 +36,23 @@ class SearchResult(BaseModel):
     
     Attributes:
         document_id: Unique identifier of the document
+        filename: Name of the document file
+        content_snippet: Relevant text excerpt from the document
         score: Relevance score between 0 and 1
-        snippet: Relevant text excerpt from the document
         metadata: Additional document metadata
-        highlights: List of tuples containing start and end positions of query matches
     """
     document_id: str = Field(..., description="Unique identifier of the document")
-    score: Decimal = Field(
+    filename: str = Field(..., description="Name of the document file")
+    content_snippet: str = Field(..., description="Relevant text excerpt from the document")
+    score: float = Field(
         ...,
-        ge=Decimal('0.0'),
-        le=Decimal('1.0'),
+        ge=0.0,
+        le=1.0,
         description="Relevance score between 0 and 1"
-    )
-    snippet: str = Field(
-        ...,
-        min_length=1,
-        description="Relevant text excerpt from the document"
     )
     metadata: Dict = Field(
         default_factory=dict,
         description="Additional document metadata"
-    )
-    highlights: List[Tuple[int, int]] = Field(
-        default_factory=list,
-        description="List of (start, end) positions of query matches"
     )
 
     class Config:
@@ -82,5 +75,7 @@ class SearchResponse(BaseModel):
     results: List[SearchResult]
     total_hits: int
     execution_time_ms: float
-    filters_applied: SearchFilters
+    filters_applied: Optional[SearchFilters] = None
     query_vector_id: Optional[str] = Field(None, description="ID of generated query vector")
+    query: Optional[str] = Field(None, description="Original search query")
+    processing_time: Optional[float] = Field(None, description="Processing time in seconds")

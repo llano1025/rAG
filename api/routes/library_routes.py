@@ -157,6 +157,10 @@ class DocumentMoveRequest(BaseModel):
     document_ids: List[int]
     target_folder_id: Optional[str] = None
 
+class BulkTagRequest(BaseModel):
+    document_ids: List[int]
+    tags: List[str]
+
 @router.post("/move-documents")
 async def move_documents(
     move_request: DocumentMoveRequest,
@@ -210,6 +214,79 @@ async def remove_tag_from_document(
     if not success:
         raise HTTPException(status_code=404, detail="Document or tag not found")
     return {"message": "Tag removed successfully"}
+
+@router.post("/tags/bulk-add")
+async def bulk_add_tags(
+    bulk_request: BulkTagRequest,
+    current_user = Depends(get_current_active_user),
+    controller: LibraryController = Depends(get_library_controller),
+    db: Session = Depends(get_db)
+):
+    """Add tags to multiple documents."""
+    try:
+        result = await controller.bulk_add_tags(
+            document_ids=bulk_request.document_ids,
+            tags=bulk_request.tags,
+            user=current_user,
+            db=db
+        )
+        return {
+            "message": f"Tags added to {result['successful']} documents",
+            "successful": result['successful'],
+            "failed": result['failed'],
+            "errors": result.get('errors', [])
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.post("/tags/bulk-remove")
+async def bulk_remove_tags(
+    bulk_request: BulkTagRequest,
+    current_user = Depends(get_current_active_user),
+    controller: LibraryController = Depends(get_library_controller),
+    db: Session = Depends(get_db)
+):
+    """Remove tags from multiple documents."""
+    try:
+        result = await controller.bulk_remove_tags(
+            document_ids=bulk_request.document_ids,
+            tags=bulk_request.tags,
+            user=current_user,
+            db=db
+        )
+        return {
+            "message": f"Tags removed from {result['successful']} documents",
+            "successful": result['successful'],
+            "failed": result['failed'],
+            "errors": result.get('errors', [])
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.post("/documents/tags/apply")
+async def apply_tags_to_documents(
+    document_ids: List[int] = Body(...),
+    tags: List[str] = Body(...),
+    current_user = Depends(get_current_active_user),
+    controller: LibraryController = Depends(get_library_controller),
+    db: Session = Depends(get_db)
+):
+    """Apply/set tags to documents (replaces existing tags)."""
+    try:
+        result = await controller.apply_tags_to_documents(
+            document_ids=document_ids,
+            tags=tags,
+            user=current_user,
+            db=db
+        )
+        return {
+            "message": f"Tags applied to {result['successful']} documents",
+            "successful": result['successful'],
+            "failed": result['failed'],
+            "errors": result.get('errors', [])
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/stats", response_model=LibraryStats)
 async def get_library_stats(

@@ -35,6 +35,10 @@ export const documentsApi = {
       formData.append('tags', JSON.stringify(tags));
     }
 
+    if (upload.embedding_model) {
+      formData.append('embedding_model', upload.embedding_model);
+    }
+
     return apiClient.upload('/api/documents/upload', formData, onProgress);
   },
 
@@ -42,7 +46,8 @@ export const documentsApi = {
     files: File[],
     onProgress?: (progress: number) => void,
     tags?: string[],
-    metadata?: Record<string, any>
+    metadata?: Record<string, any>,
+    embeddingModel?: string
   ): Promise<Document[]> => {
     const formData = new FormData();
     files.forEach((file) => {
@@ -55,6 +60,10 @@ export const documentsApi = {
 
     if (metadata) {
       formData.append('metadata', JSON.stringify(metadata));
+    }
+
+    if (embeddingModel) {
+      formData.append('embedding_model', embeddingModel);
     }
 
     return apiClient.upload('/api/documents/batch-upload', formData, onProgress);

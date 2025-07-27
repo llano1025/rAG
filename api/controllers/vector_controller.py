@@ -78,6 +78,8 @@ class VectorController:
         filename: str,
         user: User,
         metadata: Dict[str, Any] = None,
+        embedding_model: str = None,
+        tags: Optional[List[str]] = None,
         db: Session = None
     ) -> Dict[str, Any]:
         """
@@ -170,8 +172,17 @@ class VectorController:
                 content_type=content_type,
                 file_size=file_size,
                 metadata=combined_metadata,
+                embedding_model=embedding_model,
                 db=db
             )
+            
+            # Set tags if provided
+            if tags:
+                # Refresh the document object to ensure it's in this session
+                db.refresh(document)
+                document.set_tag_list(tags)
+                db.add(document)  # Ensure the document is tracked in this session
+                db.commit()  # Commit the tag changes
             
             # Log successful upload
             if self.audit_logger:

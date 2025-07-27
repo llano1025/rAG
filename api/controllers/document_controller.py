@@ -71,6 +71,7 @@ class DocumentController:
         folder_id: Optional[str] = None,
         tags: Optional[List[str]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        embedding_model: Optional[str] = None,
         db: Session = None
     ) -> Dict[str, Any]:
         """
@@ -109,6 +110,8 @@ class DocumentController:
                 filename=file.filename,
                 user=user,
                 metadata=metadata or {},
+                embedding_model=embedding_model,
+                tags=tags,
                 db=db
             )
             
@@ -144,6 +147,7 @@ class DocumentController:
         user: User,
         folder_id: Optional[str] = None,
         tags: Optional[List[str]] = None,
+        embedding_model: Optional[str] = None,
         db: Session = None
     ) -> List[Dict[str, Any]]:
         """
@@ -174,6 +178,7 @@ class DocumentController:
                     user=user,
                     folder_id=folder_id,
                     tags=tags,
+                    embedding_model=embedding_model,
                     db=db
                 )
                 tasks.append(task)
@@ -321,7 +326,7 @@ class DocumentController:
                 update_fields['description'] = update_data.description
             
             if update_data.tags is not None:
-                document.set_tags(update_data.tags)
+                document.set_tag_list(update_data.tags)
                 update_fields['tags'] = update_data.tags
             
             if update_data.metadata is not None:

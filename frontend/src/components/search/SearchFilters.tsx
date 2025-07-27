@@ -1,28 +1,59 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { libraryApi, Tag } from '@/api/library';
+import { searchApi, AvailableFilters, FilterOption } from '@/api/search';
+import TagInput from '@/components/common/TagInput';
 
 interface SearchFiltersProps {
   filters: {
     file_type: string[];
     date_range: { start: string; end: string } | null;
     owner: string;
+    tags: string[];
+    folder_ids?: string[];
+    languages?: string[];
   };
   onFiltersChange: (filters: any) => void;
 }
-
-const FILE_TYPES = [
-  { value: 'pdf', label: 'PDF' },
-  { value: 'docx', label: 'Word Document' },
-  { value: 'txt', label: 'Text File' },
-  { value: 'html', label: 'HTML' },
-  { value: 'png', label: 'PNG Image' },
-  { value: 'jpg', label: 'JPEG Image' },
-];
 
 export default function SearchFilters({ filters, onFiltersChange }: SearchFiltersProps) {
   const [dateRange, setDateRange] = useState({
     start: filters.date_range?.start || '',
     end: filters.date_range?.end || '',
   });
+  const [availableFilters, setAvailableFilters] = useState<AvailableFilters | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const loadAvailableFilters = async () => {
+      try {
+        setLoading(true);
+        const filters = await searchApi.getAvailableFilters();
+        setAvailableFilters(filters);
+      } catch (error) {
+        console.error('Failed to load available filters:', error);
+        // Fallback to default file types if API fails
+        setAvailableFilters({
+          file_types: [
+            { value: 'pdf', label: 'PDF' },
+            { value: 'docx', label: 'Word Document' },
+            { value: 'txt', label: 'Text File' },
+            { value: 'html', label: 'HTML' },
+            { value: 'png', label: 'PNG Image' },
+            { value: 'jpg', label: 'JPEG Image' },
+          ],
+          tags: [],
+          languages: [],
+          folders: [],
+          date_range: {},
+          file_size_range: { min_size: 0, max_size: 0, avg_size: 0 },
+          search_types: []
+        });
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadAvailableFilters();
+  }, []);
 
   const handleFileTypeChange = (fileType: string, checked: boolean) => {
     const newFileTypes = checked
@@ -53,16 +84,42 @@ export default function SearchFilters({ filters, onFiltersChange }: SearchFilter
     });
   };
 
+  const handleTagsChange = (tags: string[]) => {
+    onFiltersChange({
+      ...filters,
+      tags,
+    });
+  };
+
   const clearFilters = () => {
     setDateRange({ start: '', end: '' });
     onFiltersChange({
       file_type: [],
       date_range: null,
       owner: '',
+      tags: [],
+      folder_ids: [],
+      languages: [],
     });
   };
 
-  const hasActiveFilters = filters.file_type.length > 0 || filters.date_range || filters.owner;
+  const hasActiveFilters = filters.file_type.length > 0 || filters.date_range || filters.owner || filters.tags.length > 0 || (filters.folder_ids && filters.folder_ids.length > 0) || (filters.languages && filters.languages.length > 0);
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div className="text-sm text-gray-500">Loading filters...</div>
+      </div>
+    );
+  }
+
+  if (!availableFilters) {
+    return (
+      <div className="space-y-6">
+        <div className="text-sm text-red-500">Failed to load filters</div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -79,22 +136,27 @@ export default function SearchFilters({ filters, onFiltersChange }: SearchFilter
       </div>
 
       {/* File Type Filter */}
-      <div>
-        <h4 className="text-sm font-medium text-gray-700 mb-3">File Type</h4>
-        <div className="grid grid-cols-2 gap-2">
-          {FILE_TYPES.map((type) => (
-            <label key={type.value} className="flex items-center">
-              <input
-                type="checkbox"
-                checked={filters.file_type.includes(type.value)}
-                onChange={(e) => handleFileTypeChange(type.value, e.target.checked)}
-                className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
-              />
-              <span className="ml-2 text-sm text-gray-600">{type.label}</span>
-            </label>
-          ))}
+      {availableFilters.file_types.length > 0 && (
+        <div>
+          <h4 className="text-sm font-medium text-gray-700 mb-3">File Type</h4>
+          <div className="grid grid-cols-2 gap-2">
+            {availableFilters.file_types.map((type) => (
+              <label key={type.value} className="flex items-center">
+                <input
+                  type="checkbox"
+                  checked={filters.file_type.includes(type.value)}
+                  onChange={(e) => handleFileTypeChange(type.value, e.target.checked)}
+                  className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                />
+                <span className="ml-2 text-sm text-gray-600">
+                  {type.label}
+                  {type.count && <span className="text-gray-400 ml-1">({type.count})</span>}
+                </span>
+              </label>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Date Range Filter */}
       <div>
@@ -133,6 +195,108 @@ export default function SearchFilters({ filters, onFiltersChange }: SearchFilter
         />
       </div>
 
+      {/* Tags Filter */}
+      {availableFilters.tags.length > 0 && (
+        <div>
+          <h4 className="text-sm font-medium text-gray-700 mb-3">Tags</h4>
+          <div className="max-h-40 overflow-y-auto space-y-2">
+            {availableFilters.tags.map((tag) => (
+              <label key={tag.value} className="flex items-center">
+                <input
+                  type="checkbox"
+                  checked={filters.tags.includes(tag.value)}
+                  onChange={(e) => {
+                    const newTags = e.target.checked
+                      ? [...filters.tags, tag.value]
+                      : filters.tags.filter(t => t !== tag.value);
+                    handleTagsChange(newTags);
+                  }}
+                  className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                />
+                <span className="ml-2 text-sm text-gray-600">
+                  {tag.label}
+                  {tag.count && <span className="text-gray-400 ml-1">({tag.count})</span>}
+                </span>
+              </label>
+            ))}
+          </div>
+          <div className="mt-2">
+            <TagInput
+              value={filters.tags}
+              onChange={handleTagsChange}
+              placeholder="Add custom tags..."
+              className="w-full"
+              maxTags={10}
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Select from available tags above or add custom tags.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Folders Filter */}
+      {availableFilters.folders.length > 0 && (
+        <div>
+          <h4 className="text-sm font-medium text-gray-700 mb-3">Folders</h4>
+          <div className="max-h-32 overflow-y-auto space-y-2">
+            {availableFilters.folders.map((folder) => (
+              <label key={folder.value} className="flex items-center">
+                <input
+                  type="checkbox"
+                  checked={filters.folder_ids?.includes(folder.value) || false}
+                  onChange={(e) => {
+                    const newFolders = e.target.checked
+                      ? [...(filters.folder_ids || []), folder.value]
+                      : (filters.folder_ids || []).filter(f => f !== folder.value);
+                    onFiltersChange({
+                      ...filters,
+                      folder_ids: newFolders,
+                    });
+                  }}
+                  className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                />
+                <span className="ml-2 text-sm text-gray-600">
+                  {folder.label}
+                  {folder.count && <span className="text-gray-400 ml-1">({folder.count})</span>}
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Languages Filter */}
+      {availableFilters.languages.length > 0 && (
+        <div>
+          <h4 className="text-sm font-medium text-gray-700 mb-3">Languages</h4>
+          <div className="max-h-32 overflow-y-auto space-y-2">
+            {availableFilters.languages.map((language) => (
+              <label key={language.value} className="flex items-center">
+                <input
+                  type="checkbox"
+                  checked={filters.languages?.includes(language.value) || false}
+                  onChange={(e) => {
+                    const newLanguages = e.target.checked
+                      ? [...(filters.languages || []), language.value]
+                      : (filters.languages || []).filter(l => l !== language.value);
+                    onFiltersChange({
+                      ...filters,
+                      languages: newLanguages,
+                    });
+                  }}
+                  className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                />
+                <span className="ml-2 text-sm text-gray-600">
+                  {language.label}
+                  {language.count && <span className="text-gray-400 ml-1">({language.count})</span>}
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Active Filters Summary */}
       {hasActiveFilters && (
         <div className="pt-4 border-t border-gray-200">
@@ -143,7 +307,7 @@ export default function SearchFilters({ filters, onFiltersChange }: SearchFilter
                 key={type}
                 className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-primary-100 text-primary-800"
               >
-                {FILE_TYPES.find(t => t.value === type)?.label}
+                {availableFilters.file_types.find(t => t.value === type)?.label || type}
                 <button
                   onClick={() => handleFileTypeChange(type, false)}
                   className="ml-1 text-primary-600 hover:text-primary-500"
@@ -177,6 +341,20 @@ export default function SearchFilters({ filters, onFiltersChange }: SearchFilter
                 </button>
               </span>
             )}
+            {filters.tags.map((tag) => (
+              <span
+                key={tag}
+                className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800"
+              >
+                Tag: {tag}
+                <button
+                  onClick={() => handleTagsChange(filters.tags.filter(t => t !== tag))}
+                  className="ml-1 text-blue-600 hover:text-blue-500"
+                >
+                  ×
+                </button>
+              </span>
+            ))}
           </div>
         </div>
       )}

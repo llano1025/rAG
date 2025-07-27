@@ -1,7 +1,8 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { CloudArrowUpIcon, XMarkIcon, FolderIcon } from '@heroicons/react/24/outline';
+import { CloudArrowUpIcon, XMarkIcon, FolderIcon, CpuChipIcon } from '@heroicons/react/24/outline';
 import { documentsApi } from '@/api/documents';
+import { apiClient } from '@/api/client';
 import TagInput from '@/components/common/TagInput';
 import toast from 'react-hot-toast';
 
@@ -16,11 +17,40 @@ interface DocumentUploadProps {
   onUploadComplete?: () => void;
 }
 
+interface EmbeddingModel {
+  id: string;
+  name: string;
+  display_name: string;
+  provider: string;
+  description: string;
+  embedding_dimension?: number;
+  performance_tier?: string;
+  quality_score?: number;
+}
+
 export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps) {
   const [files, setFiles] = useState<UploadFile[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [tags, setTags] = useState<string[]>([]);
   const [folderPath, setFolderPath] = useState<string>('');
+  const [embeddingModels, setEmbeddingModels] = useState<EmbeddingModel[]>([]);
+  const [selectedEmbeddingModel, setSelectedEmbeddingModel] = useState<string>('hf-minilm-l6-v2'); // Default to fast model
+  const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
+
+  // Load embedding models on component mount
+  useEffect(() => {
+    const loadEmbeddingModels = async () => {
+      try {
+        const data: any = await apiClient.get('/api/chat/models');
+        setEmbeddingModels(data.embedding_models || []);
+      } catch (error) {
+        console.error('Failed to load embedding models:', error);
+        toast.error('Failed to load embedding models');
+      }
+    };
+    
+    loadEmbeddingModels();
+  }, []);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     const newFiles = acceptedFiles.map(file => ({
@@ -66,7 +96,8 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
         await documentsApi.uploadDocument(
           { 
             file: uploadFile.file,
-            metadata: { folder_path: folderPath || undefined }
+            metadata: { folder_path: folderPath || undefined },
+            embedding_model: selectedEmbeddingModel
           },
           (progress) => {
             setFiles(prev => prev.map(f => 
@@ -99,7 +130,8 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
             });
           },
           tags.length > 0 ? tags : undefined,
-          folderPath ? { folder_path: folderPath } : undefined
+          folderPath ? { folder_path: folderPath } : undefined,
+          selectedEmbeddingModel
         );
 
         pendingFiles.forEach(uploadFile => {
@@ -205,6 +237,48 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
             Use forward slashes to create nested folders (e.g., "work/projects/2024").
           </p>
         </div>
+
+        {/* Advanced options toggle */}
+        <div>
+          <button
+            type="button"
+            onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
+            className="flex items-center text-sm text-blue-600 hover:text-blue-800"
+          >
+            <CpuChipIcon className="h-4 w-4 mr-1" />
+            {showAdvancedOptions ? 'Hide' : 'Show'} Advanced Options
+          </button>
+        </div>
+
+        {/* Embedding model selector */}
+        {showAdvancedOptions && (
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Embedding Model
+            </label>
+            <select
+              value={selectedEmbeddingModel}
+              onChange={(e) => setSelectedEmbeddingModel(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-500"
+            >
+              {embeddingModels.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {model.display_name || model.name} - {model.provider} 
+                  {model.embedding_dimension && ` (${model.embedding_dimension}D)`}
+                  {model.performance_tier && ` - ${model.performance_tier}`}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-500 mt-1">
+              Choose the embedding model for vector search. Different models offer various trade-offs between speed, quality, and resource usage.
+            </p>
+            {embeddingModels.find(m => m.id === selectedEmbeddingModel) && (
+              <div className="mt-2 p-2 bg-gray-50 rounded text-xs text-gray-600">
+                {embeddingModels.find(m => m.id === selectedEmbeddingModel)?.description}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* File list */}

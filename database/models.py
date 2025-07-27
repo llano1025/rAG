@@ -111,6 +111,7 @@ class User(Base, TimestampMixin, SoftDeleteMixin):
     documents = relationship("Document", back_populates="user", cascade="all, delete-orphan")
     vector_indices = relationship("VectorIndex", back_populates="user", cascade="all, delete-orphan")
     search_queries = relationship("SearchQuery", back_populates="user", cascade="all, delete-orphan")
+    saved_searches = relationship("SavedSearch", back_populates="user", cascade="all, delete-orphan")
     
     def __repr__(self):
         return f"<User(id={self.id}, email='{self.email}', username='{self.username}')>"
@@ -376,13 +377,43 @@ class Document(Base, TimestampMixin, SoftDeleteMixin):
         """Get tags as a list."""
         if self.tags:
             import json
-            return json.loads(self.tags)
+            try:
+                parsed_tags = json.loads(self.tags)
+                # Ensure we return a list, handle case where tags might be a string
+                if isinstance(parsed_tags, list):
+                    return [str(tag).strip() for tag in parsed_tags if tag and str(tag).strip()]
+                elif isinstance(parsed_tags, str):
+                    return [parsed_tags.strip()] if parsed_tags.strip() else []
+                else:
+                    return []
+            except (json.JSONDecodeError, TypeError, AttributeError) as e:
+                # Log the error but return empty list to avoid breaking the system
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Failed to parse tags for document {self.id}: {e}. Tags value: {self.tags}")
+                return []
         return []
     
     def set_tag_list(self, tags: list):
         """Set tags from a list."""
         import json
-        self.tags = json.dumps(tags)
+        if tags is None:
+            self.tags = None
+        elif isinstance(tags, (list, tuple)):
+            # Clean and deduplicate tags
+            clean_tags = []
+            for tag in tags:
+                if tag and isinstance(tag, (str, int)):
+                    clean_tag = str(tag).strip().lower()
+                    if clean_tag and clean_tag not in clean_tags:
+                        clean_tags.append(clean_tag)
+            self.tags = json.dumps(clean_tags) if clean_tags else None
+        else:
+            # Handle single tag or other types
+            if isinstance(tags, (str, int)) and str(tags).strip():
+                self.tags = json.dumps([str(tags).strip().lower()])
+            else:
+                self.tags = None
     
     def can_access(self, user: User) -> bool:
         """Check if user can access this document."""
@@ -687,6 +718,74 @@ class SearchQuery(Base, TimestampMixin):
             hash_input += json.dumps(filters, sort_keys=True)
         
         return hashlib.sha256(hash_input.encode()).hexdigest()
+
+class SavedSearch(Base, TimestampMixin, SoftDeleteMixin):
+    """Saved search model for storing user's frequently used searches."""
+    
+    __tablename__ = "saved_searches"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    
+    # Search details
+    name = Column(String(200), nullable=False)
+    description = Column(Text, nullable=True)
+    query_text = Column(Text, nullable=False)
+    
+    # Search configuration
+    search_type = Column(String(50), default="semantic", nullable=False)  # semantic, keyword, hybrid
+    search_filters = Column(Text, nullable=True)  # JSON for search filters
+    max_results = Column(Integer, default=10, nullable=False)
+    similarity_threshold = Column(Float, nullable=True)
+    
+    # Usage tracking
+    usage_count = Column(Integer, default=0, nullable=False)
+    last_used = Column(DateTime(timezone=True), nullable=True)
+    
+    # Sharing and organization
+    is_public = Column(Boolean, default=False, nullable=False)
+    tags = Column(Text, nullable=True)  # JSON array of tags for organizing saved searches
+    
+    # Relationships
+    user = relationship("User", back_populates="saved_searches")
+    
+    def __repr__(self):
+        return f"<SavedSearch(id={self.id}, name='{self.name}', user_id={self.user_id})>"
+    
+    def get_filters_dict(self) -> dict:
+        """Get search filters as dictionary."""
+        if self.search_filters:
+            import json
+            try:
+                return json.loads(self.search_filters)
+            except json.JSONDecodeError:
+                return {}
+        return {}
+    
+    def set_filters(self, filters: dict):
+        """Set search filters from dictionary."""
+        import json
+        self.search_filters = json.dumps(filters)
+    
+    def get_tags_list(self) -> list:
+        """Get tags as a list."""
+        if self.tags:
+            import json
+            try:
+                return json.loads(self.tags)
+            except json.JSONDecodeError:
+                return []
+        return []
+    
+    def set_tags_list(self, tags: list):
+        """Set tags from a list."""
+        import json
+        self.tags = json.dumps(tags)
+    
+    def increment_usage(self):
+        """Increment usage count and update last used timestamp."""
+        self.usage_count += 1
+        self.last_used = datetime.utcnow()
 
 class DocumentShare(Base, TimestampMixin):
     """Document sharing model for managing document access permissions."""

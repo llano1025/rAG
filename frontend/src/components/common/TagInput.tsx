@@ -29,9 +29,20 @@ export default function TagInput({
     const loadTags = async () => {
       try {
         const tags = await libraryApi.getTags();
-        setAllTags(tags);
+        if (Array.isArray(tags)) {
+          setAllTags(tags);
+        } else {
+          console.warn('Invalid tags response format:', tags);
+          setAllTags([]);
+        }
       } catch (error) {
         console.error('Failed to load tags:', error);
+        // Don't show error to user, just silently use empty tags
+        setAllTags([]);
+        // Optional: Show a subtle warning in development
+        if (process.env.NODE_ENV === 'development') {
+          toast.error('Failed to load tag suggestions');
+        }
       }
     };
     loadTags();
@@ -40,12 +51,21 @@ export default function TagInput({
   // Filter suggestions based on input
   useEffect(() => {
     if (inputValue.trim()) {
-      const filtered = allTags.filter(tag => 
-        tag.tag_name.toLowerCase().includes(inputValue.toLowerCase()) &&
-        !value.includes(tag.tag_name)
-      );
-      setSuggestions(filtered);
-      setShowSuggestions(filtered.length > 0);
+      try {
+        const filtered = allTags.filter(tag => 
+          tag && 
+          tag.tag_name && 
+          typeof tag.tag_name === 'string' &&
+          tag.tag_name.toLowerCase().includes(inputValue.toLowerCase()) &&
+          !value.includes(tag.tag_name.toLowerCase())
+        );
+        setSuggestions(filtered);
+        setShowSuggestions(filtered.length > 0);
+      } catch (error) {
+        console.error('Error filtering tag suggestions:', error);
+        setSuggestions([]);
+        setShowSuggestions(false);
+      }
     } else {
       setSuggestions([]);
       setShowSuggestions(false);

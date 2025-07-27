@@ -47,6 +47,7 @@ async def upload_document(
     folder_id: Optional[str] = Form(None),
     tags: Optional[str] = Form(None),  # JSON string of tags
     metadata: Optional[str] = Form(None),  # JSON string of metadata
+    embedding_model: Optional[str] = Form(None),  # Embedding model ID
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
     controller: DocumentController = Depends(get_document_controller)
@@ -77,6 +78,7 @@ async def upload_document(
             folder_id=folder_id,
             tags=parsed_tags,
             metadata=parsed_metadata,
+            embedding_model=embedding_model,
             db=db
         )
         return document
@@ -90,6 +92,7 @@ async def batch_upload_documents(
     files: List[UploadFile] = File(...),
     folder_id: Optional[str] = Form(None),
     tags: Optional[str] = Form(None),
+    embedding_model: Optional[str] = Form(None),  # Embedding model ID
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
     controller: DocumentController = Depends(get_document_controller)
@@ -110,6 +113,7 @@ async def batch_upload_documents(
             user=current_user,
             folder_id=folder_id,
             tags=parsed_tags,
+            embedding_model=embedding_model,
             db=db
         )
         return result

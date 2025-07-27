@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useForm } from 'react-hook-form';
 import {
   MagnifyingGlassIcon,
@@ -6,8 +6,8 @@ import {
   ClockIcon,
   BookmarkIcon,
 } from '@heroicons/react/24/outline';
-import { searchApi } from '@/api/search';
-import { SearchQuery, SearchResponse } from '@/types';
+import { searchApi, SearchSuggestion, RecentSearch, SavedSearch } from '@/api/search';
+import { SearchQuery, SearchResponse, SearchFilters as SearchFiltersType } from '@/types';
 import SearchResults from './SearchResults';
 import SearchFilters from './SearchFilters';
 import toast from 'react-hot-toast';
@@ -21,12 +21,18 @@ export default function SearchInterface() {
   const [searchResponse, setSearchResponse] = useState<SearchResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
-  const [searchHistory, setSearchHistory] = useState<Array<{ query: string; timestamp: string }>>([]);
-  const [savedSearches, setSavedSearches] = useState<Array<{ id: string; name: string; query: string }>>([]);
+  const [searchHistory, setSearchHistory] = useState<RecentSearch[]>([]);
+  const [savedSearches, setSavedSearches] = useState<SavedSearch[]>([]);
+  const [suggestions, setSuggestions] = useState<SearchSuggestion[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [suggestionLoading, setSuggestionLoading] = useState(false);
   const [filters, setFilters] = useState({
     file_type: [] as string[],
     date_range: null as { start: string; end: string } | null,
     owner: '',
+    tags: [] as string[],
+    folder_ids: [] as string[],
+    languages: [] as string[],
   });
 
   const {
@@ -51,7 +57,7 @@ export default function SearchInterface() {
 
   const fetchSearchHistory = async () => {
     try {
-      const history = await searchApi.getSearchHistory();
+      const history = await searchApi.getRecentSearches(10);
       setSearchHistory(history);
     } catch (error) {
       // Silently fail for search history
@@ -67,20 +73,84 @@ export default function SearchInterface() {
     }
   };
 
+  // Debounced search suggestions
+  const fetchSuggestions = useCallback(async (query: string) => {
+    if (!query.trim() || query.length < 2) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+
+    setSuggestionLoading(true);
+    try {
+      const suggestionsData = await searchApi.getSearchSuggestions(query, 5);
+      setSuggestions(suggestionsData);
+      setShowSuggestions(true);
+    } catch (error) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+    } finally {
+      setSuggestionLoading(false);
+    }
+  }, []);
+
+  // Debounce suggestions
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const currentQuery = watch('query');
+      if (currentQuery) {
+        fetchSuggestions(currentQuery);
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [watch('query'), fetchSuggestions]);
+
   const onSearch = async (data: SearchForm) => {
     if (!data.query.trim()) return;
 
     setLoading(true);
     try {
+      // Build search filters in backend format
+      const searchFilters: SearchFiltersType = {};
+      
+      if (filters.file_type.length > 0) {
+        searchFilters.file_types = filters.file_type;
+      }
+      
+      if (filters.tags.length > 0) {
+        searchFilters.tag_ids = filters.tags;
+      }
+
+      if (filters.folder_ids && filters.folder_ids.length > 0) {
+        searchFilters.folder_ids = filters.folder_ids;
+      }
+      
+      if (filters.date_range) {
+        searchFilters.date_range = [filters.date_range.start, filters.date_range.end];
+      }
+      
+      if (filters.owner) {
+        // Handle owner filter through metadata_filters
+        searchFilters.metadata_filters = { owner: filters.owner };
+      }
+
+      if (filters.languages && filters.languages.length > 0) {
+        searchFilters.metadata_filters = {
+          ...searchFilters.metadata_filters,
+          languages: filters.languages
+        };
+      }
+
       const searchQuery: SearchQuery = {
         query: data.query,
-        filters: {
-          file_type: filters.file_type.length > 0 ? filters.file_type : undefined,
-          date_range: filters.date_range || undefined,
-          owner: filters.owner || undefined,
-        },
-        limit: 20,
-        offset: 0,
+        filters: Object.keys(searchFilters).length > 0 ? searchFilters : undefined,
+        page: 1,
+        page_size: 20,
+        top_k: 20,
+        similarity_threshold: 0.0,
+        semantic_search: data.searchType === 'semantic',
+        hybrid_search: data.searchType === 'hybrid',
       };
 
       let response: SearchResponse;
@@ -108,13 +178,55 @@ export default function SearchInterface() {
 
   const saveCurrentSearch = async () => {
     const query = watch('query');
+    const searchType = watch('searchType');
     if (!query.trim()) return;
 
     const name = prompt('Enter a name for this search:');
     if (!name) return;
 
     try {
-      await searchApi.saveSearch(query, name);
+      // Build search query object
+      const searchFilters: SearchFiltersType = {};
+      
+      if (filters.file_type.length > 0) {
+        searchFilters.file_types = filters.file_type;
+      }
+      
+      if (filters.tags.length > 0) {
+        searchFilters.tag_ids = filters.tags;
+      }
+
+      if (filters.folder_ids && filters.folder_ids.length > 0) {
+        searchFilters.folder_ids = filters.folder_ids;
+      }
+      
+      if (filters.date_range) {
+        searchFilters.date_range = [filters.date_range.start, filters.date_range.end];
+      }
+      
+      if (filters.owner) {
+        searchFilters.metadata_filters = { owner: filters.owner };
+      }
+
+      if (filters.languages && filters.languages.length > 0) {
+        searchFilters.metadata_filters = {
+          ...searchFilters.metadata_filters,
+          languages: filters.languages
+        };
+      }
+
+      const searchQuery: SearchQuery = {
+        query: query,
+        filters: Object.keys(searchFilters).length > 0 ? searchFilters : undefined,
+        page: 1,
+        page_size: 20,
+        top_k: 20,
+        similarity_threshold: 0.0,
+        semantic_search: searchType === 'semantic',
+        hybrid_search: searchType === 'hybrid',
+      };
+
+      await searchApi.saveSearch(searchQuery, name);
       toast.success('Search saved successfully');
       fetchSavedSearches();
     } catch (error: any) {
@@ -122,12 +234,57 @@ export default function SearchInterface() {
     }
   };
 
-  const loadSavedSearch = (query: string) => {
-    setValue('query', query);
+  const loadSavedSearch = (savedSearch: SavedSearch) => {
+    setValue('query', savedSearch.query_text);
+    setValue('searchType', savedSearch.search_type as 'basic' | 'semantic' | 'hybrid');
+    
+    // Load filters if available
+    if (savedSearch.filters) {
+      const searchFilters = savedSearch.filters;
+      setFilters({
+        file_type: searchFilters.file_types || [],
+        tags: searchFilters.tag_ids || [],
+        folder_ids: searchFilters.folder_ids || [],
+        languages: searchFilters.metadata_filters?.languages || [],
+        date_range: searchFilters.date_range ? {
+          start: searchFilters.date_range[0],
+          end: searchFilters.date_range[1]
+        } : null,
+        owner: searchFilters.metadata_filters?.owner || '',
+      });
+    }
+    
+    setShowSuggestions(false);
   };
 
-  const loadHistorySearch = (query: string) => {
-    setValue('query', query);
+  const loadHistorySearch = (historyItem: RecentSearch) => {
+    setValue('query', historyItem.query_text);
+    setValue('searchType', historyItem.query_type as 'basic' | 'semantic' | 'hybrid');
+    
+    // Load filters if available
+    if (historyItem.filters) {
+      const searchFilters = historyItem.filters;
+      setFilters({
+        file_type: searchFilters.file_types || [],
+        tags: searchFilters.tag_ids || [],
+        folder_ids: searchFilters.folder_ids || [],
+        languages: searchFilters.metadata_filters?.languages || [],
+        date_range: searchFilters.date_range ? {
+          start: searchFilters.date_range[0],
+          end: searchFilters.date_range[1]
+        } : null,
+        owner: searchFilters.metadata_filters?.owner || '',
+      });
+    }
+    
+    setShowSuggestions(false);
+  };
+
+  const selectSuggestion = (suggestion: SearchSuggestion) => {
+    setValue('query', suggestion.text);
+    setShowSuggestions(false);
+    // Optionally trigger search immediately
+    handleSubmit(onSearch)();
   };
 
   return (
@@ -146,9 +303,52 @@ export default function SearchInterface() {
                 type="text"
                 className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
                 placeholder="Search documents..."
+                onFocus={() => {
+                  const currentQuery = watch('query');
+                  if (currentQuery && suggestions.length > 0) {
+                    setShowSuggestions(true);
+                  }
+                }}
+                onBlur={() => {
+                  // Delay hiding suggestions to allow clicks
+                  setTimeout(() => setShowSuggestions(false), 200);
+                }}
               />
               {errors.query && (
                 <p className="mt-1 text-sm text-red-600">{errors.query.message}</p>
+              )}
+              
+              {/* Search Suggestions Dropdown */}
+              {showSuggestions && suggestions.length > 0 && (
+                <div className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-60 overflow-auto">
+                  {suggestionLoading && (
+                    <div className="px-3 py-2 text-sm text-gray-500">Loading suggestions...</div>
+                  )}
+                  {suggestions.map((suggestion, index) => (
+                    <div
+                      key={index}
+                      className="px-3 py-2 cursor-pointer hover:bg-gray-50 flex items-center space-x-2"
+                      onClick={() => selectSuggestion(suggestion)}
+                    >
+                      <span className="text-gray-400">
+                        {suggestion.icon === 'clock' && '⏰'}
+                        {suggestion.icon === 'tag' && '🏷️'}
+                        {suggestion.icon === 'document-text' && '📄'}
+                        {suggestion.icon === 'bookmark' && '🔖'}
+                        {suggestion.icon === 'light-bulb' && '💡'}
+                        {suggestion.icon === 'magnifying-glass' && '🔍'}
+                      </span>
+                      <span className="text-sm text-gray-700">{suggestion.text}</span>
+                      <span className="text-xs text-gray-400 ml-auto">
+                        {suggestion.type === 'history' && 'Recent'}
+                        {suggestion.type === 'tag' && 'Tag'}
+                        {suggestion.type === 'document_title' && 'Document'}
+                        {suggestion.type === 'saved_search' && 'Saved'}
+                        {suggestion.type === 'suggestion' && 'Suggestion'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
 
@@ -234,11 +434,14 @@ export default function SearchInterface() {
                   {searchHistory.slice(0, 5).map((item, index) => (
                     <button
                       key={index}
-                      onClick={() => loadHistorySearch(item.query)}
+                      onClick={() => loadHistorySearch(item)}
                       className="block w-full text-left px-2 py-1 text-sm text-gray-600 hover:bg-gray-50 rounded truncate"
-                      title={item.query}
+                      title={item.query_text}
                     >
-                      {item.query}
+                      <div className="truncate">{item.query_text}</div>
+                      <div className="text-xs text-gray-400">
+                        {item.results_count} results • {new Date(item.created_at).toLocaleDateString()}
+                      </div>
                     </button>
                   ))}
                 </div>
@@ -256,11 +459,15 @@ export default function SearchInterface() {
                   {savedSearches.map((item) => (
                     <button
                       key={item.id}
-                      onClick={() => loadSavedSearch(item.query)}
+                      onClick={() => loadSavedSearch(item)}
                       className="block w-full text-left px-2 py-1 text-sm text-gray-600 hover:bg-gray-50 rounded"
+                      title={item.description || item.query_text}
                     >
                       <div className="font-medium truncate">{item.name}</div>
-                      <div className="text-xs text-gray-500 truncate">{item.query}</div>
+                      <div className="text-xs text-gray-500 truncate">{item.query_text}</div>
+                      <div className="text-xs text-gray-400">
+                        {item.search_type} • Used {item.usage_count} times
+                      </div>
                     </button>
                   ))}
                 </div>

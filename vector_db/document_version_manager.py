@@ -69,8 +69,12 @@ class DocumentVersionManager:
         
         logger.info(f"DocumentVersionManager initialized - storage_manager: {self.storage_manager is not None}")
     
-    def _get_embedding_manager_instance(self):
+    def _get_embedding_manager_instance(self, embedding_model: str = None):
         """Get embedding manager instance, initializing if needed."""
+        # If a specific model is requested, create a new manager for that model
+        if embedding_model is not None:
+            return self._create_embedding_manager_for_model(embedding_model)
+        
         if self.embedding_manager is None:
             try:
                 EnhancedEmbeddingManager = _get_embedding_manager()
@@ -107,6 +111,59 @@ class DocumentVersionManager:
                 raise RuntimeError(f"Embedding manager initialization failed: {e}")
         
         return self.embedding_manager
+    
+    def _create_embedding_manager_for_model(self, embedding_model: str):
+        """Create embedding manager for a specific model using the model registry."""
+        try:
+            # Get the model registry
+            from .embedding_model_registry import get_embedding_model_registry
+            registry = get_embedding_model_registry()
+            
+            # Get model metadata
+            model_metadata = registry.get_model(embedding_model)
+            if model_metadata is None:
+                logger.warning(f"Model {embedding_model} not found in registry, falling back to default")
+                return self._get_embedding_manager_instance()
+            
+            # Get the enhanced embedding manager class
+            EnhancedEmbeddingManager = _get_embedding_manager()
+            if not EnhancedEmbeddingManager:
+                raise ImportError("EnhancedEmbeddingManager not available")
+            
+            # Create manager based on provider
+            if model_metadata.provider.value == "huggingface":
+                manager = EnhancedEmbeddingManager.create_huggingface_manager(
+                    model_name=model_metadata.model_name,
+                    batch_size=16
+                )
+            elif model_metadata.provider.value == "ollama":
+                manager = EnhancedEmbeddingManager.create_ollama_manager(
+                    model_name=model_metadata.model_name,
+                    base_url="http://localhost:11434",
+                    batch_size=8
+                )
+            elif model_metadata.provider.value == "openai":
+                import os
+                api_key = os.getenv("OPENAI_API_KEY")
+                if not api_key:
+                    logger.warning("OPENAI_API_KEY not set, falling back to default model")
+                    return self._get_embedding_manager_instance()
+                manager = EnhancedEmbeddingManager.create_openai_manager(
+                    api_key=api_key,
+                    model_name=model_metadata.model_name,
+                    batch_size=32
+                )
+            else:
+                logger.warning(f"Unknown provider {model_metadata.provider}, falling back to default")
+                return self._get_embedding_manager_instance()
+            
+            logger.info(f"Created embedding manager for model {embedding_model} ({model_metadata.provider.value})")
+            return manager
+            
+        except Exception as e:
+            logger.error(f"Failed to create embedding manager for model {embedding_model}: {e}")
+            logger.info("Falling back to default embedding manager")
+            return self._get_embedding_manager_instance()
     
     def _create_huggingface_manager(self, EnhancedEmbeddingManager):
         """Create HuggingFace embedding manager with error handling."""
@@ -190,6 +247,7 @@ class DocumentVersionManager:
         file_size: int,
         metadata: Dict = None,
         parent_document_id: int = None,
+        embedding_model: str = None,
         db: Session = None
     ) -> Document:
         """
@@ -271,6 +329,7 @@ class DocumentVersionManager:
                 document=document,
                 chunks_data=chunks_data,
                 index_name=index_name,
+                embedding_model=embedding_model,
                 db=db
             )
             
@@ -347,7 +406,8 @@ class DocumentVersionManager:
         document: Document,
         chunks_data: List[Dict],
         index_name: str,
-        db: Session
+        embedding_model: str = None,
+        db: Session = None
     ):
         """Create vector index and embeddings for document chunks."""
         try:
@@ -360,7 +420,7 @@ class DocumentVersionManager:
             texts = [chunk_data['text'] for chunk_data in chunks_data]
             
             # Generate content embeddings
-            embedding_manager = self._get_embedding_manager_instance()
+            embedding_manager = self._get_embedding_manager_instance(embedding_model)
             if embedding_manager is None:
                 logger.error("Embedding manager not available for vector generation")
                 raise RuntimeError("Embedding generation service is currently unavailable")

@@ -52,21 +52,28 @@ export interface Document {
 export interface DocumentUpload {
   file: File;
   metadata?: Record<string, any>;
+  embedding_model?: string;
 }
 
 // Search types
+export interface SearchFilters {
+  folder_ids?: string[];
+  tag_ids?: string[];
+  file_types?: string[];
+  date_range?: [string, string];
+  metadata_filters?: Record<string, any>;
+}
+
 export interface SearchQuery {
   query: string;
-  filters?: {
-    file_type?: string[];
-    date_range?: {
-      start: string;
-      end: string;
-    };
-    owner?: string;
-  };
-  limit?: number;
-  offset?: number;
+  filters?: SearchFilters;
+  semantic_search?: boolean;
+  hybrid_search?: boolean;
+  top_k?: number;
+  similarity_threshold?: number;
+  page?: number;
+  page_size?: number;
+  sort?: string;
 }
 
 export interface SearchResult {
@@ -79,9 +86,12 @@ export interface SearchResult {
 
 export interface SearchResponse {
   results: SearchResult[];
-  total: number;
-  query: string;
-  processing_time: number;
+  total_hits: number;
+  execution_time_ms: number;
+  filters_applied?: SearchFilters;
+  query_vector_id?: string;
+  query?: string;
+  processing_time?: number;
 }
 
 // Library types

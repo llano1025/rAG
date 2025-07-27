@@ -8,12 +8,17 @@ import {
   ArrowDownTrayIcon,
   FunnelIcon,
   TagIcon,
+  PencilIcon,
+  CheckIcon,
+  XMarkIcon,
+  PlusIcon,
 } from '@heroicons/react/24/outline';
 import { documentsApi } from '@/api/documents';
 import { libraryApi, Tag } from '@/api/library';
 import { Document, PaginatedResponse } from '@/types';
 import DocumentPreview from './DocumentPreview';
 import TagInput from '@/components/common/TagInput';
+import TagSelector from '@/components/common/TagSelector';
 import toast from 'react-hot-toast';
 
 interface DocumentListProps {
@@ -38,6 +43,13 @@ export default function DocumentList({ refreshTrigger }: DocumentListProps) {
   const [previewDocument, setPreviewDocument] = useState<Document | null>(null);
   const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [availableTags, setAvailableTags] = useState<Tag[]>([]);
+  
+  // New state for tag editing and bulk operations
+  const [editingTags, setEditingTags] = useState<{ [key: string]: boolean }>({});
+  const [editingTagValues, setEditingTagValues] = useState<{ [key: string]: string[] }>({});
+  const [selectedDocuments, setSelectedDocuments] = useState<number[]>([]);
+  const [showBulkTagSelector, setShowBulkTagSelector] = useState(false);
+  const [bulkTagsToApply, setBulkTagsToApply] = useState<string[]>([]);
 
   useEffect(() => {
     fetchDocuments();
@@ -166,6 +178,97 @@ export default function DocumentList({ refreshTrigger }: DocumentListProps) {
     }
   };
 
+  // Tag editing functions
+  const startEditingTags = (docId: string, currentTags: string[]) => {
+    setEditingTags({ ...editingTags, [docId]: true });
+    setEditingTagValues({ ...editingTagValues, [docId]: [...currentTags] });
+  };
+
+  const cancelEditingTags = (docId: string) => {
+    setEditingTags({ ...editingTags, [docId]: false });
+    setEditingTagValues({ ...editingTagValues, [docId]: [] });
+  };
+
+  const saveDocumentTags = async (docId: string) => {
+    try {
+      const newTags = editingTagValues[docId] || [];
+      
+      // Update document tags using the documents API
+      await documentsApi.updateDocument(docId, { tags: newTags });
+      
+      // Update local state
+      if (documents?.documents) {
+        const updatedDocuments = documents.documents.map(doc =>
+          doc.id === docId ? { ...doc, tags: newTags } : doc
+        );
+        setDocuments({ ...documents, documents: updatedDocuments });
+      }
+      
+      setEditingTags({ ...editingTags, [docId]: false });
+      toast.success('Tags updated successfully');
+    } catch (error: any) {
+      toast.error('Failed to update tags');
+      console.error('Tag update error:', error);
+    }
+  };
+
+  // Bulk operations
+  const toggleDocumentSelection = (docId: number) => {
+    setSelectedDocuments(prev => 
+      prev.includes(docId) 
+        ? prev.filter(id => id !== docId)
+        : [...prev, docId]
+    );
+  };
+
+  const selectAllDocuments = () => {
+    const allIds = sortedDocuments.map(doc => parseInt(doc.id));
+    setSelectedDocuments(allIds);
+  };
+
+  const clearSelection = () => {
+    setSelectedDocuments([]);
+  };
+
+  const handleBulkTagApply = async (tags: string[], documentIds: number[]) => {
+    try {
+      await libraryApi.applyTagsToDocuments(documentIds, tags);
+      
+      // Refresh documents to show updated tags
+      fetchDocuments();
+      
+      // Clear selection
+      setSelectedDocuments([]);
+      setShowBulkTagSelector(false);
+      
+      toast.success(`Applied tags to ${documentIds.length} documents`);
+    } catch (error: any) {
+      toast.error('Failed to apply tags to documents');
+      console.error('Bulk tag apply error:', error);
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedDocuments.length === 0) return;
+    
+    if (!confirm(`Are you sure you want to delete ${selectedDocuments.length} selected documents?`)) {
+      return;
+    }
+
+    try {
+      // Delete documents one by one (could be optimized with batch API)
+      for (const docId of selectedDocuments) {
+        await documentsApi.deleteDocument(docId.toString());
+      }
+      
+      toast.success(`Deleted ${selectedDocuments.length} documents`);
+      setSelectedDocuments([]);
+      fetchDocuments();
+    } catch (error: any) {
+      toast.error('Failed to delete selected documents');
+    }
+  };
+
   const getFileIcon = (fileType: string) => {
     return <DocumentTextIcon className="h-8 w-8 text-gray-400" />;
   };
@@ -193,24 +296,70 @@ export default function DocumentList({ refreshTrigger }: DocumentListProps) {
     );
   };
 
-  const renderTags = (tags: string[]) => {
-    if (!tags || tags.length === 0) return null;
+  const renderTags = (doc: Document) => {
+    const { tags = [], id } = doc;
+    const isEditing = editingTags[id];
+    const editingValues = editingTagValues[id] || tags;
 
     return (
       <div className="flex flex-wrap items-center gap-1 mt-1">
         <TagIcon className="h-3 w-3 text-gray-400" />
-        {tags.slice(0, 3).map((tag) => (
-          <span
-            key={tag}
-            className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-blue-50 text-blue-700"
-          >
-            {tag}
-          </span>
-        ))}
-        {tags.length > 3 && (
-          <span className="text-xs text-gray-500">
-            +{tags.length - 3} more
-          </span>
+        
+        {isEditing ? (
+          <div className="flex items-center gap-2 flex-1">
+            <TagInput
+              value={editingValues}
+              onChange={(newTags) => setEditingTagValues({ ...editingTagValues, [id]: newTags })}
+              placeholder="Edit tags..."
+              className="flex-1 min-w-0"
+              maxTags={10}
+            />
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => saveDocumentTags(id)}
+                className="p-1 text-green-600 hover:text-green-700"
+                title="Save tags"
+              >
+                <CheckIcon className="h-4 w-4" />
+              </button>
+              <button
+                onClick={() => cancelEditingTags(id)}
+                className="p-1 text-gray-400 hover:text-gray-600"
+                title="Cancel"
+              >
+                <XMarkIcon className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {tags.length > 0 ? (
+              <>
+                {tags.slice(0, 3).map((tag) => (
+                  <span
+                    key={tag}
+                    className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-blue-50 text-blue-700"
+                  >
+                    {tag}
+                  </span>
+                ))}
+                {tags.length > 3 && (
+                  <span className="text-xs text-gray-500">
+                    +{tags.length - 3} more
+                  </span>
+                )}
+              </>
+            ) : (
+              <span className="text-xs text-gray-400 italic">No tags</span>
+            )}
+            <button
+              onClick={() => startEditingTags(id, tags)}
+              className="p-1 text-gray-400 hover:text-gray-600"
+              title="Edit tags"
+            >
+              <PencilIcon className="h-3 w-3" />
+            </button>
+          </>
         )}
       </div>
     );
@@ -263,10 +412,72 @@ export default function DocumentList({ refreshTrigger }: DocumentListProps) {
 
   return (
     <div className="space-y-4">
+      {/* Bulk Actions Bar */}
+      {selectedDocuments.length > 0 && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-4">
+              <span className="text-sm font-medium text-blue-900">
+                {selectedDocuments.length} document{selectedDocuments.length !== 1 ? 's' : ''} selected
+              </span>
+              <button
+                onClick={clearSelection}
+                className="text-sm text-blue-700 hover:text-blue-800"
+              >
+                Clear selection
+              </button>
+            </div>
+            <div className="flex items-center space-x-3">
+              <button
+                onClick={() => setShowBulkTagSelector(!showBulkTagSelector)}
+                className="flex items-center space-x-2 px-3 py-1 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm"
+              >
+                <TagIcon className="h-4 w-4" />
+                <span>Edit Tags</span>
+              </button>
+              <button
+                onClick={handleBulkDelete}
+                className="flex items-center space-x-2 px-3 py-1 bg-red-600 text-white rounded-md hover:bg-red-700 text-sm"
+              >
+                <TrashIcon className="h-4 w-4" />
+                <span>Delete</span>
+              </button>
+            </div>
+          </div>
+          
+          {/* Bulk Tag Selector */}
+          {showBulkTagSelector && (
+            <div className="mt-4 border-t border-blue-200 pt-4">
+              <TagSelector
+                value={bulkTagsToApply}
+                onChange={setBulkTagsToApply}
+                placeholder="Select tags to apply to selected documents..."
+                mode="dropdown"
+                showBulkActions={true}
+                selectedDocuments={selectedDocuments}
+                onBulkApply={handleBulkTagApply}
+                className="max-w-md"
+              />
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Filters and Sort */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-4">
+            {/* Bulk select controls */}
+            <div className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                checked={selectedDocuments.length === sortedDocuments.length && sortedDocuments.length > 0}
+                onChange={(e) => e.target.checked ? selectAllDocuments() : clearSelection()}
+                className="rounded border-gray-300"
+              />
+              <span className="text-sm text-gray-500">Select all</span>
+            </div>
+            
             <div className="flex items-center space-x-2">
               <FunnelIcon className="h-5 w-5 text-gray-400" />
               <select
@@ -318,64 +529,82 @@ export default function DocumentList({ refreshTrigger }: DocumentListProps) {
 
       {/* Document Grid */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {sortedDocuments.map((doc) => (
-          <div key={doc.id} className="bg-white rounded-lg border border-gray-200 p-4 hover:shadow-md transition-shadow">
-            <div className="flex items-start justify-between">
-              <div className="flex items-start space-x-3 flex-1 min-w-0">
-                {getFileIcon(doc.content_type)}
-                <div className="flex-1 min-w-0">
-                  <h3 className="text-sm font-medium text-gray-900 truncate" title={doc.filename}>
-                    {doc.filename}
-                  </h3>
-                  <p className="text-xs text-gray-500 mt-1">
-                    {formatFileSize(doc.file_size)} • {doc.created_at ? format(new Date(doc.created_at), 'MMM d, yyyy') : 'Unknown date'}
-                  </p>
-                  <div className="mt-2">
-                    {getStatusBadge(doc.status)}
+        {sortedDocuments.map((doc) => {
+          const docId = parseInt(doc.id);
+          const isSelected = selectedDocuments.includes(docId);
+          
+          return (
+            <div 
+              key={doc.id} 
+              className={`bg-white rounded-lg border border-gray-200 p-4 hover:shadow-md transition-shadow ${
+                isSelected ? 'ring-2 ring-blue-500 bg-blue-50' : ''
+              }`}
+            >
+              <div className="flex items-start justify-between">
+                <div className="flex items-start space-x-3 flex-1 min-w-0">
+                  {/* Selection checkbox */}
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => toggleDocumentSelection(docId)}
+                    className="mt-1 rounded border-gray-300"
+                  />
+                  
+                  {getFileIcon(doc.content_type)}
+                  <div className="flex-1 min-w-0">
+                    <h3 className="text-sm font-medium text-gray-900 truncate" title={doc.filename}>
+                      {doc.filename}
+                    </h3>
+                    <p className="text-xs text-gray-500 mt-1">
+                      {formatFileSize(doc.file_size)} • {doc.created_at ? format(new Date(doc.created_at), 'MMM d, yyyy') : 'Unknown date'}
+                    </p>
+                    <div className="mt-2">
+                      {getStatusBadge(doc.status)}
+                    </div>
+                    {renderTags(doc)}
                   </div>
-                  {renderTags(doc.tags)}
                 </div>
               </div>
-            </div>
-            
-            {/* Actions */}
-            <div className="mt-4 flex items-center justify-between">
-              <div className="flex items-center space-x-2">
-                <button
-                  onClick={() => handleDownload(doc.id, doc.filename)}
-                  className="p-1 text-gray-400 hover:text-gray-600"
-                  title="Download"
-                >
-                  <ArrowDownTrayIcon className="h-4 w-4" />
-                </button>
+              
+              {/* Actions */}
+              <div className="mt-4 flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={() => handleDownload(doc.id, doc.filename)}
+                    className="p-1 text-gray-400 hover:text-gray-600"
+                    title="Download"
+                  >
+                    <ArrowDownTrayIcon className="h-4 w-4" />
+                  </button>
+                  
+                  <button
+                    onClick={() => handleShare(doc.id)}
+                    className="p-1 text-gray-400 hover:text-gray-600"
+                    title="Share"
+                  >
+                    <ShareIcon className="h-4 w-4" />
+                  </button>
+                  
+                  <button
+                    onClick={() => setPreviewDocument(doc)}
+                    className="p-1 text-gray-400 hover:text-gray-600"
+                    title="Preview"
+                  >
+                    <EyeIcon className="h-4 w-4" />
+                  </button>
+                </div>
                 
                 <button
-                  onClick={() => handleShare(doc.id)}
-                  className="p-1 text-gray-400 hover:text-gray-600"
-                  title="Share"
+                  onClick={() => handleDelete(doc.id, doc.filename)}
+                  className="p-1 text-gray-400 hover:text-red-600"
+                  title="Delete"
                 >
-                  <ShareIcon className="h-4 w-4" />
-                </button>
-                
-                <button
-                  onClick={() => setPreviewDocument(doc)}
-                  className="p-1 text-gray-400 hover:text-gray-600"
-                  title="Preview"
-                >
-                  <EyeIcon className="h-4 w-4" />
+                  <TrashIcon className="h-4 w-4" />
                 </button>
               </div>
-              
-              <button
-                onClick={() => handleDelete(doc.id, doc.filename)}
-                className="p-1 text-gray-400 hover:text-red-600"
-                title="Delete"
-              >
-                <TrashIcon className="h-4 w-4" />
-              </button>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Pagination */}
