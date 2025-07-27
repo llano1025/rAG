@@ -13,7 +13,7 @@ from database.models import User, Document, DocumentChunk
 from llm import create_model_manager_with_defaults
 from vector_db.enhanced_embedding_manager import EnhancedEmbeddingManager
 from vector_db.embedding_model_registry import get_embedding_model_registry, EmbeddingProvider
-from vector_db.enhanced_search_engine import EnhancedSearchEngine
+from vector_db.search_engine import EnhancedSearchEngine
 from database.connection import get_db
 from utils.security.audit_logger import log_user_action
 

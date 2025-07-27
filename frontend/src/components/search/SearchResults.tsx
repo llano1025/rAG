@@ -86,11 +86,11 @@ export default function SearchResults({ response, loading }: SearchResultsProps)
           <div>
             <h2 className="text-lg font-medium text-gray-900">Search Results</h2>
             <p className="text-sm text-gray-500">
-              {response.total} result{response.total !== 1 ? 's' : ''} found in {response.processing_time.toFixed(3)}s
+              {response.total_hits} result{response.total_hits !== 1 ? 's' : ''} found in {response.processing_time ? response.processing_time.toFixed(3) : 'N/A'}s
             </p>
           </div>
           <div className="text-sm text-gray-500">
-            Query: <span className="font-medium">&ldquo;{response.query}&rdquo;</span>
+            Query: <span className="font-medium">&ldquo;{response.query || 'No query'}&rdquo;</span>
           </div>
         </div>
       </div>
@@ -125,7 +125,7 @@ export default function SearchResults({ response, loading }: SearchResultsProps)
                 {/* Content Snippet */}
                 <div className="mb-3">
                   <p className="text-sm text-gray-600 leading-relaxed">
-                    {highlightText(result.content_snippet, response.query)}
+                    {highlightText(result.content_snippet, response.query || '')}
                   </p>
                 </div>
 
@@ -213,7 +213,7 @@ export default function SearchResults({ response, loading }: SearchResultsProps)
       </div>
 
       {/* Load More Button (if needed) */}
-      {response.total > response.results.length && (
+      {response.total_hits > response.results.length && (
         <div className="px-6 py-4 border-t border-gray-200 text-center">
           <button className="btn-secondary">
             Load more results
