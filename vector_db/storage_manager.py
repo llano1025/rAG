@@ -27,7 +27,10 @@ def _get_search_optimizer():
         from .search_optimizer import SearchOptimizer
         return SearchOptimizer
     except ImportError as e:
-        logging.warning(f"SearchOptimizer not available: {e}")
+        logging.warning(f"SearchOptimizer not available: {e}. Install required dependencies: numpy, faiss-cpu")
+        return None
+    except Exception as e:
+        logging.error(f"Failed to import SearchOptimizer: {e}")
         return None
 
 def _get_qdrant_manager():
@@ -36,7 +39,10 @@ def _get_qdrant_manager():
         from .qdrant_client import QdrantManager, get_qdrant_manager
         return QdrantManager, get_qdrant_manager
     except ImportError as e:
-        logging.warning(f"QdrantClient not available: {e}")
+        logging.warning(f"QdrantClient not available: {e}. Install required dependency: qdrant-client")
+        return None, None
+    except Exception as e:
+        logging.error(f"Failed to import QdrantManager: {e}")
         return None, None
 
 VECTOR_DEPENDENCIES_AVAILABLE = NUMPY_AVAILABLE
@@ -73,7 +79,11 @@ class VectorStorageManager:
     def _check_vector_dependencies(self):
         """Check if vector dependencies are available."""
         if not self.vector_dependencies_available:
-            raise ImportError("Vector dependencies (numpy, faiss) are not available. Please install them to use vector operations.")
+            raise ImportError(
+                "Vector dependencies (numpy, faiss) are not available. "
+                "Please install them to use vector operations: "
+                "pip install numpy faiss-cpu"
+            )
     
     async def initialize(self) -> bool:
         """Initialize all storage backends."""
@@ -81,11 +91,22 @@ class VectorStorageManager:
             # Initialize Qdrant connection
             QdrantManager, get_qdrant_manager_func = _get_qdrant_manager()
             if get_qdrant_manager_func:
-                self.qdrant_manager = get_qdrant_manager_func()
-                await self.qdrant_manager.connect()
+                try:
+                    self.qdrant_manager = get_qdrant_manager_func()
+                    await self.qdrant_manager.connect()
+                    logger.info("Qdrant connection established successfully")
+                except Exception as e:
+                    logger.warning(f"Failed to connect to Qdrant: {e}. Vector operations will be limited to FAISS only")
+                    self.qdrant_manager = None
             else:
-                logging.warning("Qdrant not available, vector operations will be limited")
+                logger.warning("Qdrant client not available, vector operations will be limited to FAISS only")
+                self.qdrant_manager = None
             
+            # Check if we have any vector capabilities
+            if not self.vector_dependencies_available and not self.qdrant_manager:
+                logger.error("No vector dependencies available. Install numpy, faiss-cpu, and qdrant-client for full functionality")
+                return False
+                
             logger.info("Vector storage manager initialized successfully")
             return True
             

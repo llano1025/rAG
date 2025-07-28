@@ -31,7 +31,7 @@ services:
 
   # Redis for caching and session management
   redis:
-    image: redis:7-alpine
+    image: redis:latest
     ports:
       - "6379:6379"
     volumes:
@@ -64,7 +64,7 @@ services:
 
   # PostgreSQL database (optional, for metadata storage)
   postgres:
-    image: postgres:15-alpine
+    image: postgres:15
     ports:
       - "5432:5432"
     environment:

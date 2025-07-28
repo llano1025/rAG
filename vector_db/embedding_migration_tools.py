@@ -8,8 +8,7 @@ from sqlalchemy.orm import Session
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
-from .enhanced_embedding_manager import EnhancedEmbeddingManager
-from .embedding_manager import EmbeddingManager
+from .embedding_manager import EnhancedEmbeddingManager
 from .embedding_model_registry import EmbeddingModelRegistry, get_embedding_model_registry, EmbeddingProvider
 from database.models import Document, DocumentChunk
 

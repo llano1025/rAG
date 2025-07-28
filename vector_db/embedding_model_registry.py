@@ -475,7 +475,7 @@ class EmbeddingModelRegistry:
 
     async def health_check_models(self) -> Dict[str, Any]:
         """Perform health check on registered models."""
-        from .enhanced_embedding_manager import EnhancedEmbeddingManager
+        from .embedding_manager import EnhancedEmbeddingManager
         
         health_status = {
             "healthy_models": [],

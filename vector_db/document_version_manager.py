@@ -28,7 +28,7 @@ def _get_adaptive_chunker():
 def _get_embedding_manager():
     """Lazy import of EnhancedEmbeddingManager."""
     try:
-        from .enhanced_embedding_manager import EnhancedEmbeddingManager
+        from .embedding_manager import EnhancedEmbeddingManager
         return EnhancedEmbeddingManager
     except ImportError as e:
         logging.warning(f"EnhancedEmbeddingManager not available: {e}")

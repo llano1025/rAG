@@ -11,7 +11,7 @@ from sqlalchemy import and_, desc
 
 from database.models import User, Document, DocumentChunk
 from llm import create_model_manager_with_defaults
-from vector_db.enhanced_embedding_manager import EnhancedEmbeddingManager
+from vector_db.embedding_manager import EnhancedEmbeddingManager
 from vector_db.embedding_model_registry import get_embedding_model_registry, EmbeddingProvider
 from vector_db.search_engine import EnhancedSearchEngine
 from database.connection import get_db
@@ -152,7 +152,7 @@ class ChatController:
         # Default settings
         default_settings = {
             "llm_model": "openai-gpt35",
-            "embedding_model": "hf-mpnet-base-v2",
+            "embedding_model": "hf-minilm-l6-v2",
             "temperature": 0.7,
             "max_tokens": 2048,
             "use_rag": True,

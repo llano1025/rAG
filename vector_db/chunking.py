@@ -1,18 +1,28 @@
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from dataclasses import dataclass
 import re
 from collections import deque
+import logging
 
+# Handle numpy import gracefully
 try:
     import numpy as np
-    from transformers import AutoTokenizer
-    CHUNKING_DEPENDENCIES_AVAILABLE = True
+    NUMPY_AVAILABLE = True
 except ImportError as e:
-    import logging
-    logging.warning(f"Chunking dependencies not available: {e}")
+    logging.warning(f"NumPy not available for chunking: {e}")
     np = None
+    NUMPY_AVAILABLE = False
+
+# Handle transformers import gracefully
+try:
+    from transformers import AutoTokenizer
+    TRANSFORMERS_AVAILABLE = True
+except ImportError as e:
+    logging.warning(f"Transformers not available for chunking: {e}")
     AutoTokenizer = None
-    CHUNKING_DEPENDENCIES_AVAILABLE = False
+    TRANSFORMERS_AVAILABLE = False
+
+CHUNKING_DEPENDENCIES_AVAILABLE = NUMPY_AVAILABLE and TRANSFORMERS_AVAILABLE
 
 @dataclass
 class Chunk:
@@ -22,9 +32,13 @@ class Chunk:
     end_idx: int
     metadata: Dict
     context_text: Optional[str] = None
-    embedding: Optional[np.ndarray] = None
-    context_embedding: Optional[np.ndarray] = None
-    neighbor_chunks: List[str] = None
+    embedding: Optional[Any] = None  # Use Any instead of np.ndarray to avoid import issues
+    context_embedding: Optional[Any] = None
+    neighbor_chunks: Optional[List[str]] = None
+    
+    # Add fields for compatibility
+    document_id: Optional[int] = None
+    chunk_id: Optional[str] = None
 
 class ChunkingError(Exception):
     """Raised when chunking operation fails."""

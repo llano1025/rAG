@@ -737,7 +737,7 @@ async def similarity_search(query_text: str, filters=None, top_k: int = 5,
         from ..schemas.search_schemas import SearchFilters
         from vector_db.search_engine import EnhancedSearchEngine, SearchFilter, SearchType
         from vector_db.storage_manager import get_storage_manager
-        from vector_db.enhanced_embedding_manager import EnhancedEmbeddingManager
+        from vector_db.embedding_manager import EnhancedEmbeddingManager
         from database.connection import get_db
         
         # Get database session and user

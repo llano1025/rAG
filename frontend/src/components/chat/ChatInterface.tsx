@@ -12,7 +12,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { useAuth } from '../../hooks/useAuth';
 import { apiClient } from '../../api/client';
-import Cookies from 'js-cookie';
+import { chatApi } from '../../api/chat';
 
 interface Message {
   id: string;
@@ -50,7 +50,7 @@ interface ChatSessionInfo {
 
 const DEFAULT_SETTINGS: ChatSettings = {
   llm_model: 'openai-gpt35',
-  embedding_model: 'hf-mpnet-base-v2',
+  embedding_model: 'hf-minilm-l6-v2',
   temperature: 0.7,
   max_tokens: 2048,
   use_rag: true,
@@ -150,26 +150,14 @@ const ChatInterface: React.FC = () => {
       // Create abort controller for streaming
       abortControllerRef.current = new AbortController();
 
-      const token = Cookies.get('access_token');
-      const response = await fetch('/api/chat/stream', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          message: userMessage.content,
-          session_id: sessionInfo?.session_id,
-          settings: settings
-        }),
-        signal: abortControllerRef.current.signal
-      });
+      // Use the chat API for streaming
+      const stream = await chatApi.streamMessage(
+        userMessage.content,
+        sessionInfo?.session_id,
+        settings
+      );
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const reader = response.body?.getReader();
+      const reader = stream.getReader();
       const decoder = new TextDecoder();
       let accumulatedContent = '';
 
@@ -334,7 +322,7 @@ const ChatInterface: React.FC = () => {
               >
                 {availableModels.llm_models.map(model => (
                   <option key={model.id} value={model.id}>
-                    {model.name} ({model.provider})
+                    {model.display_name} ({model.provider})
                   </option>
                 ))}
               </select>
@@ -351,7 +339,7 @@ const ChatInterface: React.FC = () => {
               >
                 {availableModels.embedding_models.map(model => (
                   <option key={model.id} value={model.id}>
-                    {model.name} ({model.provider})
+                    {model.display_name} ({model.provider})
                   </option>
                 ))}
               </select>

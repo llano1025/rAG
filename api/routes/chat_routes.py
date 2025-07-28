@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from datetime import datetime
 
 from database.connection import get_db
-from api.middleware.auth import get_current_user
+from api.middleware.auth import get_current_user, get_current_active_user
 from api.controllers.chat_controller import chat_controller
 from database.models import User
 
@@ -71,7 +71,7 @@ class ModelListResponse(BaseModel):
 
 @router.get("/models", response_model=ModelListResponse)
 async def get_available_models(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """Get available LLM and embedding models."""
@@ -87,7 +87,7 @@ async def get_available_models(
 @router.post("/sessions", response_model=SessionResponse)
 async def create_chat_session(
     request: CreateSessionRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """Create a new chat session."""
@@ -107,7 +107,7 @@ async def create_chat_session(
 
 @router.get("/sessions", response_model=SessionListResponse)
 async def list_chat_sessions(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """List active chat sessions for the current user."""
     try:
@@ -123,7 +123,7 @@ async def list_chat_sessions(
 async def get_chat_history(
     session_id: str,
     limit: int = 50,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """Get chat history for a specific session."""
     try:
@@ -142,7 +142,7 @@ async def get_chat_history(
 @router.delete("/sessions/{session_id}")
 async def delete_chat_session(
     session_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """Delete a chat session."""
@@ -162,7 +162,7 @@ async def delete_chat_session(
 @router.post("/stream")
 async def stream_chat_response(
     request: ChatMessageRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """Stream chat response using Server-Sent Events."""
@@ -215,7 +215,7 @@ async def stream_chat_response(
 @router.post("/message")
 async def send_chat_message(
     request: ChatMessageRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
     """Send a chat message and get a complete response (non-streaming)."""
@@ -268,7 +268,7 @@ async def send_chat_message(
 # Model management routes
 @router.post("/models/health-check")
 async def run_model_health_check(
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """Run health check on available models."""
     try:
@@ -292,7 +292,7 @@ async def run_model_health_check(
 async def get_embedding_model_recommendations(
     use_case: str = "general",
     max_results: int = 3,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """Get recommended embedding models for a specific use case."""
     try:
@@ -326,12 +326,12 @@ async def get_embedding_model_recommendations(
 @router.post("/admin/cleanup-sessions")
 async def cleanup_old_sessions(
     max_age_hours: int = 24,
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_active_user)
 ):
     """Clean up old inactive chat sessions (admin only)."""
     try:
         # Check if user is admin
-        if not current_user.is_admin:
+        if not current_user.is_superuser:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Admin access required"

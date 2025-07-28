@@ -9,7 +9,7 @@ try:
     import faiss
     SEARCH_AVAILABLE = True
 except ImportError as e:
-    logging.warning(f"Search optimization dependencies not available: {e}")
+    logging.warning(f"Search optimization dependencies not available: {e}. Install required dependencies: numpy, faiss-cpu")
     np = None
     faiss = None
     SEARCH_AVAILABLE = False
@@ -48,7 +48,10 @@ class SearchOptimizer:
     
     def __init__(self, config: SearchConfig):
         if not SEARCH_AVAILABLE:
-            raise ImportError("numpy and faiss are required for search optimization functionality")
+            raise ImportError(
+                "numpy and faiss are required for search optimization functionality. "
+                "Install them with: pip install numpy faiss-cpu"
+            )
         
         self.config = config
         self.index = None

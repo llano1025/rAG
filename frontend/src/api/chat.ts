@@ -109,7 +109,8 @@ export const chatApi = {
     settings?: ChatSettings
   ): Promise<ReadableStream> {
     const token = Cookies.get('access_token');
-    const response = await fetch('/api/chat/stream', {
+    const baseURL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+    const response = await fetch(`${baseURL}/api/chat/stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
