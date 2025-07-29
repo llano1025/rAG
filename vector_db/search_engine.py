@@ -132,6 +132,73 @@ class EnhancedSearchEngine:
                 raise ImportError("EmbeddingManager not available")
         return self.embedding_manager
     
+    async def search_with_context(
+        self,
+        query: str,
+        search_type: str = SearchType.SEMANTIC,
+        user_id: int = None,
+        top_k: int = None,
+        db: Session = None,
+        use_cache: bool = True
+    ) -> List[Dict[str, Any]]:
+        """
+        Perform search with context - compatibility method for chat controller.
+        
+        Args:
+            query: Search query text
+            search_type: Type of search (semantic, keyword, hybrid, contextual)
+            user_id: ID of user performing the search
+            top_k: Maximum number of results (aliases for limit)
+            db: Database session
+            use_cache: Whether to use cached results
+            
+        Returns:
+            List of search results as dictionaries
+        """
+        try:
+            # Get user from database
+            if not db or not user_id:
+                logger.error("Database session and user_id required for search_with_context")
+                return []
+            
+            user = db.query(User).filter(User.id == user_id).first()
+            if not user:
+                logger.error(f"User {user_id} not found")
+                return []
+            
+            # Convert top_k to limit
+            limit = top_k or self.default_limit
+            
+            # Perform search using existing method
+            results = await self.search(
+                query=query,
+                user=user,
+                search_type=search_type,
+                filters=None,
+                limit=limit,
+                db=db,
+                use_cache=use_cache
+            )
+            
+            # Convert SearchResult objects to dictionaries for compatibility
+            dict_results = []
+            for result in results:
+                dict_result = {
+                    "document_id": result.document_id,
+                    "chunk_id": result.chunk_id,
+                    "text": result.text,
+                    "similarity_score": result.score,
+                    "metadata": result.metadata
+                }
+                dict_results.append(dict_result)
+            
+            logger.info(f"search_with_context completed: {len(dict_results)} results for query '{query[:50]}...'")
+            return dict_results
+            
+        except Exception as e:
+            logger.error(f"search_with_context failed: {str(e)}")
+            return []
+
     async def search(
         self,
         query: str,

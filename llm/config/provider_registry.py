@@ -113,12 +113,19 @@ class ProviderRegistry:
                 callback()
             
             # Create provider instance
+            logger.info(f"Creating provider instance: {provider_name}")
             provider = provider_class(*args, **kwargs)
-            logger.debug(f"Created provider instance: {provider_name}")
+            
+            # Verify provider is properly initialized
+            if not hasattr(provider, 'provider_name'):
+                logger.warning(f"Provider {provider_name} missing provider_name attribute")
+            
+            logger.info(f"Successfully created provider instance: {provider_name}")
             return provider
             
         except Exception as e:
-            logger.error(f"Failed to create provider {provider_name}: {str(e)}")
+            logger.error(f"Failed to create provider {provider_name}: {str(e)}", exc_info=True)
+            logger.error(f"Provider creation failed with args: {args}, kwargs: {kwargs}")
             # Mark provider as unavailable
             if provider_name in self._provider_info:
                 self._provider_info[provider_name]['available'] = False

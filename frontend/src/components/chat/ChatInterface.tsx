@@ -119,7 +119,12 @@ const ChatInterface: React.FC = () => {
 
   // Send message
   const sendMessage = async () => {
-    if (!inputText.trim() || isStreaming) return;
+    console.log('[CHAT_UI] Send message called - Input:', inputText.trim(), 'Streaming:', isStreaming);
+    
+    if (!inputText.trim() || isStreaming) {
+      console.log('[CHAT_UI] Send message aborted - Empty input or already streaming');
+      return;
+    }
 
     const userMessage: Message = {
       id: Date.now().toString(),
@@ -128,10 +133,14 @@ const ChatInterface: React.FC = () => {
       timestamp: new Date()
     };
 
+    console.log('[CHAT_UI] User message created:', userMessage);
+
     setMessages(prev => [...prev, userMessage]);
     setInputText('');
     setIsStreaming(true);
     setIsLoading(true);
+    
+    console.log('[CHAT_UI] UI state updated - Streaming: true, Loading: true');
 
     // Create assistant message placeholder
     const assistantMessageId = (Date.now() + 1).toString();
@@ -151,34 +160,57 @@ const ChatInterface: React.FC = () => {
       abortControllerRef.current = new AbortController();
 
       // Use the chat API for streaming
+      console.log('[CHAT_UI] Starting stream request:', {
+        message: userMessage.content,
+        sessionId: sessionInfo?.session_id,
+        settings: settings
+      });
+
       const stream = await chatApi.streamMessage(
         userMessage.content,
         sessionInfo?.session_id,
         settings
       );
 
+      console.log('[CHAT_UI] Stream object received:', stream);
+
       const reader = stream.getReader();
       const decoder = new TextDecoder();
       let accumulatedContent = '';
+      let chunkCount = 0;
 
       setIsLoading(false);
+      console.log('[CHAT_UI] Starting to read stream chunks');
 
       if (reader) {
         while (true) {
           const { done, value } = await reader.read();
+          chunkCount++;
           
-          if (done) break;
+          console.log(`[CHAT_UI] Chunk ${chunkCount} - Done: ${done}, Value length: ${value?.length || 0}`);
+          
+          if (done) {
+            console.log(`[CHAT_UI] Stream completed after ${chunkCount} chunks`);
+            break;
+          }
 
           const chunk = decoder.decode(value);
+          console.log(`[CHAT_UI] Decoded chunk ${chunkCount}:`, chunk.slice(0, 200) + (chunk.length > 200 ? '...' : ''));
+          
           const lines = chunk.split('\n');
+          console.log(`[CHAT_UI] Chunk ${chunkCount} split into ${lines.length} lines`);
 
           for (const line of lines) {
             if (line.startsWith('data: ')) {
               try {
-                const data = JSON.parse(line.slice(6));
+                const jsonData = line.slice(6);
+                console.log(`[CHAT_UI] Parsing JSON data:`, jsonData);
+                const data = JSON.parse(jsonData);
+                console.log(`[CHAT_UI] Parsed data type:`, data.type, data);
                 
                 if (data.type === 'content') {
                   accumulatedContent += data.content;
+                  console.log(`[CHAT_UI] Content received - Length: ${data.content.length}, Total: ${accumulatedContent.length}`);
                   
                   setMessages(prev => prev.map(msg => 
                     msg.id === assistantMessageId 
@@ -186,12 +218,14 @@ const ChatInterface: React.FC = () => {
                       : msg
                   ));
                 } else if (data.type === 'sources') {
+                  console.log(`[CHAT_UI] Sources received:`, data.sources.length, 'sources');
                   setMessages(prev => prev.map(msg => 
                     msg.id === assistantMessageId 
                       ? { ...msg, sources: data.sources }
                       : msg
                   ));
                 } else if (data.type === 'done') {
+                  console.log(`[CHAT_UI] Stream completion signal received`);
                   setMessages(prev => prev.map(msg => 
                     msg.id === assistantMessageId 
                       ? { ...msg, isStreaming: false }
@@ -206,19 +240,36 @@ const ChatInterface: React.FC = () => {
                     } : null);
                   }
                   break;
+                } else if (data.type === 'error') {
+                  console.error('[CHAT_UI] Error received from stream:', data.error);
+                  setMessages(prev => prev.map(msg => 
+                    msg.id === assistantMessageId 
+                      ? { 
+                          ...msg, 
+                          content: `Error: ${data.error}`,
+                          isStreaming: false
+                        }
+                      : msg
+                  ));
+                  break;
                 }
-              } catch (error) {
-                console.error('Error parsing streaming data:', error);
+              } catch (parseError) {
+                console.error('[CHAT_UI] Error parsing streaming data:', parseError, 'Line:', line);
               }
+            } else if (line.trim() && !line.startsWith(':')) {
+              console.log(`[CHAT_UI] Non-data line received:`, line);
             }
           }
         }
+      } else {
+        console.error('[CHAT_UI] No reader available from stream');
       }
     } catch (error: any) {
       if (error.name === 'AbortError') {
-        console.log('Request was aborted');
+        console.log('[CHAT_UI] Request was aborted');
       } else {
-        console.error('Error sending message:', error);
+        console.error('[CHAT_UI] Error sending message:', error);
+        console.error('[CHAT_UI] Error stack:', error.stack);
         
         // Show error message
         setMessages(prev => prev.map(msg => 
@@ -232,6 +283,7 @@ const ChatInterface: React.FC = () => {
         ));
       }
     } finally {
+      console.log('[CHAT_UI] Send message cleanup - Setting streaming: false, loading: false');
       setIsStreaming(false);
       setIsLoading(false);
       abortControllerRef.current = null;

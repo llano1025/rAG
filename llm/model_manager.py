@@ -95,31 +95,38 @@ class ModelManager:
     
     async def _get_provider_instance(self, model_id: str) -> Optional[BaseLLM]:
         """Get or create a provider instance for a model."""
+        logger.debug(f"[MODEL_MANAGER] Getting provider instance for {model_id}")
+        
         if model_id in self.provider_instances:
+            logger.debug(f"[MODEL_MANAGER] Using cached provider instance for {model_id}")
             return self.provider_instances[model_id]
         
         model_info = self.registered_models.get(model_id)
         if not model_info:
-            logger.error(f"Model {model_id} not registered")
+            logger.error(f"[MODEL_MANAGER] Model {model_id} not registered")
             return None
         
         # Create provider instance
         provider_name = model_info['provider_name']
         provider_kwargs = model_info['provider_kwargs']
         
+        logger.info(f"[MODEL_MANAGER] Creating provider instance - Model: {model_id}, Provider: {provider_name}")
+        logger.debug(f"[MODEL_MANAGER] Provider kwargs: {provider_kwargs}")
+        
         try:
             provider_instance = create_provider(provider_name, **provider_kwargs)
             if provider_instance:
                 self.provider_instances[model_id] = provider_instance
+                logger.info(f"[MODEL_MANAGER] Provider instance created successfully for {model_id}")
                 return provider_instance
             else:
-                logger.error(f"Failed to create provider {provider_name} for model {model_id}")
+                logger.error(f"[MODEL_MANAGER] Failed to create provider {provider_name} for model {model_id} - create_provider returned None")
                 # Mark model as unavailable
                 model_info['available'] = False
                 return None
                 
         except Exception as e:
-            logger.error(f"Error creating provider {provider_name} for model {model_id}: {str(e)}")
+            logger.error(f"[MODEL_MANAGER] Error creating provider {provider_name} for model {model_id}: {str(e)}", exc_info=True)
             model_info['available'] = False
             return None
     
@@ -142,39 +149,88 @@ class ModelManager:
         Returns:
             LLMResponse or AsyncGenerator depending on stream parameter
         """
+        logger.info(f"[MODEL_MANAGER] Starting generation with fallback - Primary: {primary_model_id}, Stream: {stream}, Prompt length: {len(prompt)}")
+        logger.debug(f"[MODEL_MANAGER] Fallback chain: {self.fallback_chain}")
+        logger.debug(f"[MODEL_MANAGER] Registered models: {list(self.registered_models.keys())}")
+        
         # Try primary model first
+        logger.info(f"[MODEL_MANAGER] Attempting primary model: {primary_model_id}")
+        
         try:
+            # Check if model is registered
+            if primary_model_id not in self.registered_models:
+                logger.error(f"[MODEL_MANAGER] Primary model {primary_model_id} not registered")
+                raise LLMError(f"Model {primary_model_id} not registered")
+            
+            # Check if model is available
+            model_info = self.registered_models[primary_model_id]
+            if not model_info.get('available', True):
+                logger.warning(f"[MODEL_MANAGER] Primary model {primary_model_id} marked as unavailable")
+                raise LLMError(f"Model {primary_model_id} is unavailable")
+            
+            logger.debug(f"[MODEL_MANAGER] Primary model info - Provider: {model_info['provider_name']}, Available: {model_info.get('available', True)}")
+            
             provider = await self._get_provider_instance(primary_model_id)
             if provider:
                 config = self.get_model_config(primary_model_id)
-                return await provider.generate(prompt, config, stream)
+                logger.info(f"[MODEL_MANAGER] Provider instance obtained for {primary_model_id}, generating response")
+                
+                # Handle streaming vs non-streaming differently
+                if stream:
+                    # For streaming, await the coroutine to get the async generator
+                    logger.info(f"[MODEL_MANAGER] Returning streaming generator from {primary_model_id}")
+                    return await provider.generate(prompt, config, stream)
+                else:
+                    # For non-streaming, await the coroutine
+                    return await provider.generate(prompt, config, stream)
+            else:
+                logger.error(f"[MODEL_MANAGER] Failed to get provider instance for {primary_model_id}")
+                raise LLMError(f"Failed to create provider for {primary_model_id}")
+                
         except Exception as primary_error:
-            logger.warning(f"Primary model {primary_model_id} failed: {str(primary_error)}")
+            logger.error(f"[MODEL_MANAGER] Primary model {primary_model_id} failed: {str(primary_error)}", exc_info=True)
         
         # Try fallback models
+        logger.info(f"[MODEL_MANAGER] Starting fallback chain - Max attempts: {max_fallback_attempts}")
         attempted_models = {primary_model_id}
         attempts = 0
         
         for fallback_id in self.fallback_chain:
             if fallback_id in attempted_models or attempts >= max_fallback_attempts:
+                logger.debug(f"[MODEL_MANAGER] Skipping {fallback_id} - Already attempted: {fallback_id in attempted_models}, Max attempts reached: {attempts >= max_fallback_attempts}")
                 continue
             
-            if not self.registered_models.get(fallback_id, {}).get('available', False):
+            model_info = self.registered_models.get(fallback_id, {})
+            if not model_info.get('available', False):
+                logger.debug(f"[MODEL_MANAGER] Skipping {fallback_id} - Model not available")
                 continue
             
             try:
-                logger.info(f"Attempting fallback to model {fallback_id}")
+                logger.info(f"[MODEL_MANAGER] Attempting fallback to model {fallback_id} (attempt {attempts + 1}/{max_fallback_attempts})")
+                
                 provider = await self._get_provider_instance(fallback_id)
                 if provider:
                     config = self.get_model_config(fallback_id)
-                    return await provider.generate(prompt, config, stream)
+                    logger.info(f"[MODEL_MANAGER] Fallback provider instance obtained for {fallback_id}")
+                    
+                    # Handle streaming vs non-streaming differently for fallback too
+                    if stream:
+                        # For streaming, await the coroutine to get the async generator
+                        logger.info(f"[MODEL_MANAGER] Returning streaming generator from fallback {fallback_id}")
+                        return await provider.generate(prompt, config, stream)
+                    else:
+                        # For non-streaming, await the coroutine
+                        return await provider.generate(prompt, config, stream)
+                else:
+                    logger.warning(f"[MODEL_MANAGER] Failed to get provider instance for fallback {fallback_id}")
                     
             except Exception as fallback_error:
-                logger.warning(f"Fallback model {fallback_id} failed: {str(fallback_error)}")
+                logger.error(f"[MODEL_MANAGER] Fallback model {fallback_id} failed: {str(fallback_error)}", exc_info=True)
                 attempted_models.add(fallback_id)
                 attempts += 1
                 continue
         
+        logger.error(f"[MODEL_MANAGER] All models in fallback chain failed - Attempted: {list(attempted_models)}")
         raise LLMError("All models in fallback chain failed")
     
     async def get_embedding_with_fallback(

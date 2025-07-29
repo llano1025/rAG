@@ -113,7 +113,7 @@ class ModelConfigTemplates:
     
     # Ollama Models (Local)
     OLLAMA_LLAMA32_3B = ModelConfig(
-        model_name="llama3.2:3b",
+        model_name="llama3.2:latest",
         max_tokens=8192,
         temperature=0.7,
         top_p=1.0,

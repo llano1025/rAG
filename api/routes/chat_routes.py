@@ -130,7 +130,8 @@ async def get_chat_history(
         history = await chat_controller.get_chat_history(
             session_id=session_id,
             user=current_user,
-            limit=limit
+            limit=limit,
+            db=db
         )
         return ChatHistoryResponse(**history)
     except Exception as e:
@@ -326,7 +327,8 @@ async def get_embedding_model_recommendations(
 @router.post("/admin/cleanup-sessions")
 async def cleanup_old_sessions(
     max_age_hours: int = 24,
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
 ):
     """Clean up old inactive chat sessions (admin only)."""
     try:
@@ -337,7 +339,7 @@ async def cleanup_old_sessions(
                 detail="Admin access required"
             )
         
-        await chat_controller.cleanup_old_sessions(max_age_hours)
+        await chat_controller.cleanup_old_sessions(max_age_hours, db)
         
         return {
             "message": f"Cleaned up sessions older than {max_age_hours} hours",

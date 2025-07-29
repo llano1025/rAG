@@ -846,3 +846,83 @@ class DocumentShare(Base, TimestampMixin):
         self.can_write = permissions.get('can_write', False)
         self.can_delete = permissions.get('can_delete', False)
         self.can_share = permissions.get('can_share', False)
+
+
+class ChatSessionModel(Base, TimestampMixin):
+    """Database model for persistent chat sessions."""
+    
+    __tablename__ = 'chat_sessions'
+    
+    # Primary key
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String(36), unique=True, nullable=False, index=True)  # UUID string
+    
+    # User relationship
+    user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    
+    # Session metadata
+    settings = Column(Text, nullable=True)  # JSON encoded settings
+    last_activity = Column(DateTime(timezone=True), nullable=False, default=func.now())
+    
+    # Session status
+    is_active = Column(Boolean, default=True, nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=True)  # Optional session expiration
+    
+    # Session statistics
+    message_count = Column(Integer, default=0, nullable=False)
+    total_tokens_used = Column(Integer, default=0, nullable=False)
+    
+    # Relationships
+    user = relationship("User", backref="chat_sessions")
+    
+    # Indexes
+    __table_args__ = (
+        Index('idx_chat_session_user_active', 'user_id', 'is_active'),
+        Index('idx_chat_session_last_activity', 'last_activity'),
+    )
+    
+    def __repr__(self):
+        return f"<ChatSessionModel(session_id={self.session_id}, user_id={self.user_id})>"
+    
+    def is_expired(self) -> bool:
+        """Check if session is expired."""
+        if self.expires_at and self.expires_at < datetime.utcnow().replace(tzinfo=None):
+            return True
+        return False
+    
+    def is_valid(self) -> bool:
+        """Check if session is valid (active and not expired)."""
+        return self.is_active and not self.is_expired()
+    
+    def get_settings(self) -> Dict:
+        """Get session settings as dictionary."""
+        if self.settings:
+            import json
+            try:
+                return json.loads(self.settings)
+            except (json.JSONDecodeError, TypeError):
+                return {}
+        return {}
+    
+    def set_settings(self, settings: Dict):
+        """Set session settings from dictionary."""
+        if settings:
+            import json
+            self.settings = json.dumps(settings)
+        else:
+            self.settings = None
+    
+    def update_activity(self):
+        """Update last activity timestamp."""
+        self.last_activity = datetime.utcnow()
+    
+    def increment_message_count(self, tokens_used: int = 0):
+        """Increment message count and tokens used."""
+        self.message_count += 1
+        self.total_tokens_used += tokens_used
+        self.update_activity()
+    
+    def deactivate(self):
+        """Deactivate the session."""
+        self.is_active = False
+        self.update_activity()

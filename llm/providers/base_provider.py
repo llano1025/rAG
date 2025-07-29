@@ -114,7 +114,17 @@ class BaseProviderMixin:
     
     def __init__(self, provider_name: str, **kwargs):
         """Initialize the provider mixin."""
-        super().__init__(provider_name)
+        # Only call super().__init__ if the next class in MRO expects arguments
+        next_class = super(BaseProviderMixin, self)
+        if hasattr(next_class, '__init__'):
+            import inspect
+            init_sig = inspect.signature(next_class.__init__)
+            if len(init_sig.parameters) > 1:  # More than just 'self'
+                super().__init__(provider_name, **kwargs)
+            else:
+                super().__init__(**kwargs)
+        
+        self.provider_name = provider_name  # Ensure provider_name is set
         self._health_check_cache: Optional[Dict[str, Any]] = None
         self._health_check_time: Optional[datetime] = None
         self._health_check_ttl = 300  # 5 minutes
@@ -201,7 +211,8 @@ class AsyncHTTPProviderMixin(BaseProviderMixin):
     
     def __del__(self):
         """Cleanup on deletion."""
-        if self._session and not self._session.closed:
+        # Check if _session attribute exists and is valid before accessing
+        if hasattr(self, '_session') and self._session and not self._session.closed:
             # Schedule session cleanup
             import asyncio
             try:
@@ -213,6 +224,9 @@ class AsyncHTTPProviderMixin(BaseProviderMixin):
 
 def requires_api_key(func):
     """Decorator to check if API key is available before making requests."""
+    import functools
+    
+    @functools.wraps(func)
     async def wrapper(self, *args, **kwargs):
         if not hasattr(self, 'api_key') or not self.api_key:
             from ..base.exceptions import LLMAuthenticationError
@@ -222,7 +236,10 @@ def requires_api_key(func):
 
 def retry_on_rate_limit(max_retries: int = 3, base_delay: float = 1.0):
     """Decorator to retry on rate limit errors with exponential backoff."""
+    import functools
+    
     def decorator(func):
+        @functools.wraps(func)
         async def wrapper(self, *args, **kwargs):
             last_exception = None
             
