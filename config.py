@@ -75,7 +75,7 @@ class Settings(BaseSettings):
     # Document processing settings
     MAX_FILE_SIZE: int = Field(default=50 * 1024 * 1024, env="MAX_FILE_SIZE")  # 50MB
     ALLOWED_FILE_TYPES: str = Field(
-        default=".pdf,.docx,.txt,.md,.html,.json,.csv",
+        default=".pdf,.docx,.txt,.md,.html,.json,.csv,.jpg,.png,.jpge",
         env="ALLOWED_FILE_TYPES"
     )
     CHUNK_SIZE: int = Field(default=1000, env="CHUNK_SIZE")
@@ -84,6 +84,14 @@ class Settings(BaseSettings):
     # OCR settings
     OCR_ENABLED: bool = Field(default=True, env="OCR_ENABLED")
     OCR_LANGUAGE: str = Field(default="eng", env="OCR_LANGUAGE")
+    OCR_DEFAULT_METHOD: str = Field(default="tesseract", env="OCR_DEFAULT_METHOD")
+    
+    # Vision LLM settings for OCR
+    VISION_LLM_ENABLED: bool = Field(default=False, env="VISION_LLM_ENABLED")
+    VISION_LLM_MODEL: str = Field(default="gemini-2.5-flash", env="VISION_LLM_MODEL")
+    VISION_LLM_MAX_TOKENS: int = Field(default=4096, env="VISION_LLM_MAX_TOKENS")
+    VISION_LLM_TEMPERATURE: float = Field(default=0.1, env="VISION_LLM_TEMPERATURE")
+    VISION_LLM_TIMEOUT: int = Field(default=30, env="VISION_LLM_TIMEOUT")  # seconds
     
     # Rate limiting
     RATE_LIMIT_REQUESTS: int = Field(default=100, env="RATE_LIMIT_REQUESTS")

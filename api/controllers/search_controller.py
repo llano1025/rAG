@@ -351,7 +351,7 @@ class SearchController:
                 user_id=user.id,
                 query_text=query,
                 query_hash=query_hash,
-                query_type="semantic",  # Default type
+                query_type="hybrid",  # Default type
                 search_filters=json.dumps(filters) if filters else None,
                 max_results=len(results),
                 results_count=len(results),
@@ -396,16 +396,17 @@ class SearchController:
 # Module-level functions for compatibility with routes
 async def search_documents(query: str, filters=None, sort: Optional[str] = None, 
                          page: int = 1, page_size: int = 10, user_id: int = None):
-    """Search documents with actual text matching and filtering."""
+    """Search documents with intelligent text matching and filtering."""
     from ..schemas.search_schemas import SearchFilters
     from database.connection import get_db
-    from sqlalchemy import or_, and_
+    from sqlalchemy import or_, and_, func
+    from utils.search.query_processor import get_query_processor
     import time
     
     # Start performance timing
     start_time = time.time()
     
-    logger.info(f"Starting text search for user {user_id} with query: '{query}', page: {page}, page_size: {page_size}")
+    logger.info(f"Starting enhanced text search for user {user_id} with query: '{query}', page: {page}, page_size: {page_size}")
     
     try:
         # Handle filters parameter - could be SearchFilters object or dict or None
@@ -456,35 +457,85 @@ async def search_documents(query: str, filters=None, sort: Optional[str] = None,
         
         logger.debug("Built base query for accessible documents")
         
-        # Apply text search if query provided
+        # Apply intelligent text search if query provided
         if query and query.strip():
-            query_cleaned = query.strip()
-            logger.info(f"Applying text search for query: '{query_cleaned}'")
+            # Process query using intelligent query processor
+            query_processor = get_query_processor()
+            processed_query = query_processor.process_query(query)
             
-            # Create text search conditions
+            logger.info(f"Processed query: concepts={processed_query.primary_terms}, "
+                       f"metadata={processed_query.secondary_terms}, strategy={processed_query.search_strategy}")
+            
+            # Build weighted search conditions based on processed query
             search_conditions = []
             
-            # Search in extracted_text (main content) - case insensitive
-            if query_cleaned:
-                search_conditions.append(
-                    Document.extracted_text.ilike(f"%{query_cleaned}%")
-                )
-                # Search in title
-                search_conditions.append(
-                    Document.title.ilike(f"%{query_cleaned}%")
-                )
-                # Search in filename
-                search_conditions.append(
-                    Document.filename.ilike(f"%{query_cleaned}%")
-                )
-                # Search in description
-                search_conditions.append(
-                    Document.description.ilike(f"%{query_cleaned}%")
-                )
+            # Handle exact phrases with highest priority
+            for phrase in processed_query.exact_phrases:
+                phrase_conditions = [
+                    Document.extracted_text.ilike(f"%{phrase}%"),
+                    Document.title.ilike(f"%{phrase}%"),
+                    Document.filename.ilike(f"%{phrase}%"),
+                    Document.description.ilike(f"%{phrase}%")
+                ]
+                search_conditions.append(or_(*phrase_conditions))
             
+            # Primary terms (semantic concepts) - high weight
+            primary_conditions = []
+            for term in processed_query.primary_terms:
+                term_conditions = [
+                    Document.extracted_text.ilike(f"%{term}%"),
+                    Document.title.ilike(f"%{term}%"),
+                    Document.filename.ilike(f"%{term}%"),
+                    Document.description.ilike(f"%{term}%")
+                ]
+                primary_conditions.append(or_(*term_conditions))
+            
+            # Secondary terms (metadata, dates, codes) - lower weight but still important
+            secondary_conditions = []
+            for term in processed_query.secondary_terms:
+                term_conditions = [
+                    Document.extracted_text.ilike(f"%{term}%"),
+                    Document.title.ilike(f"%{term}%"),
+                    Document.filename.ilike(f"%{term}%"),
+                    Document.description.ilike(f"%{term}%")
+                ]
+                secondary_conditions.append(or_(*term_conditions))
+            
+            # Combine conditions based on search strategy
+            if processed_query.search_strategy == "hybrid_weighted":
+                # Require at least one primary term, optionally secondary
+                if primary_conditions:
+                    if secondary_conditions:
+                        # Primary AND/OR Secondary
+                        combined_condition = and_(
+                            or_(*primary_conditions),  # At least one primary
+                            or_(or_(*primary_conditions), or_(*secondary_conditions))  # Primary or secondary
+                        )
+                    else:
+                        combined_condition = or_(*primary_conditions)
+                    search_conditions.append(combined_condition)
+                elif secondary_conditions:
+                    # Fallback to secondary only
+                    search_conditions.append(or_(*secondary_conditions))
+                    
+            elif processed_query.search_strategy == "text_primary":
+                # Focus on all terms equally for metadata-heavy queries
+                all_conditions = primary_conditions + secondary_conditions
+                if all_conditions:
+                    search_conditions.append(or_(*all_conditions))
+                    
+            else:  # semantic_primary or fallback
+                # Prioritize primary terms, secondary as fallback
+                if primary_conditions:
+                    search_conditions.append(or_(*primary_conditions))
+                elif secondary_conditions:
+                    search_conditions.append(or_(*secondary_conditions))
+            
+            # Apply search conditions
             if search_conditions:
                 base_query = base_query.filter(or_(*search_conditions))
-                logger.debug(f"Added {len(search_conditions)} text search conditions")
+                logger.debug(f"Added intelligent search conditions for {len(processed_query.primary_terms)} concepts "
+                           f"and {len(processed_query.secondary_terms)} metadata terms")
         
         # Apply additional filters
         filter_count = 0
@@ -563,12 +614,17 @@ async def search_documents(query: str, filters=None, sort: Optional[str] = None,
         
         # Convert to search result format with relevance scoring
         search_results = []
+        processed_query = None
+        if query and query.strip():
+            query_processor = get_query_processor()
+            processed_query = query_processor.process_query(query)
+            
         for doc in documents:
-            # Calculate relevance score based on text matches
-            score = _calculate_relevance_score(doc, query)
+            # Calculate relevance score based on processed query
+            score = _calculate_relevance_score(doc, query, processed_query)
             
             # Extract content snippet with highlighting context
-            content_snippet = _extract_content_snippet(doc, query)
+            content_snippet = _extract_content_snippet(doc, query, processed_query)
             
             # Get tags safely
             try:
@@ -632,51 +688,106 @@ async def search_documents(query: str, filters=None, sort: Optional[str] = None,
             "processing_time": execution_time / 1000.0
         }
 
-def _calculate_relevance_score(document, query: str) -> float:
-    """Calculate relevance score for a document based on text matches."""
+def _calculate_relevance_score(document, query: str, processed_query=None) -> float:
+    """Calculate intelligent relevance score based on processed query components."""
     if not query or not query.strip():
         return 0.5  # Default score for no query
     
-    query_lower = query.lower().strip()
     score = 0.0
     
     try:
-        # Title matches (highest weight)
-        if document.title and query_lower in document.title.lower():
-            score += 0.4
-            # Exact title match gets bonus
-            if query_lower == document.title.lower():
+        # Use processed query if available for intelligent scoring
+        if processed_query:
+            # Exact phrase matches (highest priority)
+            for phrase in processed_query.exact_phrases:
+                phrase_lower = phrase.lower()
+                if document.title and phrase_lower in document.title.lower():
+                    score += 0.5  # Very high weight for exact phrase in title
+                elif document.filename and phrase_lower in document.filename.lower():
+                    score += 0.4
+                elif document.description and phrase_lower in document.description.lower():
+                    score += 0.3
+                elif document.extracted_text and phrase_lower in document.extracted_text.lower():
+                    score += 0.2
+            
+            # Primary terms (concepts) - high weight
+            primary_matches = 0
+            for term in processed_query.primary_terms:
+                term_lower = term.lower()
+                term_score = 0.0
+                
+                if document.title and term_lower in document.title.lower():
+                    term_score += 0.3
+                if document.filename and term_lower in document.filename.lower():
+                    term_score += 0.25
+                if document.description and term_lower in document.description.lower():
+                    term_score += 0.2
+                if document.extracted_text and term_lower in document.extracted_text.lower():
+                    # Count occurrences with diminishing returns
+                    content_lower = document.extracted_text.lower()
+                    match_count = content_lower.count(term_lower)
+                    term_score += min(0.15, match_count * 0.03)
+                
+                if term_score > 0:
+                    primary_matches += 1
+                    score += term_score
+            
+            # Secondary terms (metadata) - lower weight but still valuable
+            secondary_matches = 0
+            for term in processed_query.secondary_terms:
+                term_lower = term.lower()
+                term_score = 0.0
+                
+                if document.title and term_lower in document.title.lower():
+                    term_score += 0.15
+                if document.filename and term_lower in document.filename.lower():
+                    term_score += 0.12
+                if document.description and term_lower in document.description.lower():
+                    term_score += 0.1
+                if document.extracted_text and term_lower in document.extracted_text.lower():
+                    content_lower = document.extracted_text.lower()
+                    match_count = content_lower.count(term_lower)
+                    term_score += min(0.08, match_count * 0.02)
+                
+                if term_score > 0:
+                    secondary_matches += 1
+                    score += term_score
+            
+            # Bonus for matching multiple terms (concept coherence)
+            if primary_matches > 1:
+                score += 0.1 * (primary_matches - 1)
+            if primary_matches > 0 and secondary_matches > 0:
+                score += 0.05  # Bonus for concept + metadata match
+                
+        else:
+            # Fallback to simple scoring if no processed query
+            query_lower = query.lower().strip()
+            
+            if document.title and query_lower in document.title.lower():
+                score += 0.4
+            if document.filename and query_lower in document.filename.lower():
+                score += 0.3
+            if document.description and query_lower in document.description.lower():
                 score += 0.2
+            if document.extracted_text and query_lower in document.extracted_text.lower():
+                content_lower = document.extracted_text.lower()
+                match_count = content_lower.count(query_lower)
+                score += min(0.3, match_count * 0.05)
         
-        # Filename matches (high weight)
-        if document.filename and query_lower in document.filename.lower():
-            score += 0.3
-        
-        # Description matches (medium weight)
-        if document.description and query_lower in document.description.lower():
-            score += 0.2
-        
-        # Content matches (lower weight but can accumulate)
-        if document.extracted_text:
-            content_lower = document.extracted_text.lower()
-            # Count occurrences in content
-            match_count = content_lower.count(query_lower)
-            if match_count > 0:
-                # Diminishing returns for multiple matches
-                content_score = min(0.3, match_count * 0.05)
-                score += content_score
-        
-        # Tag matches (medium weight)
+        # Tag matches (consistent across both methods)
         try:
             tags = document.get_tag_list()
+            query_terms = processed_query.get_all_terms() if processed_query else [query.lower()]
             for tag in tags:
-                if query_lower in tag.lower():
-                    score += 0.15
-                    break  # Only count once
+                tag_lower = tag.lower()
+                for term in query_terms:
+                    if isinstance(term, str) and term.lower() in tag_lower:
+                        score += 0.1
+                        break
         except Exception:
             pass
         
-        # Ensure score is between 0 and 1
+        # Ensure score is between 0.1 and 1.0
         score = min(1.0, max(0.1, score))
         
     except Exception as e:
@@ -685,8 +796,8 @@ def _calculate_relevance_score(document, query: str) -> float:
     
     return score
 
-def _extract_content_snippet(document, query: str, max_length: int = 300) -> str:
-    """Extract a relevant content snippet with context around query matches."""
+def _extract_content_snippet(document, query: str, processed_query=None, max_length: int = 300) -> str:
+    """Extract an intelligent content snippet with context around best matches."""
     if not document.extracted_text:
         # Fallback to title or description
         if document.title:
@@ -702,21 +813,72 @@ def _extract_content_snippet(document, query: str, max_length: int = 300) -> str
     if not query or not query.strip():
         return content[:max_length] + ("..." if len(content) > max_length else "")
     
-    query_lower = query.lower().strip()
     content_lower = content.lower()
+    best_match_pos = -1
+    best_match_priority = 0
     
-    # Find the first occurrence of the query
-    match_pos = content_lower.find(query_lower)
+    # Use processed query for intelligent snippet extraction
+    if processed_query:
+        # Priority 1: Exact phrases (highest)
+        for phrase in processed_query.exact_phrases:
+            phrase_lower = phrase.lower()
+            match_pos = content_lower.find(phrase_lower)
+            if match_pos != -1 and best_match_priority < 3:
+                best_match_pos = match_pos
+                best_match_priority = 3
+                break
+        
+        # Priority 2: Primary terms (high)
+        if best_match_priority < 2:
+            for term in processed_query.primary_terms:
+                term_lower = term.lower()
+                match_pos = content_lower.find(term_lower)
+                if match_pos != -1:
+                    best_match_pos = match_pos
+                    best_match_priority = 2
+                    break
+        
+        # Priority 3: Secondary terms (medium)
+        if best_match_priority < 1:
+            for term in processed_query.secondary_terms:
+                term_lower = term.lower()
+                match_pos = content_lower.find(term_lower)
+                if match_pos != -1:
+                    best_match_pos = match_pos
+                    best_match_priority = 1
+                    break
+    else:
+        # Fallback to simple query matching
+        query_lower = query.lower().strip()
+        best_match_pos = content_lower.find(query_lower)
     
-    if match_pos == -1:
+    if best_match_pos == -1:
         # No match found, return beginning
         return content[:max_length] + ("..." if len(content) > max_length else "")
     
-    # Extract context around the match
-    context_start = max(0, match_pos - 100)  # 100 chars before
-    context_end = min(len(content), match_pos + len(query) + 200)  # 200 chars after
+    # Extract context around the best match
+    context_before = 100  # chars before match
+    context_after = 200   # chars after match
     
-    snippet = content[context_start:context_end]
+    # Try to align with sentence boundaries
+    context_start = max(0, best_match_pos - context_before)
+    context_end = min(len(content), best_match_pos + context_after)
+    
+    # Adjust to sentence boundaries if possible
+    try:
+        # Look for sentence start after context_start
+        sentence_start = content.rfind('. ', 0, best_match_pos)
+        if sentence_start != -1 and sentence_start > context_start - 50:
+            context_start = sentence_start + 2
+        
+        # Look for sentence end before context_end
+        sentence_end = content.find('. ', best_match_pos)
+        if sentence_end != -1 and sentence_end < context_end + 50:
+            context_end = sentence_end + 1
+    except Exception:
+        pass  # Fallback to character-based extraction
+    
+    snippet = content[context_start:context_end].strip()
     
     # Add ellipsis if we're not at the beginning/end
     if context_start > 0:
@@ -980,9 +1142,9 @@ async def get_available_filters(user_id: int):
                 "avg_size": avg_size
             },
             "search_types": [
-                {"value": "basic", "label": "Basic Text Search", "description": "Keyword-based search"},
+                {"value": "hybrid", "label": "Hybrid Search (Recommended)", "description": "Combined text and semantic search for best results"},
                 {"value": "semantic", "label": "Semantic Search", "description": "AI-powered context understanding"},
-                {"value": "hybrid", "label": "Hybrid Search", "description": "Combined text and semantic search"}
+                {"value": "basic", "label": "Basic Text Search", "description": "Keyword-based search"}
             ]
         }
         
@@ -999,9 +1161,9 @@ async def get_available_filters(user_id: int):
             "date_range": {"min_date": None, "max_date": None},
             "file_size_range": {"min_size": 0, "max_size": 0, "avg_size": 0},
             "search_types": [
-                {"value": "basic", "label": "Basic Text Search", "description": "Keyword-based search"},
+                {"value": "hybrid", "label": "Hybrid Search (Recommended)", "description": "Combined text and semantic search for best results"},
                 {"value": "semantic", "label": "Semantic Search", "description": "AI-powered context understanding"},
-                {"value": "hybrid", "label": "Hybrid Search", "description": "Combined text and semantic search"}
+                {"value": "basic", "label": "Basic Text Search", "description": "Keyword-based search"}
             ]
         }
 

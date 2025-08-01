@@ -39,6 +39,15 @@ export const documentsApi = {
       formData.append('embedding_model', upload.embedding_model);
     }
 
+    // Add OCR parameters for image files
+    if ((upload as any).ocr_method) {
+      formData.append('ocr_method', (upload as any).ocr_method);
+    }
+
+    if ((upload as any).ocr_language) {
+      formData.append('ocr_language', (upload as any).ocr_language);
+    }
+
     return apiClient.upload('/api/documents/upload', formData, onProgress);
   },
 
@@ -47,7 +56,9 @@ export const documentsApi = {
     onProgress?: (progress: number) => void,
     tags?: string[],
     metadata?: Record<string, any>,
-    embeddingModel?: string
+    embeddingModel?: string,
+    ocrMethod?: string,
+    ocrLanguage?: string
   ): Promise<Document[]> => {
     const formData = new FormData();
     files.forEach((file) => {
@@ -64,6 +75,15 @@ export const documentsApi = {
 
     if (embeddingModel) {
       formData.append('embedding_model', embeddingModel);
+    }
+
+    // Add OCR parameters for image files
+    if (ocrMethod) {
+      formData.append('ocr_method', ocrMethod);
+    }
+
+    if (ocrLanguage) {
+      formData.append('ocr_language', ocrLanguage);
     }
 
     return apiClient.upload('/api/documents/batch-upload', formData, onProgress);

@@ -54,7 +54,7 @@ const DEFAULT_SETTINGS: ChatSettings = {
   temperature: 0.7,
   max_tokens: 2048,
   use_rag: true,
-  search_type: 'semantic',
+  search_type: 'hybrid',
   top_k_documents: 5
 };
 
@@ -421,8 +421,8 @@ const ChatInterface: React.FC = () => {
                 onChange={(e) => setSettings(prev => ({ ...prev, search_type: e.target.value as any }))}
                 className="w-full p-2 border border-gray-300 rounded-md dark:border-gray-600 dark:bg-gray-700 dark:text-white"
               >
+                <option value="hybrid">Hybrid (Recommended)</option>
                 <option value="semantic">Semantic</option>
-                <option value="hybrid">Hybrid</option>
                 <option value="basic">Basic</option>
               </select>
             </div>

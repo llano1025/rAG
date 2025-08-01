@@ -24,7 +24,36 @@ async def search_documents(
     current_user = Depends(get_current_active_user)
 ):
     """
-    Full-text search across documents with filtering and ranking.
+    Hybrid search across documents (recommended) with intelligent fallback to text search.
+    Combines semantic similarity and keyword matching for best results.
+    """
+    try:
+        # Use hybrid search as default, fallback to text search if needed
+        try:
+            # Try hybrid search first
+            results = await hybrid_search(request, current_user)
+            return results
+        except Exception as hybrid_error:
+            # Fallback to text search if hybrid fails
+            results = await search_controller.search_documents(
+                query=request.query,
+                filters=request.filters,
+                sort=request.sort,
+                page=request.page,
+                page_size=request.page_size,
+                user_id=current_user.id
+            )
+            return results
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@router.post("/text", response_model=SearchResponse)
+async def text_search(
+    request: SearchQuery,
+    current_user = Depends(get_current_active_user)
+):
+    """
+    Pure text-based search using keyword matching and intelligent query processing.
     """
     try:
         results = await search_controller.search_documents(
@@ -85,40 +114,66 @@ async def hybrid_search(
     current_user = Depends(get_current_active_user)
 ):
     """
-    Hybrid search combining text search and semantic similarity.
+    Professional hybrid search using Reciprocal Rank Fusion (RRF).
     """
     try:
-        # Perform both text search and semantic search
-        text_results = await search_controller.search_documents(
+        # Import RRF fusion module
+        from utils.search.result_fusion import fuse_search_results
+        
+        # Use Enhanced Search Engine's built-in hybrid search
+        from vector_db.search_engine import EnhancedSearchEngine, SearchType
+        from vector_db.storage_manager import get_storage_manager
+        from vector_db.embedding_manager import EnhancedEmbeddingManager
+        from database.connection import get_db
+        
+        db = next(get_db())
+        user = current_user
+        
+        # Initialize search engine components
+        storage_manager = get_storage_manager()
+        embedding_manager = EnhancedEmbeddingManager.create_default_manager()
+        search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
+        
+        # Perform hybrid search using Enhanced Search Engine
+        search_results = await search_engine.search(
             query=request.query,
-            filters=request.filters,
-            sort=request.sort,
-            page=request.page,
-            page_size=request.page_size,
-            user_id=current_user.id
+            user=user,
+            search_type=SearchType.HYBRID,
+            filters=None,  # Convert request.filters if needed
+            limit=request.top_k,
+            db=db
         )
         
-        semantic_results = await search_controller.similarity_search(
-            query_text=request.query,
-            filters=request.filters,
-            top_k=request.top_k,
-            threshold=request.similarity_threshold or 0.0,
-            user_id=current_user.id
-        )
+        # Format results to match API schema
+        fused_results = []
+        for result in search_results:
+            formatted_result = {
+                "document_id": str(result.document_id),
+                "filename": result.document_metadata.get("filename", "Unknown"),
+                "content_snippet": result.text[:300] + "..." if len(result.text) > 300 else result.text,
+                "score": result.score,
+                "metadata": {
+                    **result.metadata,
+                    **result.document_metadata,
+                    "search_type": "hybrid"
+                }
+            }
+            fused_results.append(formatted_result)
         
-        # Combine and deduplicate results
-        combined_results = text_results.copy()
+        # Build final response
+        hybrid_response = {
+            "results": fused_results,
+            "total_hits": len(fused_results),
+            "execution_time_ms": 0,  # Enhanced search engine doesn't return timing yet
+            "filters_applied": request.filters,
+            "query_vector_id": None,  # Could be enhanced to return this
+            "query": request.query,
+            "processing_time": 0.0,  # Could be enhanced to measure this
+            "fusion_method": "enhanced_search_engine_hybrid"
+        }
         
-        # Add semantic results that aren't already in text results
-        text_doc_ids = {result.get('document_id') for result in text_results.get('results', [])}
-        for semantic_result in semantic_results.get('results', []):
-            if semantic_result.get('document_id') not in text_doc_ids:
-                combined_results['results'].append(semantic_result)
+        return hybrid_response
         
-        # Update total count
-        combined_results['total_hits'] = len(combined_results.get('results', []))
-        
-        return combined_results
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

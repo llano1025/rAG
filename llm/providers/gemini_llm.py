@@ -100,7 +100,23 @@ class GeminiLLM(StreamingLLM, BaseProviderMixin):
                 
         except Exception as e:
             self._log_error(config.model_name, e)
-            raise ProviderUtils.handle_provider_error("gemini", e, config.model_name)
+            
+            # Handle specific Gemini API errors before generic handling
+            error_str = str(e)
+            if "User location is not supported" in error_str:
+                raise LLMError(
+                    "Gemini API is not available in your geographic location. "
+                    "Please configure an alternative LLM provider (OpenAI, Ollama, etc.) "
+                    "or use a VPN to access from a supported region."
+                )
+            elif "API key" in error_str.lower():
+                raise LLMError("Invalid or missing Gemini API key. Please check your configuration.")
+            elif "quota" in error_str.lower() or "rate limit" in error_str.lower():
+                raise LLMError("Gemini API quota or rate limit exceeded. Please try again later.")
+            elif "connection" in error_str.lower():
+                raise LLMError("Unable to connect to Gemini API. Please check your internet connection.")
+            else:
+                raise ProviderUtils.handle_provider_error("gemini", e, config.model_name)
     
     async def _complete_response(
         self,
@@ -164,8 +180,24 @@ class GeminiLLM(StreamingLLM, BaseProviderMixin):
                 if chunk.text:
                     yield chunk.text
         except Exception as e:
-            logging.error(f"Gemini streaming error: {str(e)}")
-            raise LLMError(f"Failed to stream response: {str(e)}")
+            error_str = str(e)
+            logging.error(f"Gemini streaming error: {error_str}")
+            
+            # Handle specific Gemini API errors
+            if "User location is not supported" in error_str:
+                raise LLMError(
+                    "Gemini API is not available in your geographic location. "
+                    "Please configure an alternative LLM provider (OpenAI, Ollama, etc.) "
+                    "or use a VPN to access from a supported region."
+                )
+            elif "API key" in error_str.lower():
+                raise LLMError("Invalid or missing Gemini API key. Please check your configuration.")
+            elif "quota" in error_str.lower() or "rate limit" in error_str.lower():
+                raise LLMError("Gemini API quota or rate limit exceeded. Please try again later.")
+            elif "connection" in error_str.lower():
+                raise LLMError("Unable to connect to Gemini API. Please check your internet connection.")
+            else:
+                raise LLMError(f"Gemini API error: {error_str}")
     
     async def stream_generate(
         self,

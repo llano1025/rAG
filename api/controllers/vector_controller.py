@@ -647,6 +647,7 @@ class VectorController:
     def _is_supported_file_type(self, content_type: str) -> bool:
         """Check if file type is supported for processing."""
         supported_types = [
+            # Document types
             'text/plain',
             'application/pdf',
             'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -654,7 +655,27 @@ class VectorController:
             'text/html',
             'application/json',
             'text/markdown',
-            'text/csv'
+            'text/csv',
+            'text/rtf',
+            'application/rtf',
+            # Image types (for OCR processing)
+            'image/jpeg',
+            'image/jpg',
+            'image/png',
+            'image/tiff',
+            'image/tif',
+            'image/gif',
+            'image/pjpeg',
+            'image/x-png',
+            'image/webp',
+            'image/bmp',
+            'image/x-ms-bmp',
+            # Additional variations
+            'image/jp2',
+            'image/jpx',
+            'image/jpm',
+            'image/jpeg2000',
+            'image/jpeg2000-image',
         ]
         return content_type in supported_types
     

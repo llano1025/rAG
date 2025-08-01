@@ -65,7 +65,8 @@ class TextExtractor:
             'text/html': self._extract_from_html,
             'image/jpeg': self._extract_from_image,
             'image/png': self._extract_from_image,
-            'image/tiff': self._extract_from_image
+            'image/tiff': self._extract_from_image,
+            'image/gif': self._extract_from_image
         }
 
         extractor = extractors.get(mime_type)
@@ -100,7 +101,8 @@ class TextExtractor:
             'text/html': '.html',
             'image/jpeg': '.jpg',
             'image/png': '.png',
-            'image/tiff': '.tiff'
+            'image/tiff': '.tiff',
+            'image/gif': '.gif'
         }
         return extensions.get(content_type, '.tmp')
 
@@ -306,7 +308,7 @@ class TextExtractor:
                     self.logger.error("OCRProcessor not available for image text extraction")
                     return f"[Could not extract text from image file: {Path(file_path).name}. OCR dependencies are required for image processing.]"
             
-            return self.ocr_processor.process_image(file_path)
+            return self.ocr_processor.process(file_path)
         except Exception as e:
             self.logger.error(f"Failed to extract text from image {file_path}: {e}")
             return f"[Error extracting text from image file: {str(e)}]"

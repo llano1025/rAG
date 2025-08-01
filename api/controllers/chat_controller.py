@@ -1,6 +1,7 @@
 # api/controllers/chat_controller.py
 
 from typing import List, Dict, Any, Optional, AsyncGenerator
+import asyncio
 import logging
 import json
 import uuid
@@ -285,7 +286,7 @@ class ChatController:
             "temperature": 0.7,
             "max_tokens": 2048,
             "use_rag": True,
-            "search_type": "semantic",
+            "search_type": "hybrid",
             "top_k_documents": 5,
             "enable_fallback": True,  # Enable text search fallback by default
             "fallback_threshold": 1   # Minimum number of results before fallback kicks in
@@ -324,9 +325,9 @@ class ChatController:
         validated_settings["max_tokens"] = max(1, min(8192, int(validated_settings["max_tokens"])))
         validated_settings["top_k_documents"] = max(1, min(20, int(validated_settings["top_k_documents"])))
         
-        # Validate search type
-        if validated_settings["search_type"] not in ["semantic", "hybrid", "basic"]:
-            validated_settings["search_type"] = "semantic"
+        # Validate search type - match Enhanced Search Engine supported types
+        if validated_settings["search_type"] not in ["semantic", "keyword", "hybrid", "contextual"]:
+            validated_settings["search_type"] = "hybrid"
         
         # Validate boolean settings
         validated_settings["enable_fallback"] = bool(validated_settings["enable_fallback"])
@@ -563,10 +564,33 @@ class ChatController:
                 
             except Exception as llm_error:
                 logger.error(f"[CHAT] LLM generation failed: {str(llm_error)}", exc_info=True)
+                
+                # Determine appropriate error message and code based on error type
+                error_str = str(llm_error)
+                if "geographic location" in error_str or "location is not supported" in error_str:
+                    error_message = "LLM service is not available in your geographic location. Please configure an alternative provider."
+                    error_code = "geographic_restriction"
+                elif "API key" in error_str:
+                    error_message = "LLM API authentication failed. Please check your API key configuration."
+                    error_code = "auth_error"
+                elif "quota" in error_str.lower() or "rate limit" in error_str.lower():
+                    error_message = "LLM service quota exceeded. Please try again later."
+                    error_code = "quota_exceeded"
+                elif "connection" in error_str.lower() or "network" in error_str.lower():
+                    error_message = "Unable to connect to LLM service. Please check your internet connection."
+                    error_code = "connection_error"
+                elif "timeout" in error_str.lower():
+                    error_message = "LLM service request timed out. Please try again."
+                    error_code = "timeout_error"
+                else:
+                    error_message = f"LLM generation failed: {error_str}"
+                    error_code = "llm_error"
+                
                 error_data = {
                     "type": "error",
-                    "error": f"LLM generation failed: {str(llm_error)}",
-                    "error_code": "llm_error"
+                    "error": error_message,
+                    "error_code": error_code,
+                    "suggestions": self._get_error_suggestions(error_code)
                 }
                 yield f"data: {json.dumps(error_data)}\n\n"
                 return
@@ -639,12 +663,14 @@ class ChatController:
         import time
         start_time = time.time()
         
-        logger.info(f"[RAG_SEARCH] Starting RAG search - User: {user.id}, Query: '{query[:100]}...', Search type: {settings.get('search_type', 'semantic')}, Top-k: {settings.get('top_k_documents', 5)}")
+        logger.info(f"[RAG_SEARCH] Starting RAG search - User: {user.id}, Query: '{query[:100]}...', Search type: {settings.get('search_type', 'hybrid')}, Top-k: {settings.get('top_k_documents', 5)}")
         
-        # Check if hybrid search is requested
-        search_type = settings.get("search_type", "semantic")
+        # Get search type for enhanced search engine
+        search_type = settings.get("search_type", "hybrid")
+        logger.info(f"[RAG_SEARCH] Using search type: {search_type}")
+        
+        # If hybrid search is requested, use the dedicated hybrid method
         if search_type == "hybrid":
-            logger.info(f"[RAG_SEARCH] Using hybrid search mode")
             return await self._perform_hybrid_rag_search(query, settings, user, db)
         
         try:
@@ -693,12 +719,8 @@ class ChatController:
                     logger.debug(f"[RAG_SEARCH] Initializing search engine")
                     from vector_db.storage_manager import VectorStorageManager
                     storage_manager = VectorStorageManager()
-                    self.search_engine = EnhancedSearchEngine(storage_manager)
+                    self.search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
                     logger.info(f"[RAG_SEARCH] Search engine initialized successfully")
-                
-                # Set the embedding manager on the search engine
-                self.search_engine.embedding_manager = embedding_manager
-                logger.debug(f"[RAG_SEARCH] Embedding manager set on search engine")
             except Exception as e:
                 logger.error(f"[RAG_SEARCH] Failed to initialize search engine: {str(e)}")
                 return await self._fallback_to_text_search(query, user, db, settings)
@@ -1097,15 +1119,12 @@ class ChatController:
             if not self.search_engine:
                 from vector_db.storage_manager import VectorStorageManager
                 storage_manager = VectorStorageManager()
-                self.search_engine = EnhancedSearchEngine(storage_manager)
-            
-            # Set the embedding manager on the search engine
-            self.search_engine.embedding_manager = embedding_manager
+                self.search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
             
             # Perform vector search
             search_results = await self.search_engine.search_with_context(
                 query=query,
-                search_type="semantic",  # Force semantic for vector portion
+                search_type=settings.get("search_type", "semantic"),
                 user_id=user.id,
                 top_k=settings["top_k_documents"] * 2,
                 db=db
@@ -1432,6 +1451,42 @@ class ChatController:
             
         except Exception as e:
             logger.error(f"Failed to cleanup old sessions: {str(e)}")
+    
+    def _get_error_suggestions(self, error_code: str) -> List[str]:
+        """Get helpful suggestions based on error type."""
+        suggestions = {
+            "geographic_restriction": [
+                "Configure an alternative LLM provider (OpenAI, Ollama)",
+                "Use a VPN to access from a supported region",
+                "Check the provider's supported regions documentation"
+            ],
+            "auth_error": [
+                "Verify your API key is correct and active",
+                "Check if your API key has the required permissions",
+                "Try regenerating your API key from the provider's dashboard"
+            ],
+            "quota_exceeded": [
+                "Wait for your quota to reset (usually at start of next billing period)",
+                "Upgrade your API plan for higher limits",
+                "Try using a different LLM provider as backup"
+            ],
+            "connection_error": [
+                "Check your internet connection",
+                "Verify the API endpoint is accessible",
+                "Try again in a few moments"
+            ],
+            "timeout_error": [
+                "Try with a shorter prompt",
+                "Reduce the maximum response length",
+                "Try again with the same request"
+            ]
+        }
+        
+        return suggestions.get(error_code, [
+            "Try again in a few moments",
+            "Check your configuration settings",
+            "Contact support if the issue persists"
+        ])
 
 # Global instance
 chat_controller = ChatController()

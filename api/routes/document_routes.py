@@ -48,11 +48,22 @@ async def upload_document(
     tags: Optional[str] = Form(None),  # JSON string of tags
     metadata: Optional[str] = Form(None),  # JSON string of metadata
     embedding_model: Optional[str] = Form(None),  # Embedding model ID
+    ocr_method: Optional[str] = Form(None),  # OCR method for images
+    ocr_language: Optional[str] = Form(None),  # OCR language
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
     controller: DocumentController = Depends(get_document_controller)
 ):
     """Upload a new document with optional folder and tags."""
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    logger.info(f"=== UPLOAD ROUTE START ===")
+    logger.info(f"Route: Upload document - Filename: {file.filename}")
+    logger.info(f"Route: File content type: {file.content_type}")
+    logger.info(f"Route: File size: {file.size if hasattr(file, 'size') else 'unknown'}")
+    logger.info(f"Route: OCR method: {ocr_method}, OCR language: {ocr_language}")
+    
     try:
         # Parse tags and metadata if provided
         parsed_tags = []
@@ -72,6 +83,8 @@ async def upload_document(
             except json.JSONDecodeError:
                 parsed_metadata = {}
         
+        logger.info(f"Route: Calling controller.process_upload...")
+        
         document = await controller.process_upload(
             file=file,
             user=current_user,
@@ -79,12 +92,19 @@ async def upload_document(
             tags=parsed_tags,
             metadata=parsed_metadata,
             embedding_model=embedding_model,
+            ocr_method=ocr_method,
+            ocr_language=ocr_language,
             db=db
         )
+        
+        logger.info(f"Route: Upload successful - Document ID: {document.get('document_id', 'unknown')}")
         return document
-    except HTTPException:
+    except HTTPException as he:
+        logger.error(f"Route: HTTPException caught - Status: {he.status_code}, Detail: {he.detail}")
         raise
     except Exception as e:
+        logger.error(f"Route: Generic exception caught - Type: {type(e).__name__}, Message: {str(e)}")
+        logger.exception(f"Route: Full exception traceback:")
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/batch-upload")
@@ -93,11 +113,21 @@ async def batch_upload_documents(
     folder_id: Optional[str] = Form(None),
     tags: Optional[str] = Form(None),
     embedding_model: Optional[str] = Form(None),  # Embedding model ID
+    ocr_method: Optional[str] = Form(None),  # OCR method for images
+    ocr_language: Optional[str] = Form(None),  # OCR language
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
     controller: DocumentController = Depends(get_document_controller)
 ):
     """Upload multiple documents simultaneously."""
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    logger.info(f"=== BATCH UPLOAD ROUTE START ===")
+    logger.info(f"Route: Batch upload - Number of files: {len(files)}")
+    logger.info(f"Route: First file name: {files[0].filename if files else 'None'}")
+    logger.info(f"Route: OCR method: {ocr_method}, OCR language: {ocr_language}")
+    
     try:
         # Parse tags if provided
         parsed_tags = []
@@ -114,6 +144,8 @@ async def batch_upload_documents(
             folder_id=folder_id,
             tags=parsed_tags,
             embedding_model=embedding_model,
+            ocr_method=ocr_method,
+            ocr_language=ocr_language,
             db=db
         )
         return result

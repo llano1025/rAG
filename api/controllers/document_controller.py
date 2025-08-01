@@ -43,16 +43,40 @@ class DocumentController:
         audit_logger: AuditLogger = None
     ):
         """Initialize document controller with dependencies."""
+        logger.info("DocumentController.__init__: Starting DocumentController initialization...")
+        logger.info(f"DocumentController.__init__: vector_controller provided: {vector_controller is not None}")
+        logger.info(f"DocumentController.__init__: audit_logger provided: {audit_logger is not None}")
+        
         self.vector_controller = vector_controller or get_vector_controller(audit_logger=audit_logger)
         self.audit_logger = audit_logger
         
         # File processing components
-        self.type_detector = FileTypeDetector()
-        self.text_extractor = TextExtractor()
-        self.metadata_extractor = MetadataExtractor()
+        logger.info("DocumentController: Initializing file processing components...")
+        try:
+            self.type_detector = FileTypeDetector()
+            logger.info("DocumentController: FileTypeDetector initialized successfully")
+        except Exception as e:
+            logger.error(f"DocumentController: Failed to initialize FileTypeDetector: {e}")
+            raise
+            
+        try:
+            self.text_extractor = TextExtractor()
+            logger.info("DocumentController: TextExtractor initialized successfully")
+        except Exception as e:
+            logger.error(f"DocumentController: Failed to initialize TextExtractor: {e}")
+            raise
+            
+        try:
+            self.metadata_extractor = MetadataExtractor()
+            logger.info("DocumentController: MetadataExtractor initialized successfully")
+        except Exception as e:
+            logger.error(f"DocumentController: Failed to initialize MetadataExtractor: {e}")
+            raise
         
         # Configuration
+        logger.info("DocumentController.__init__: Setting up configuration...")
         self.max_file_size = 50 * 1024 * 1024  # 50MB
+        # Ensure we have comprehensive MIME type support
         self.allowed_content_types = [
             'text/plain',
             'application/pdf',
@@ -61,8 +85,26 @@ class DocumentController:
             'text/html',
             'application/json',
             'text/markdown',
-            'text/csv'
+            'text/csv',
+            # Image types for OCR processing - comprehensive list
+            'image/jpeg',
+            'image/jpg',  # Common MIME type variation
+            'image/png',
+            'image/tiff',
+            'image/tif',  # Common MIME type variation
+            'image/gif',
+            # Additional variations that might be detected
+            'image/pjpeg',  # Progressive JPEG
+            'image/x-png',  # Alternative PNG
         ]
+        
+        # Log the final configuration
+        logger.info(f"DocumentController.__init__: Max file size: {self.max_file_size / (1024*1024)}MB")
+        logger.info(f"DocumentController.__init__: Allowed content types ({len(self.allowed_content_types)} total):")
+        for i, content_type in enumerate(self.allowed_content_types, 1):
+            logger.info(f"DocumentController.__init__:   {i:2d}. {content_type}")
+        logger.info(f"DocumentController.__init__: 'image/jpeg' in allowed types: {'image/jpeg' in self.allowed_content_types}")
+        logger.info("DocumentController.__init__: DocumentController initialization completed successfully!")
     
     async def process_upload(
         self,
@@ -72,6 +114,8 @@ class DocumentController:
         tags: Optional[List[str]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         embedding_model: Optional[str] = None,
+        ocr_method: Optional[str] = None,
+        ocr_language: Optional[str] = None,
         db: Session = None
     ) -> Dict[str, Any]:
         """
@@ -83,14 +127,27 @@ class DocumentController:
             folder_id: Optional folder ID
             tags: Optional list of tags
             metadata: Optional additional metadata
+            embedding_model: Optional embedding model to use
+            ocr_method: Optional OCR method ('tesseract' or 'vision_llm')
+            ocr_language: Optional OCR language code
             db: Database session
             
         Returns:
             Dictionary with upload results
         """
         try:
+            logger.info(f"DocumentController: Starting file validation for {file.filename}")
+            
             # Validate file
-            await self._validate_file(file)
+            try:
+                await self._validate_file(file)
+                logger.info(f"DocumentController: File validation successful for {file.filename}")
+            except Exception as ve:
+                logger.error(f"DocumentController: File validation failed for {file.filename}")
+                logger.error(f"DocumentController: Validation error type: {type(ve).__name__}")
+                logger.error(f"DocumentController: Validation error message: {str(ve)}")
+                logger.exception(f"DocumentController: Full validation exception traceback:")
+                raise  # Re-raise the original exception
             
             # Check if vector controller is available
             if self.vector_controller is None:
@@ -104,12 +161,21 @@ class DocumentController:
             file_content = await file.read()
             await file.seek(0)  # Reset file pointer
             
+            # Prepare metadata with OCR settings for image files
+            enhanced_metadata = metadata or {}
+            if file.content_type and file.content_type.startswith('image/'):
+                enhanced_metadata.update({
+                    'ocr_method': ocr_method or 'tesseract',
+                    'ocr_language': ocr_language or 'eng',
+                    'requires_ocr': True
+                })
+            
             # Process upload using vector controller
             result = await self.vector_controller.upload_document(
                 file_content=file_content,
                 filename=file.filename,
                 user=user,
-                metadata=metadata or {},
+                metadata=enhanced_metadata,
                 embedding_model=embedding_model,
                 tags=tags,
                 db=db
@@ -148,6 +214,8 @@ class DocumentController:
         folder_id: Optional[str] = None,
         tags: Optional[List[str]] = None,
         embedding_model: Optional[str] = None,
+        ocr_method: Optional[str] = None,
+        ocr_language: Optional[str] = None,
         db: Session = None
     ) -> List[Dict[str, Any]]:
         """
@@ -179,6 +247,8 @@ class DocumentController:
                     folder_id=folder_id,
                     tags=tags,
                     embedding_model=embedding_model,
+                    ocr_method=ocr_method,
+                    ocr_language=ocr_language,
                     db=db
                 )
                 tasks.append(task)
@@ -637,22 +707,109 @@ class DocumentController:
     
     async def _validate_file(self, file: UploadFile):
         """Validate uploaded file."""
+        logger.info(f"_validate_file: Starting validation for {file.filename}")
+        logger.info(f"_validate_file: File content_type from FastAPI: {file.content_type}")
+        
         # Check file size
+        logger.info(f"_validate_file: Reading file content...")
         file_content = await file.read()
         await file.seek(0)  # Reset file pointer
+        logger.info(f"_validate_file: File content read - Size: {len(file_content)} bytes")
         
         if len(file_content) > self.max_file_size:
+            logger.error(f"_validate_file: File size check failed - {len(file_content)} > {self.max_file_size}")
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail=f"File size exceeds {self.max_file_size / (1024*1024)}MB limit"
             )
         
+        logger.info(f"_validate_file: File size check passed")
+        logger.info(f"_validate_file: About to call type_detector.detect_type...")
+        logger.info(f"_validate_file: TypeDetector instance: {self.type_detector}")
+        
         # Check content type
-        content_type = self.type_detector.detect_type(file_content=file_content, filename=file.filename)
-        if content_type not in self.allowed_content_types:
+        try:
+            content_type = self.type_detector.detect_type(file_content=file_content, filename=file.filename)
+            logger.info(f"_validate_file: Type detection successful - Detected: {content_type}")
+            logger.info(f"_validate_file: Content type type: {type(content_type)}")
+            logger.info(f"_validate_file: Content type repr: {repr(content_type)}")
+        except Exception as te:
+            logger.error(f"_validate_file: Type detection failed")
+            logger.error(f"_validate_file: Type detection error type: {type(te).__name__}")
+            logger.error(f"_validate_file: Type detection error message: {str(te)}")
+            logger.exception(f"_validate_file: Full type detection exception traceback:")
+            
+            # Convert UnsupportedFileType to HTTPException with proper error message
+            from file_processor.type_detector import UnsupportedFileType
+            if isinstance(te, UnsupportedFileType):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=str(te)
+                )
+            else:
+                raise  # Re-raise other exceptions
+        
+        # Debug logging for file type validation
+        logger.info(f"File upload validation - Filename: {file.filename}")
+        logger.info(f"File upload validation - Detected MIME type: {content_type}")
+        logger.info(f"File upload validation - File size: {len(file_content)} bytes")
+        logger.info(f"File upload validation - Allowed content types: {self.allowed_content_types}")
+        logger.info(f"File upload validation - Number of allowed types: {len(self.allowed_content_types)}")
+        logger.info(f"File upload validation - MIME type in allowed list: {content_type in self.allowed_content_types}")
+        
+        # Additional debugging - check each allowed type
+        logger.info("File upload validation - Checking each allowed type:")
+        for i, allowed_type in enumerate(self.allowed_content_types):
+            matches = content_type == allowed_type
+            logger.info(f"  {i+1:2d}. {repr(allowed_type)} == {repr(content_type)}: {matches}")
+        
+        # Check if the content type is in allowed types, with fallback for image files
+        is_allowed = content_type in self.allowed_content_types
+        
+        # Fallback: If it's an image type but not in allowed types, check if it's a reasonable image type
+        if not is_allowed and content_type and content_type.startswith('image/'):
+            # Check if this is a reasonable image extension that we should support
+            filename_lower = file.filename.lower() if file.filename else ''
+            if any(filename_lower.endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.tiff', '.tif']):
+                logger.warning(f"Allowing image file with MIME type '{content_type}' based on filename '{file.filename}'")
+                is_allowed = True
+                # Add this MIME type to allowed types for future uploads
+                self.allowed_content_types.append(content_type)
+        
+        if not is_allowed:
+            # Enhanced error logging for debugging
+            logger.error(f"DocumentController validation failed - Content type '{content_type}' not in allowed types")
+            logger.error(f"Available allowed_content_types: {self.allowed_content_types}")
+            logger.error(f"Content type '{content_type}' in allowed list: {content_type in self.allowed_content_types}")
+            logger.error(f"Type of content_type: {type(content_type)}")
+            logger.error(f"Repr of content_type: {repr(content_type)}")
+            
+            # Get supported file types for error message
+            supported_formats = []
+            for mime_type in self.allowed_content_types:
+                if mime_type.startswith('text/'):
+                    supported_formats.append('Text files')
+                elif mime_type.startswith('application/pdf'):
+                    supported_formats.append('PDF')
+                elif 'word' in mime_type:
+                    supported_formats.append('Word documents')
+                elif mime_type.startswith('image/'):
+                    supported_formats.append('Images (PNG, JPG, GIF, TIFF)')
+                elif mime_type.startswith('text/html'):
+                    supported_formats.append('HTML')
+                elif mime_type.startswith('application/json'):
+                    supported_formats.append('JSON')
+                elif mime_type.startswith('text/markdown'):
+                    supported_formats.append('Markdown')
+                elif mime_type.startswith('text/csv'):
+                    supported_formats.append('CSV')
+            
+            unique_formats = list(set(supported_formats))
+            supported_text = ', '.join(unique_formats)
+            
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"File type '{content_type}' is not supported"
+                detail=f"Unsupported file type: {content_type}"
             )
 
 
@@ -673,18 +830,26 @@ def get_audit_logger() -> AuditLogger:
 
 def get_document_controller() -> DocumentController:
     """Get document controller instance with dependencies."""
+    logger.info("get_document_controller: Creating new DocumentController instance...")
     try:
         # Get audit logger
+        logger.info("get_document_controller: Getting audit logger...")
         audit_logger = get_audit_logger()
         
         # Get vector controller with proper initialization
+        logger.info("get_document_controller: Getting vector controller...")
         vector_controller = get_vector_controller(audit_logger=audit_logger)
         
-        return DocumentController(
+        logger.info("get_document_controller: Creating DocumentController with dependencies...")
+        controller = DocumentController(
             vector_controller=vector_controller,
             audit_logger=audit_logger
         )
+        logger.info("get_document_controller: DocumentController created successfully")
+        return controller
     except Exception as e:
-        logger.error(f"Failed to initialize document controller: {e}")
+        logger.error(f"get_document_controller: Failed to initialize document controller: {e}")
+        logger.exception("get_document_controller: Full exception traceback:")
         # Return a minimal controller without vector functionality
+        logger.info("get_document_controller: Creating minimal DocumentController fallback...")
         return DocumentController(audit_logger=get_audit_logger())

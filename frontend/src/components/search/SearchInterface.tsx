@@ -362,9 +362,9 @@ export default function SearchInterface() {
                     {...register('searchType')}
                     className="border border-gray-300 rounded-md px-3 py-1 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
                   >
-                    <option value="basic">Basic</option>
+                    <option value="hybrid">Hybrid (Recommended)</option>
                     <option value="semantic">Semantic</option>
-                    <option value="hybrid">Hybrid</option>
+                    <option value="basic">Basic</option>
                   </select>
                 </div>
 
@@ -405,7 +405,7 @@ export default function SearchInterface() {
             <div className="text-xs text-gray-500">
               {searchType === 'basic' && 'Keyword-based search using traditional text matching'}
               {searchType === 'semantic' && 'AI-powered semantic search understanding context and meaning'}
-              {searchType === 'hybrid' && 'Combined keyword and semantic search for best results'}
+              {searchType === 'hybrid' && '🚀 Recommended: Combined keyword and semantic search for best results'}
             </div>
           </form>
 

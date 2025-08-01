@@ -1,9 +1,11 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { CloudArrowUpIcon, XMarkIcon, FolderIcon, CpuChipIcon } from '@heroicons/react/24/outline';
+import { CloudArrowUpIcon, XMarkIcon, FolderIcon, CpuChipIcon, EyeIcon } from '@heroicons/react/24/outline';
 import { documentsApi } from '@/api/documents';
 import { apiClient } from '@/api/client';
 import TagInput from '@/components/common/TagInput';
+import OCRSettings from '@/components/ocr/OCRSettings';
+import OCRPreview from '@/components/ocr/OCRPreview';
 import toast from 'react-hot-toast';
 
 interface UploadFile {
@@ -36,6 +38,12 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
   const [embeddingModels, setEmbeddingModels] = useState<EmbeddingModel[]>([]);
   const [selectedEmbeddingModel, setSelectedEmbeddingModel] = useState<string>('hf-minilm-l6-v2'); // Default to fast model
   const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
+  
+  // OCR settings
+  const [ocrMethod, setOcrMethod] = useState<string>('tesseract');
+  const [ocrLanguage, setOcrLanguage] = useState<string>('eng');
+  const [showOcrSettings, setShowOcrSettings] = useState(false);
+  const [previewFile, setPreviewFile] = useState<File | null>(null);
 
   // Load embedding models on component mount
   useEffect(() => {
@@ -71,7 +79,7 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
       'text/plain': ['.txt'],
       'text/html': ['.html'],
-      'image/*': ['.png', '.jpg', '.jpeg', '.gif'],
+      'image/*': ['.png', '.jpg', '.jpeg', '.gif', '.tiff', '.tif'],
     },
     maxSize: 50 * 1024 * 1024, // 50MB
   });
@@ -93,12 +101,21 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
           f.id === uploadFile.id ? { ...f, status: 'uploading' } : f
         ));
 
+        // Add OCR parameters for image files
+        const uploadParams: any = { 
+          file: uploadFile.file,
+          metadata: { folder_path: folderPath || undefined },
+          embedding_model: selectedEmbeddingModel
+        };
+        
+        // Add OCR settings for image files
+        if (uploadFile.file.type.startsWith('image/')) {
+          uploadParams.ocr_method = ocrMethod;
+          uploadParams.ocr_language = ocrLanguage;
+        }
+
         await documentsApi.uploadDocument(
-          { 
-            file: uploadFile.file,
-            metadata: { folder_path: folderPath || undefined },
-            embedding_model: selectedEmbeddingModel
-          },
+          uploadParams,
           (progress) => {
             setFiles(prev => prev.map(f => 
               f.id === uploadFile.id ? { ...f, progress } : f
@@ -120,6 +137,9 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
           ));
         });
 
+        // Check if any files are images to determine if OCR params are needed
+        const hasImages = fileList.some(file => file.type.startsWith('image/'));
+        
         await documentsApi.uploadBatchDocuments(
           fileList,
           (progress) => {
@@ -131,7 +151,9 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
           },
           tags.length > 0 ? tags : undefined,
           folderPath ? { folder_path: folderPath } : undefined,
-          selectedEmbeddingModel
+          selectedEmbeddingModel,
+          hasImages ? ocrMethod : undefined,
+          hasImages ? ocrLanguage : undefined
         );
 
         pendingFiles.forEach(uploadFile => {
@@ -196,7 +218,7 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
             : 'Drag & drop files here, or click to browse'}
         </p>
         <p className="text-xs text-gray-500 mt-1">
-          Supports PDF, Word, Text, HTML, and Images (max 50MB each)
+          Supports PDF, Word, Text, HTML, and Images (PNG, JPG, GIF, TIFF) - max 50MB each
         </p>
       </div>
 
@@ -279,6 +301,44 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
             )}
           </div>
         )}
+
+        {/* OCR Settings for images */}
+        {showAdvancedOptions && (
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-sm font-medium text-gray-700">
+                OCR Settings (for images)
+              </label>
+              <button
+                type="button"
+                onClick={() => setShowOcrSettings(!showOcrSettings)}
+                className="text-sm text-blue-600 hover:text-blue-800"
+              >
+                {showOcrSettings ? 'Hide' : 'Configure'}
+              </button>
+            </div>
+            
+            {showOcrSettings && (
+              <OCRSettings
+                selectedMethod={ocrMethod}
+                selectedLanguage={ocrLanguage}
+                onMethodChange={setOcrMethod}
+                onLanguageChange={setOcrLanguage}
+                showAdvanced={true}
+              />
+            )}
+
+            {!showOcrSettings && (
+              <div className="text-sm text-gray-600 p-3 bg-gray-50 rounded-lg">
+                <p>Method: <span className="font-medium">{ocrMethod}</span></p>
+                <p>Language: <span className="font-medium">{ocrLanguage}</span></p>
+                <p className="text-xs text-gray-500 mt-1">
+                  These settings will be applied to uploaded image files for text extraction.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* File list */}
@@ -317,14 +377,27 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
                 )}
               </div>
               
-              {uploadFile.status === 'pending' && (
-                <button
-                  onClick={() => removeFile(uploadFile.id)}
-                  className="ml-2 p-1 text-gray-400 hover:text-gray-600"
-                >
-                  <XMarkIcon className="h-4 w-4" />
-                </button>
-              )}
+              <div className="flex items-center space-x-2">
+                {/* OCR Preview button for images */}
+                {uploadFile.status === 'pending' && uploadFile.file.type.startsWith('image/') && (
+                  <button
+                    onClick={() => setPreviewFile(uploadFile.file)}
+                    className="p-1 text-blue-500 hover:text-blue-700 transition-colors"
+                    title="Preview OCR"
+                  >
+                    <EyeIcon className="h-4 w-4" />
+                  </button>
+                )}
+                
+                {uploadFile.status === 'pending' && (
+                  <button
+                    onClick={() => removeFile(uploadFile.id)}
+                    className="p-1 text-gray-400 hover:text-gray-600"
+                  >
+                    <XMarkIcon className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
             </div>
           ))}
           
@@ -339,6 +412,20 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
             </button>
           )}
         </div>
+      )}
+      
+      {/* OCR Preview Modal */}
+      {previewFile && (
+        <OCRPreview
+          file={previewFile}
+          ocrMethod={ocrMethod}
+          ocrLanguage={ocrLanguage}
+          onClose={() => setPreviewFile(null)}
+          onAccept={(result) => {
+            // Handle OCR result if needed
+            setPreviewFile(null);
+          }}
+        />
       )}
     </div>
   );

@@ -111,10 +111,10 @@ class EnhancedSearchEngine:
     - Multi-index search across user documents
     """
     
-    def __init__(self, storage_manager: VectorStorageManager = None):
+    def __init__(self, storage_manager: VectorStorageManager = None, embedding_manager = None):
         """Initialize enhanced search engine."""
         self.storage_manager = storage_manager or get_storage_manager()
-        self.embedding_manager = None  # Will be initialized lazily
+        self.embedding_manager = embedding_manager  # Use provided or initialize lazily
         self.context_processor = ContextProcessor()
         
         # Search configuration
@@ -308,7 +308,110 @@ class EnhancedSearchEngine:
         limit: int,
         db: Session
     ) -> List[SearchResult]:
-        """Perform semantic vector search."""
+        """Perform intelligent multi-embedding semantic search."""
+        try:
+            # Import query processor for intelligent search
+            from utils.search.query_processor import get_query_processor
+            
+            embedding_manager = self._get_embedding_manager_instance()
+            query_processor = get_query_processor()
+            
+            # Process query to extract semantic components
+            processed_query = query_processor.process_query(query)
+            
+            logger.info(f"Semantic search with strategy: {processed_query.search_strategy}, "
+                       f"concepts: {processed_query.primary_terms}, metadata: {processed_query.secondary_terms}")
+            
+            # Generate multiple embeddings based on query strategy
+            embeddings_to_search = []
+            
+            # Always include full query embedding
+            full_query_embeddings = await embedding_manager.generate_embeddings([query])
+            embeddings_to_search.append(("full_query", full_query_embeddings[0], 0.4))
+            
+            # Add concept-based embeddings if we have primary terms
+            if processed_query.primary_terms:
+                concepts_text = " ".join(processed_query.primary_terms)
+                concept_embeddings = await embedding_manager.generate_embeddings([concepts_text])
+                embeddings_to_search.append(("concepts", concept_embeddings[0], 0.6))
+            
+            # Add expanded query embedding for better recall
+            if processed_query.confidence < 0.8:
+                expanded_query = query_processor.expand_query(processed_query)
+                expanded_text = " ".join(expanded_query.primary_terms)
+                if expanded_text != query and len(expanded_text.strip()) > 0:
+                    expanded_embeddings = await embedding_manager.generate_embeddings([expanded_text])
+                    embeddings_to_search.append(("expanded", expanded_embeddings[0], 0.3))
+            
+            # Search with multiple embeddings
+            all_results = {}  # unique_key -> best result
+            
+            for doc_id in filters.document_ids:
+                index_name = f"doc_{doc_id}"
+                doc_results = {}  # chunk_id -> best score
+                
+                # Search with each embedding strategy
+                for strategy_name, query_vector, weight in embeddings_to_search:
+                    try:
+                        # Search content vectors
+                        results = await self.storage_manager.search_vectors(
+                            index_name=index_name,
+                            query_vector=query_vector,
+                            vector_type="content",
+                            limit=limit * 2,  # Get more results for fusion
+                            score_threshold=filters.min_score or 0.1,
+                            use_faiss=True
+                        )
+                        
+                        # Process results with weighted scoring
+                        for result in results:
+                            chunk_id = result.get('metadata', {}).get('chunk_id')
+                            if chunk_id:
+                                weighted_score = result.get('score', 0.0) * weight
+                                
+                                if chunk_id not in doc_results or weighted_score > doc_results[chunk_id]['score']:
+                                    doc_results[chunk_id] = {
+                                        'result': result,
+                                        'score': weighted_score,
+                                        'strategy': strategy_name
+                                    }
+                                    
+                    except Exception as e:
+                        logger.warning(f"Search failed for {strategy_name} on doc {doc_id}: {e}")
+                        continue
+                
+                # Convert best results for this document
+                for chunk_data in doc_results.values():
+                    search_result = await self._create_search_result(chunk_data['result'], db)
+                    if search_result:
+                        # Update score with weighted value
+                        search_result.score = chunk_data['score']
+                        search_result.metadata['search_strategy'] = chunk_data['strategy']
+                        
+                        result_key = f"{search_result.document_id}_{search_result.chunk_id}"
+                        if result_key not in all_results or search_result.score > all_results[result_key].score:
+                            all_results[result_key] = search_result
+            
+            # Convert to list and sort by score
+            final_results = list(all_results.values())
+            final_results.sort(key=lambda x: x.score, reverse=True)
+            
+            logger.info(f"Multi-embedding semantic search completed: {len(final_results)} results")
+            return final_results[:limit]
+            
+        except Exception as e:
+            logger.error(f"Multi-embedding semantic search failed: {e}")
+            # Fallback to simple semantic search
+            return await self._simple_semantic_search(query, filters, limit, db)
+    
+    async def _simple_semantic_search(
+        self,
+        query: str,
+        filters: SearchFilter,
+        limit: int,
+        db: Session
+    ) -> List[SearchResult]:
+        """Simple fallback semantic search."""
         try:
             # Generate query embedding
             embedding_manager = self._get_embedding_manager_instance()
@@ -342,7 +445,7 @@ class EnhancedSearchEngine:
             return all_results[:limit]
             
         except Exception as e:
-            logger.error(f"Semantic search failed: {e}")
+            logger.error(f"Simple semantic search failed: {e}")
             return []
     
     async def _contextual_search(

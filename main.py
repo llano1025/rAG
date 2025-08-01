@@ -7,7 +7,7 @@ import os
 from typing import Dict, Any
 from pathlib import Path
 
-from api.routes import document_routes, search_routes, vector_routes, library_routes, user_routes, auth_routes, health_routes, admin_routes, advanced_routes, analytics_routes, chat_routes
+from api.routes import document_routes, search_routes, vector_routes, library_routes, user_routes, auth_routes, health_routes, admin_routes, advanced_routes, analytics_routes, chat_routes, ocr_routes
 from api.middleware.auth import AuthMiddleware
 from api.middleware.error_handler import ErrorHandler
 from api.middleware.rate_limiter import RateLimiter
@@ -145,6 +145,25 @@ def create_app() -> FastAPI:
             allowed_hosts=os.getenv("TRUSTED_HOSTS").split(",")
         )
     
+    # Add request logging middleware for debugging
+    @app.middleware("http")
+    async def log_requests(request, call_next):
+        import time
+        import logging
+        logger = logging.getLogger("middleware")
+        
+        start_time = time.time()
+        logger.info(f"🔍 REQUEST: {request.method} {request.url.path}")
+        logger.info(f"🔍 REQUEST HEADERS: {dict(request.headers)}")
+        logger.info(f"🔍 REQUEST QUERY PARAMS: {dict(request.query_params)}")
+        
+        response = await call_next(request)
+        
+        process_time = time.time() - start_time
+        logger.info(f"🔍 RESPONSE: {response.status_code} in {process_time:.3f}s")
+        
+        return response
+    
     # Add custom middleware
     app.add_middleware(ErrorHandler)
     # app.add_middleware(RateLimiter)  # Disabled for testing - requires proper configuration
@@ -157,6 +176,7 @@ def create_app() -> FastAPI:
     app.include_router(vector_routes.router, prefix="/api")
     app.include_router(library_routes.router, prefix="/api")
     app.include_router(chat_routes.router, prefix="/api")
+    app.include_router(ocr_routes.router, prefix="/api")
     app.include_router(health_routes.router, prefix="/api")
     app.include_router(admin_routes.router, prefix="/api")
     app.include_router(advanced_routes.router, prefix="/api")
