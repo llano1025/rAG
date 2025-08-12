@@ -25,11 +25,18 @@ interface OCRLanguage {
   supported_by: string[];
 }
 
+interface VisionProvider {
+  available: boolean;
+  model: string;
+  display_name: string;
+}
+
 interface OCRConfig {
   ocr_enabled: boolean;
   default_language: string;
+  default_vision_provider: string;
   tesseract_available: boolean;
-  vision_llm_available: boolean;
+  vision_providers: Record<string, VisionProvider>;
   max_file_size_mb: number;
   supported_formats: string[];
   batch_limit: number;
@@ -38,16 +45,20 @@ interface OCRConfig {
 interface OCRSettingsProps {
   selectedMethod: string;
   selectedLanguage: string;
+  selectedVisionProvider?: string;
   onMethodChange: (method: string) => void;
   onLanguageChange: (language: string) => void;
+  onVisionProviderChange?: (provider: string) => void;
   showAdvanced?: boolean;
 }
 
 export default function OCRSettings({
   selectedMethod,
   selectedLanguage,
+  selectedVisionProvider,
   onMethodChange,
   onLanguageChange,
+  onVisionProviderChange,
   showAdvanced = false
 }: OCRSettingsProps) {
   const [ocrMethods, setOcrMethods] = useState<OCRMethod[]>([]);
@@ -71,9 +82,9 @@ export default function OCRSettings({
         apiClient.get('/api/ocr/config')
       ]);
       
-      setOcrMethods(methodsResponse);
-      setOcrLanguages(languagesResponse);
-      setOcrConfig(configResponse);
+      setOcrMethods(methodsResponse as OCRMethod[]);
+      setOcrLanguages(languagesResponse as OCRLanguage[]);
+      setOcrConfig(configResponse as OCRConfig);
       
     } catch (error) {
       console.error('Failed to load OCR settings:', error);
@@ -144,7 +155,7 @@ export default function OCRSettings({
                   checked={selectedMethod === method.method}
                   onChange={(e) => onMethodChange(e.target.value)}
                   className="mt-1 mr-3"
-                  disabled={method.requires_api_key && !ocrConfig?.vision_llm_available}
+                  disabled={method.requires_api_key && !Object.values(ocrConfig?.vision_providers || {}).some(p => p.available)}
                 />
                 <div className="flex-1">
                   <div className="flex items-center justify-between">
@@ -166,7 +177,7 @@ export default function OCRSettings({
                       {method.requires_api_key && (
                         <p className="text-amber-600 mt-1">
                           ⚠️ Requires API key configuration
-                          {!ocrConfig?.vision_llm_available && ' (not available)'}
+                          {!Object.values(ocrConfig?.vision_providers || {}).some(p => p.available) && ' (no providers available)'}
                         </p>
                       )}
                     </div>
@@ -177,6 +188,77 @@ export default function OCRSettings({
           ))}
         </div>
       </div>
+
+      {/* Vision Provider Selection - only show if Vision LLM is selected */}
+      {selectedMethod === 'vision_llm' && ocrConfig?.vision_providers && (
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
+          <h3 className="text-lg font-medium text-gray-900 flex items-center mb-4">
+            <EyeIcon className="h-5 w-5 mr-2" />
+            Vision AI Provider
+          </h3>
+
+          <div className="space-y-3">
+            {Object.entries(ocrConfig.vision_providers).map(([key, provider]) => (
+              <div key={key} className="relative">
+                <label className={`flex items-start p-3 border rounded-lg cursor-pointer transition-colors ${
+                  provider.available 
+                    ? 'border-gray-200 hover:bg-gray-50' 
+                    : 'border-gray-100 bg-gray-50 cursor-not-allowed'
+                }`}>
+                  <input
+                    type="radio"
+                    name="visionProvider"
+                    value={key}
+                    checked={selectedVisionProvider === key || (!selectedVisionProvider && key === ocrConfig.default_vision_provider)}
+                    onChange={(e) => onVisionProviderChange?.(e.target.value)}
+                    className="mt-1 mr-3"
+                    disabled={!provider.available}
+                  />
+                  <div className="flex-1">
+                    <div className="flex items-center justify-between">
+                      <h4 className={`font-medium ${provider.available ? 'text-gray-900' : 'text-gray-400'}`}>
+                        {provider.display_name}
+                        {!provider.available && (
+                          <span className="ml-2 px-2 py-1 text-xs bg-red-100 text-red-600 rounded-full">
+                            API Key Required
+                          </span>
+                        )}
+                        {key === ocrConfig.default_vision_provider && (
+                          <span className="ml-2 px-2 py-1 text-xs bg-blue-100 text-blue-600 rounded-full">
+                            Default
+                          </span>
+                        )}
+                      </h4>
+                    </div>
+                    <p className={`text-sm mt-1 ${provider.available ? 'text-gray-600' : 'text-gray-400'}`}>
+                      Model: {provider.model}
+                    </p>
+                    {!provider.available && (
+                      <p className="text-xs text-red-600 mt-1">
+                        Configure API key in settings to enable this provider
+                      </p>
+                    )}
+                  </div>
+                </label>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-4 p-3 bg-blue-50 rounded-lg">
+            <div className="flex items-start">
+              <InformationCircleIcon className="h-5 w-5 text-blue-400 mt-0.5 mr-2 flex-shrink-0" />
+              <div className="text-sm text-blue-700">
+                <p className="font-medium mb-1">Vision Provider Comparison:</p>
+                <ul className="list-disc list-inside space-y-1 text-xs">
+                  <li><strong>Gemini:</strong> Fast and cost-effective, excellent for documents</li>
+                  <li><strong>GPT-4o Vision:</strong> High accuracy for complex layouts</li>
+                  <li><strong>Claude Vision:</strong> Great for detailed text analysis</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Language Selection */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
@@ -268,6 +350,13 @@ export default function OCRSettings({
         <h4 className="font-medium text-gray-900 mb-2">Current Settings</h4>
         <div className="text-sm text-gray-600 space-y-1">
           <p>Method: <span className="font-medium">{selectedMethod}</span></p>
+          {selectedMethod === 'vision_llm' && (
+            <p>Vision Provider: <span className="font-medium">
+              {ocrConfig?.vision_providers?.[selectedVisionProvider || ocrConfig.default_vision_provider]?.display_name || 
+               selectedVisionProvider || 
+               ocrConfig?.default_vision_provider}
+            </span></p>
+          )}
           <p>Language: <span className="font-medium">
             {ocrLanguages.find(l => l.code === selectedLanguage)?.name || selectedLanguage}
           </span></p>

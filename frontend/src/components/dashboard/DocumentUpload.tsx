@@ -42,6 +42,7 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
   // OCR settings
   const [ocrMethod, setOcrMethod] = useState<string>('tesseract');
   const [ocrLanguage, setOcrLanguage] = useState<string>('eng');
+  const [visionProvider, setVisionProvider] = useState<string>('gemini');
   const [showOcrSettings, setShowOcrSettings] = useState(false);
   const [previewFile, setPreviewFile] = useState<File | null>(null);
 
@@ -112,6 +113,9 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
         if (uploadFile.file.type.startsWith('image/')) {
           uploadParams.ocr_method = ocrMethod;
           uploadParams.ocr_language = ocrLanguage;
+          if (ocrMethod === 'vision_llm') {
+            uploadParams.vision_provider = visionProvider;
+          }
         }
 
         await documentsApi.uploadDocument(
@@ -153,7 +157,8 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
           folderPath ? { folder_path: folderPath } : undefined,
           selectedEmbeddingModel,
           hasImages ? ocrMethod : undefined,
-          hasImages ? ocrLanguage : undefined
+          hasImages ? ocrLanguage : undefined,
+          (hasImages && ocrMethod === 'vision_llm') ? visionProvider : undefined
         );
 
         pendingFiles.forEach(uploadFile => {
@@ -322,8 +327,10 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
               <OCRSettings
                 selectedMethod={ocrMethod}
                 selectedLanguage={ocrLanguage}
+                selectedVisionProvider={visionProvider}
                 onMethodChange={setOcrMethod}
                 onLanguageChange={setOcrLanguage}
+                onVisionProviderChange={setVisionProvider}
                 showAdvanced={true}
               />
             )}
@@ -331,6 +338,9 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
             {!showOcrSettings && (
               <div className="text-sm text-gray-600 p-3 bg-gray-50 rounded-lg">
                 <p>Method: <span className="font-medium">{ocrMethod}</span></p>
+                {ocrMethod === 'vision_llm' && (
+                  <p>Vision Provider: <span className="font-medium">{visionProvider}</span></p>
+                )}
                 <p>Language: <span className="font-medium">{ocrLanguage}</span></p>
                 <p className="text-xs text-gray-500 mt-1">
                   These settings will be applied to uploaded image files for text extraction.
@@ -420,6 +430,7 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
           file={previewFile}
           ocrMethod={ocrMethod}
           ocrLanguage={ocrLanguage}
+          visionProvider={ocrMethod === 'vision_llm' ? visionProvider : undefined}
           onClose={() => setPreviewFile(null)}
           onAccept={(result) => {
             // Handle OCR result if needed

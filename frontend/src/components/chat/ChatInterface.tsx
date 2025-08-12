@@ -374,7 +374,7 @@ const ChatInterface: React.FC = () => {
               >
                 {availableModels.llm_models.map(model => (
                   <option key={model.id} value={model.id}>
-                    {model.display_name} ({model.provider})
+                    {model.name} ({model.provider})
                   </option>
                 ))}
               </select>
@@ -391,7 +391,7 @@ const ChatInterface: React.FC = () => {
               >
                 {availableModels.embedding_models.map(model => (
                   <option key={model.id} value={model.id}>
-                    {model.display_name} ({model.provider})
+                    {model.name} ({model.provider})
                   </option>
                 ))}
               </select>

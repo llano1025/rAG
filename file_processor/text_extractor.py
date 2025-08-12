@@ -75,7 +75,8 @@ class TextExtractor:
 
         return extractor(file_path)
 
-    async def extract_text(self, file_content: bytes, content_type: str, filename: str = None) -> str:
+    async def extract_text(self, file_content: bytes, content_type: str, filename: str = None, 
+                          ocr_method: str = None, ocr_language: str = None, vision_provider: str = None) -> str:
         """Extract text from document content bytes (async method expected by controllers)."""
         # Create temporary file from bytes content
         with tempfile.NamedTemporaryFile(delete=False, suffix=self._get_file_extension(content_type)) as temp_file:
@@ -84,8 +85,12 @@ class TextExtractor:
             temp_path = temp_file.name
         
         try:
-            # Use existing extract method with temporary file
-            return self.extract(temp_path, content_type)
+            # For image files, use specified OCR settings
+            if content_type and content_type.startswith('image/'):
+                return self._extract_from_image_with_settings(temp_path, ocr_method, ocr_language, vision_provider)
+            else:
+                # Use existing extract method for non-image files
+                return self.extract(temp_path, content_type)
         finally:
             # Clean up temporary file
             if os.path.exists(temp_path):
@@ -297,21 +302,113 @@ class TextExtractor:
             return f"[Error extracting text from DOC file: {str(e)}]"
 
     def _extract_from_image(self, file_path: Union[str, Path]) -> str:
-        """Extract text from images using OCR."""
+        """Extract text from images using OCR with default settings."""
+        return self._extract_from_image_with_settings(file_path)
+
+    def _extract_from_image_with_settings(self, file_path: Union[str, Path], 
+                                        ocr_method: str = None, ocr_language: str = None, 
+                                        vision_provider: str = None) -> str:
+        """Extract text from images using OCR with specified settings."""
         try:
-            # Lazy initialize OCR processor
-            if self.ocr_processor is None:
-                OCRProcessor = _get_ocr_processor()
-                if OCRProcessor:
-                    self.ocr_processor = OCRProcessor()
-                else:
-                    self.logger.error("OCRProcessor not available for image text extraction")
-                    return f"[Could not extract text from image file: {Path(file_path).name}. OCR dependencies are required for image processing.]"
+            # Import OCR classes
+            OCRProcessor = _get_ocr_processor()
+            if not OCRProcessor:
+                self.logger.error("OCRProcessor not available for image text extraction")
+                return f"[Could not extract text from image file: {Path(file_path).name}. OCR dependencies are required for image processing.]"
             
-            return self.ocr_processor.process(file_path)
+            # Import enum classes for OCR configuration
+            from .ocr_processor import OCRMethod, VisionProvider
+            
+            # Set defaults
+            method = OCRMethod.TESSERACT
+            language = ocr_language or 'eng'
+            provider = VisionProvider.GEMINI
+            
+            # Parse OCR method
+            if ocr_method:
+                try:
+                    method = OCRMethod(ocr_method)
+                except ValueError:
+                    self.logger.warning(f"Invalid OCR method '{ocr_method}', using Tesseract")
+                    method = OCRMethod.TESSERACT
+            
+            # Parse vision provider
+            if vision_provider and method == OCRMethod.VISION_LLM:
+                try:
+                    provider = VisionProvider(vision_provider)
+                except ValueError:
+                    self.logger.warning(f"Invalid vision provider '{vision_provider}', using Gemini")
+                    provider = VisionProvider.GEMINI
+            
+            # Get vision LLM config if needed
+            vision_llm_config = None
+            if method == OCRMethod.VISION_LLM:
+                vision_llm_config = self._get_vision_llm_config(provider)
+                if not vision_llm_config:
+                    self.logger.warning("Vision LLM config not available, falling back to Tesseract")
+                    method = OCRMethod.TESSERACT
+            
+            # Create OCR processor with specific settings
+            ocr_processor = OCRProcessor(
+                method=method,
+                language=language,
+                vision_llm_config=vision_llm_config,
+                vision_provider=provider,
+                enable_fallback=True,
+                timeout=60
+            )
+            
+            return ocr_processor.process(file_path, vision_provider=provider if method == OCRMethod.VISION_LLM else None)
+            
         except Exception as e:
             self.logger.error(f"Failed to extract text from image {file_path}: {e}")
             return f"[Error extracting text from image file: {str(e)}]"
+
+    def _get_vision_llm_config(self, provider: 'VisionProvider') -> dict:
+        """Get vision LLM configuration for the specified provider."""
+        try:
+            from config import get_settings
+            settings = get_settings()
+            
+            if provider.value == 'openai':
+                if not getattr(settings, 'OPENAI_API_KEY', None):
+                    return None
+                return {
+                    'api_key': settings.OPENAI_API_KEY,
+                    'model': getattr(settings, 'OPENAI_MODEL', 'gpt-4o-2024-08-06'),
+                    'endpoint': 'https://api.openai.com/v1/chat/completions',
+                    'additional_params': {
+                        'max_tokens': getattr(settings, 'OPENAI_MAX_TOKENS', 4096),
+                        'temperature': getattr(settings, 'OPENAI_TEMPERATURE', 0.1)
+                    }
+                }
+            elif provider.value == 'gemini':
+                if not getattr(settings, 'GEMINI_API_KEY', None):
+                    return None
+                return {
+                    'api_key': settings.GEMINI_API_KEY,
+                    'model': getattr(settings, 'GEMINI_MODEL', 'gemini-2.5-flash'),
+                    'additional_params': {
+                        'max_tokens': getattr(settings, 'GEMINI_MAX_TOKENS', 8192),
+                        'temperature': getattr(settings, 'GEMINI_TEMPERATURE', 0.1)
+                    }
+                }
+            elif provider.value == 'claude':
+                if not getattr(settings, 'ANTHROPIC_API_KEY', None):
+                    return None
+                return {
+                    'api_key': settings.ANTHROPIC_API_KEY,
+                    'model': getattr(settings, 'ANTHROPIC_MODEL', 'claude-3-5-sonnet-20241022'),
+                    'endpoint': 'https://api.anthropic.com/v1/messages',
+                    'additional_params': {
+                        'max_tokens': getattr(settings, 'ANTHROPIC_MAX_TOKENS', 8192),
+                        'temperature': getattr(settings, 'ANTHROPIC_TEMPERATURE', 0.1)
+                    }
+                }
+        except Exception as e:
+            self.logger.error(f"Failed to get vision LLM config: {e}")
+        
+        return None
 
     def extract_tables_from_pdf(self, file_path: Union[str, Path]) -> list:
         """Extract tables from PDF files."""

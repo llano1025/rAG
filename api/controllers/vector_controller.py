@@ -19,6 +19,8 @@ from file_processor.text_extractor import TextExtractor
 from file_processor.type_detector import FileTypeDetector
 from file_processor.metadata_extractor import MetadataExtractor
 from utils.security.audit_logger import AuditLogger
+from utils.file_storage import get_file_manager
+import hashlib
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +66,7 @@ class VectorController:
         self.text_extractor = TextExtractor()
         self.type_detector = FileTypeDetector()
         self.metadata_extractor = MetadataExtractor()
+        self.file_manager = get_file_manager()
     
     async def _ensure_initialized(self):
         """Ensure storage manager is properly initialized."""
@@ -131,14 +134,51 @@ class VectorController:
                     detail="File size exceeds 50MB limit"
                 )
             
-            # Extract text content
-            extracted_text = await self.text_extractor.extract_text(file_content, content_type)
+            # Extract text content with OCR settings from metadata
+            ocr_method = metadata.get('ocr_method') if metadata else None
+            ocr_language = metadata.get('ocr_language') if metadata else None
+            vision_provider = metadata.get('vision_provider') if metadata else None
+            
+            extracted_text = await self.text_extractor.extract_text(
+                file_content, content_type, filename,
+                ocr_method=ocr_method, 
+                ocr_language=ocr_language,
+                vision_provider=vision_provider
+            )
             
             if not extracted_text or len(extracted_text.strip()) < 10:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Could not extract meaningful text content from file"
                 )
+            
+            # Calculate file hash for storage and deduplication
+            file_hash = hashlib.sha256(file_content).hexdigest()
+            
+            # Save original file to storage
+            file_path = None
+            try:
+                logger.info(f"🗄️ VectorController: Attempting to save original file to storage...")
+                file_path = self.file_manager.save_file(file_content, filename, file_hash)
+                logger.info(f"✅ VectorController: Original file saved to: {file_path}")
+            except Exception as e:
+                logger.error(f"❌ VectorController: Failed to save original file: {e}")
+                logger.error(f"File: {filename}, Size: {len(file_content)} bytes, Type: {content_type}")
+                
+                # For binary files (images, PDFs, etc.), file storage is critical
+                # Don't continue processing if we can't store the original file
+                if content_type and (content_type.startswith('image/') or 
+                                   content_type == 'application/pdf' or
+                                   content_type.startswith('application/vnd.') or
+                                   content_type == 'application/msword'):
+                    logger.error(f"💥 VectorController: File storage is critical for binary files, aborting upload")
+                    raise HTTPException(
+                        status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+                        detail=f"Failed to store original file: {str(e)}. Original file storage is required for {content_type} files."
+                    )
+                else:
+                    logger.warning(f"⚠️ VectorController: Continuing without file storage for text-based file")
+                    file_path = None
             
             # Extract metadata
             file_metadata = await self.metadata_extractor.extract_metadata(file_content, content_type)
@@ -161,8 +201,21 @@ class VectorController:
                 'content_type': content_type,
                 'file_size': file_size,
                 'text_length': len(extracted_text),
-                'user_id': user.id
+                'user_id': user.id,
+                'file_hash': file_hash,
+                'file_path': file_path
             })
+            
+            # Add OCR metadata for image files
+            if content_type and content_type.startswith('image/'):
+                combined_metadata.update({
+                    'ocr_processing': {
+                        'method_used': ocr_method or 'tesseract',
+                        'language': ocr_language or 'eng',
+                        'vision_provider': vision_provider if ocr_method == 'vision_llm' else None,
+                        'processed_at': datetime.utcnow().isoformat()
+                    }
+                })
             
             # Create document version with vector indexing
             document = await self.version_manager.create_document_version(

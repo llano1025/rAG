@@ -301,13 +301,14 @@ class DocumentVersionManager:
                 user_id=user_id,
                 filename=filename,
                 original_filename=filename,
-                file_hash=content_hash,
+                file_path=metadata.get('file_path') if metadata else None,
+                file_hash=metadata.get('file_hash', content_hash),  # Use provided file_hash or fallback to content_hash
                 title=metadata.get('title', filename) if metadata else filename,
                 description=metadata.get('description') if metadata else None,
                 content_type=content_type,
                 file_size=file_size,
                 extracted_text=content,
-                metadata=self._serialize_metadata(metadata) if metadata else None,
+                document_metadata=self._serialize_metadata(metadata) if metadata else None,
                 version=version,
                 parent_document_id=parent_document_id,
                 status=DocumentStatusEnum.PROCESSING

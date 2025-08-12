@@ -116,6 +116,7 @@ class DocumentController:
         embedding_model: Optional[str] = None,
         ocr_method: Optional[str] = None,
         ocr_language: Optional[str] = None,
+        vision_provider: Optional[str] = None,
         db: Session = None
     ) -> Dict[str, Any]:
         """
@@ -130,6 +131,7 @@ class DocumentController:
             embedding_model: Optional embedding model to use
             ocr_method: Optional OCR method ('tesseract' or 'vision_llm')
             ocr_language: Optional OCR language code
+            vision_provider: Optional vision provider ('openai', 'gemini', 'claude')
             db: Database session
             
         Returns:
@@ -167,6 +169,7 @@ class DocumentController:
                 enhanced_metadata.update({
                     'ocr_method': ocr_method or 'tesseract',
                     'ocr_language': ocr_language or 'eng',
+                    'vision_provider': vision_provider if ocr_method == 'vision_llm' else None,
                     'requires_ocr': True
                 })
             
@@ -216,6 +219,7 @@ class DocumentController:
         embedding_model: Optional[str] = None,
         ocr_method: Optional[str] = None,
         ocr_language: Optional[str] = None,
+        vision_provider: Optional[str] = None,
         db: Session = None
     ) -> List[Dict[str, Any]]:
         """
@@ -249,6 +253,7 @@ class DocumentController:
                     embedding_model=embedding_model,
                     ocr_method=ocr_method,
                     ocr_language=ocr_language,
+                    vision_provider=vision_provider,
                     db=db
                 )
                 tasks.append(task)

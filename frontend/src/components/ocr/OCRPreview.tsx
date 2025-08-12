@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { 
   EyeIcon, 
   ClipboardDocumentIcon, 
@@ -26,6 +26,7 @@ interface OCRPreviewProps {
   file: File;
   ocrMethod: string;
   ocrLanguage: string;
+  visionProvider?: string;
   onClose: () => void;
   onAccept?: (result: OCRResult) => void;
 }
@@ -34,6 +35,7 @@ export default function OCRPreview({
   file,
   ocrMethod,
   ocrLanguage,
+  visionProvider,
   onClose,
   onAccept
 }: OCRPreviewProps) {
@@ -44,7 +46,7 @@ export default function OCRPreview({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Generate image preview
-  useState(() => {
+  useEffect(() => {
     if (file && file.type.startsWith('image/')) {
       const reader = new FileReader();
       reader.onload = (e) => {
@@ -52,7 +54,7 @@ export default function OCRPreview({
       };
       reader.readAsDataURL(file);
     }
-  });
+  }, [file]);
 
   const processOCR = async () => {
     if (!file) return;
@@ -65,6 +67,9 @@ export default function OCRPreview({
       formData.append('file', file);
       formData.append('method', ocrMethod);
       formData.append('language', ocrLanguage);
+      if (visionProvider) {
+        formData.append('vision_provider', visionProvider);
+      }
       formData.append('return_confidence', 'true');
 
       const result = await apiClient.post('/api/ocr/preview', formData, {
@@ -73,7 +78,7 @@ export default function OCRPreview({
         },
       });
 
-      setOcrResult(result);
+      setOcrResult(result as OCRResult);
       toast.success('OCR processing completed!');
     } catch (error: any) {
       const errorMessage = error.response?.data?.detail || error.message || 'OCR processing failed';
@@ -131,7 +136,11 @@ export default function OCRPreview({
           
           <div className="mt-2 text-sm text-gray-600">
             <p>File: <span className="font-medium">{file.name}</span></p>
-            <p>Method: <span className="font-medium">{ocrMethod}</span> | Language: <span className="font-medium">{ocrLanguage}</span></p>
+            <p>Method: <span className="font-medium">{ocrMethod}</span> | Language: <span className="font-medium">{ocrLanguage}</span>
+              {visionProvider && ocrMethod === 'vision_llm' && (
+                <> | Provider: <span className="font-medium">{visionProvider}</span></>
+              )}
+            </p>
           </div>
         </div>
 

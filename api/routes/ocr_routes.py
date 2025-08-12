@@ -13,7 +13,7 @@ from pathlib import Path
 
 from ..middleware.auth import get_current_active_user
 from ..controllers.document_controller import DocumentController
-from file_processor.ocr_processor import OCRProcessor, OCRMethod, OCRError
+from file_processor.ocr_processor import OCRProcessor, OCRMethod, OCRError, VisionProvider
 from file_processor.type_detector import FileTypeDetector
 from database.models import User
 from utils.security.audit_logger import log_user_action
@@ -45,12 +45,14 @@ class OCRPreviewRequest(BaseModel):
     """Request for OCR preview processing."""
     method: Optional[str] = "tesseract"
     language: Optional[str] = "eng"
+    vision_provider: Optional[str] = "gemini"
     preprocessing_options: Optional[Dict[str, Any]] = {}
 
 class BatchOCRRequest(BaseModel):
     """Request for batch OCR processing."""
     method: Optional[str] = "tesseract"
     language: Optional[str] = "eng"
+    vision_provider: Optional[str] = "gemini"
     return_confidence: bool = True
     preprocessing_options: Optional[Dict[str, Any]] = {}
 
@@ -72,8 +74,8 @@ async def get_ocr_methods(
             ),
             OCRMethodInfo(
                 method="vision_llm",
-                display_name="Vision LLM",
-                description="AI-powered OCR with excellent accuracy for complex layouts and handwriting",
+                display_name="Vision LLM (Multi-Provider)",
+                description="AI-powered OCR with excellent accuracy for complex layouts and handwriting. Supports OpenAI, Gemini, and Claude vision models.",
                 supported_formats=["image/jpeg", "image/png", "image/tiff", "image/gif"],
                 requires_api_key=True,
                 estimated_cost="~$0.01-0.05 per image",
@@ -95,6 +97,7 @@ async def process_image_ocr(
     file: UploadFile = File(...),
     method: str = Form("tesseract"),
     language: str = Form("eng"),
+    vision_provider: str = Form("gemini"),
     return_confidence: bool = Form(True),
     current_user: User = Depends(get_current_active_user),
     db = Depends(get_db)
@@ -103,7 +106,7 @@ async def process_image_ocr(
     logger.info(f"=== OCR PROCESS ROUTE CALLED ===")
     logger.info(f"OCR Route: /api/ocr/process - Filename: {file.filename}")
     logger.info(f"OCR Route: File content type: {file.content_type}")
-    logger.info(f"OCR Route: OCR method: {method}, language: {language}")
+    logger.info(f"OCR Route: OCR method: {method}, language: {language}, vision_provider: {vision_provider}")
     logger.info(f"OCR Route: This is NOT the document upload route!")
     
     import time
@@ -126,6 +129,17 @@ async def process_image_ocr(
                 detail=f"Invalid OCR method: {method}. Supported methods: tesseract, vision_llm"
             )
         
+        # Validate vision provider
+        vision_provider_enum = None
+        if ocr_method == OCRMethod.VISION_LLM:
+            try:
+                vision_provider_enum = VisionProvider(vision_provider)
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid vision provider: {vision_provider}. Supported providers: openai, gemini, claude"
+                )
+        
         # Read file content
         file_content = await file.read()
         
@@ -141,29 +155,63 @@ async def process_image_ocr(
             if ocr_method == OCRMethod.VISION_LLM:
                 from config import get_settings
                 settings = get_settings()
-                if not settings.OPENAI_API_KEY:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail="Vision LLM requires OpenAI API key configuration"
-                    )
-                vision_llm_config = {
-                    'api_key': settings.OPENAI_API_KEY,
-                    'model': 'gpt-4o-2024-08-06',  # Vision-capable model
-                    'endpoint': 'https://api.openai.com/v1/chat/completions',
-                    'additional_params': {
-                        'max_tokens': 4096,
-                        'temperature': 0.1
+                
+                if vision_provider_enum == VisionProvider.OPENAI:
+                    if not settings.OPENAI_API_KEY:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="OpenAI Vision requires OPENAI_API_KEY configuration"
+                        )
+                    vision_llm_config = {
+                        'api_key': settings.OPENAI_API_KEY,
+                        'model': getattr(settings, 'OPENAI_MODEL', 'gpt-4o-2024-08-06'),
+                        'endpoint': 'https://api.openai.com/v1/chat/completions',
+                        'additional_params': {
+                            'max_tokens': getattr(settings, 'OPENAI_MAX_TOKENS', 4096),
+                            'temperature': getattr(settings, 'OPENAI_TEMPERATURE', 0.1)
+                        }
                     }
-                }
+                elif vision_provider_enum == VisionProvider.GEMINI:
+                    if not settings.GEMINI_API_KEY:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Gemini Vision requires GEMINI_API_KEY configuration"
+                        )
+                    vision_llm_config = {
+                        'api_key': settings.GEMINI_API_KEY,
+                        'model': getattr(settings, 'GEMINI_MODEL', 'gemini-2.5-flash'),
+                        'additional_params': {
+                            'max_tokens': getattr(settings, 'GEMINI_MAX_TOKENS', 8192),
+                            'temperature': getattr(settings, 'GEMINI_TEMPERATURE', 0.1)
+                        }
+                    }
+                elif vision_provider_enum == VisionProvider.CLAUDE:
+                    if not settings.ANTHROPIC_API_KEY:
+                        raise HTTPException(
+                            status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Claude Vision requires ANTHROPIC_API_KEY configuration"
+                        )
+                    vision_llm_config = {
+                        'api_key': settings.ANTHROPIC_API_KEY,
+                        'model': getattr(settings, 'ANTHROPIC_MODEL', 'claude-3-5-sonnet-20241022'),
+                        'endpoint': 'https://api.anthropic.com/v1/messages',
+                        'additional_params': {
+                            'max_tokens': getattr(settings, 'ANTHROPIC_MAX_TOKENS', 8192),
+                            'temperature': getattr(settings, 'ANTHROPIC_TEMPERATURE', 0.1)
+                        }
+                    }
             
             ocr_processor = OCRProcessor(
                 method=ocr_method,
                 language=language,
-                vision_llm_config=vision_llm_config
+                vision_llm_config=vision_llm_config,
+                vision_provider=vision_provider_enum if vision_provider_enum else VisionProvider.GEMINI,
+                enable_fallback=True,
+                timeout=60
             )
             
             # Process image
-            extracted_text = ocr_processor.process(temp_path)
+            extracted_text = ocr_processor.process(temp_path, vision_provider=vision_provider_enum)
             processing_time = (time.time() - start_time) * 1000
             
             # Calculate confidence score (simplified - can be enhanced)
@@ -197,6 +245,7 @@ async def process_image_ocr(
                 resource_type="image",
                 details={
                     "method": method,
+                    "vision_provider": vision_provider if ocr_method == OCRMethod.VISION_LLM else None,
                     "file_name": file.filename,
                     "file_size": len(file_content),
                     "processing_time_ms": processing_time,
@@ -230,6 +279,7 @@ async def preview_ocr_processing(
     file: UploadFile = File(...),
     method: str = Form("tesseract"),
     language: str = Form("eng"),
+    vision_provider: str = Form("gemini"),
     current_user: User = Depends(get_current_active_user)
 ):
     """Preview OCR processing without saving results."""
@@ -239,6 +289,7 @@ async def preview_ocr_processing(
         file=file,
         method=method,
         language=language,
+        vision_provider=vision_provider,
         return_confidence=True,
         current_user=current_user,
         db=next(get_db())
@@ -266,6 +317,7 @@ async def batch_process_ocr(
                 file=file,
                 method=request.method,
                 language=request.language,
+                vision_provider=request.vision_provider,
                 return_confidence=request.return_confidence,
                 current_user=current_user,
                 db=db
@@ -293,6 +345,7 @@ async def batch_process_ocr(
         resource_type="batch",
         details={
             "method": request.method,
+            "vision_provider": request.vision_provider,
             "file_count": len(files),
             "successful_count": len([r for r in results if not r.metadata.get("error", False)])
         },
@@ -335,8 +388,25 @@ async def get_ocr_config(
     config = {
         "ocr_enabled": settings.OCR_ENABLED,
         "default_language": settings.OCR_LANGUAGE,
+        "default_vision_provider": "gemini",
         "tesseract_available": True,  # Assume available - could check dynamically
-        "vision_llm_available": bool(settings.OPENAI_API_KEY),
+        "vision_providers": {
+            "openai": {
+                "available": bool(getattr(settings, 'OPENAI_API_KEY', None)),
+                "model": getattr(settings, 'OPENAI_MODEL', 'gpt-4o-2024-08-06'),
+                "display_name": "OpenAI GPT-4o Vision"
+            },
+            "gemini": {
+                "available": bool(getattr(settings, 'GEMINI_API_KEY', None)),
+                "model": getattr(settings, 'GEMINI_MODEL', 'gemini-2.5-flash'),
+                "display_name": "Google Gemini Vision"
+            },
+            "claude": {
+                "available": bool(getattr(settings, 'ANTHROPIC_API_KEY', None)),
+                "model": getattr(settings, 'ANTHROPIC_MODEL', 'claude-3-5-sonnet-20241022'),
+                "display_name": "Anthropic Claude Vision"
+            }
+        },
         "max_file_size_mb": 50,
         "supported_formats": ["image/jpeg", "image/png", "image/tiff", "image/gif"],
         "batch_limit": 10

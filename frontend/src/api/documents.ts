@@ -48,6 +48,10 @@ export const documentsApi = {
       formData.append('ocr_language', (upload as any).ocr_language);
     }
 
+    if ((upload as any).vision_provider) {
+      formData.append('vision_provider', (upload as any).vision_provider);
+    }
+
     return apiClient.upload('/api/documents/upload', formData, onProgress);
   },
 
@@ -58,7 +62,8 @@ export const documentsApi = {
     metadata?: Record<string, any>,
     embeddingModel?: string,
     ocrMethod?: string,
-    ocrLanguage?: string
+    ocrLanguage?: string,
+    visionProvider?: string
   ): Promise<Document[]> => {
     const formData = new FormData();
     files.forEach((file) => {
@@ -86,6 +91,10 @@ export const documentsApi = {
       formData.append('ocr_language', ocrLanguage);
     }
 
+    if (visionProvider) {
+      formData.append('vision_provider', visionProvider);
+    }
+
     return apiClient.upload('/api/documents/batch-upload', formData, onProgress);
   },
 
@@ -98,9 +107,23 @@ export const documentsApi = {
   },
 
   downloadDocument: async (id: string): Promise<Blob> => {
-    return apiClient.get(`/api/documents/${id}/download`, {
-      responseType: 'blob',
-    });
+    return apiClient.downloadBlob(`/api/documents/${id}/download`);
+  },
+
+  getDocumentContent: async (id: string): Promise<{
+    document_id: number;
+    filename: string;
+    extracted_text: string;
+    text_length: number;
+    chunks_count: number;
+    language: string;
+    content_type: string;
+  }> => {
+    return apiClient.get(`/api/documents/${id}/content`);
+  },
+
+  downloadExtractedText: async (id: string): Promise<Blob> => {
+    return apiClient.downloadBlob(`/api/documents/${id}/download?format=text`);
   },
 
   shareDocument: async (id: string, permissions: string[]): Promise<void> => {

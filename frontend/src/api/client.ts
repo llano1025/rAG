@@ -82,6 +82,15 @@ class ApiClient {
     });
     return response.data;
   }
+
+  async downloadBlob(url: string, config?: AxiosRequestConfig): Promise<Blob> {
+    const response = await this.client.get(url, {
+      ...config,
+      responseType: 'blob',
+    });
+    // Return the blob directly, not response.data
+    return response.data as Blob;
+  }
 }
 
 export const apiClient = new ApiClient();
