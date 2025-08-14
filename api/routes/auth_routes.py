@@ -15,6 +15,7 @@ from database.models import User, UserRoleEnum
 from api.controllers.auth_controller import AuthController
 from api.schemas.api_schemas import APIKeyResponse, TokenResponse
 from api.schemas.user_schemas import UserCreate
+from api.schemas.responses import StandardResponse, AuthResponse, create_success_response
 from api.middleware.auth import AuthMiddleware
 from utils.security.audit_logger import AuditLogger
 from utils.security.encryption import EncryptionManager
@@ -48,7 +49,7 @@ async def get_auth_controller(db: Session = Depends(get_db)) -> AuthController:
 
 # Core Authentication Endpoints
 
-@router.post("/register", response_model=APIKeyResponse)
+@router.post("/register", response_model=StandardResponse)
 async def register_user(
     user_data: UserCreate,
     request: Request,
@@ -60,15 +61,13 @@ async def register_user(
         # Create new user using the controller
         user = await auth_controller.create_user(user_data, db)
         
-        return APIKeyResponse(
-            success=True,
+        return create_success_response(
             data={
                 "user_id": user.id,
                 "email": user.email,
-                "username": user.username,
-                "message": "User registered successfully. Please verify your email."
+                "username": user.username
             },
-            message="User registration completed"
+            message="User registered successfully. Please verify your email."
         )
         
     except HTTPException:

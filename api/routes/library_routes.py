@@ -14,6 +14,7 @@ from ..schemas.library_schemas import (
     TagSummary,
     LibraryStats
 )
+from ..schemas.responses import StandardResponse, create_success_response
 from database.connection import get_db
 
 router = APIRouter(prefix="/library", tags=["library"])
@@ -104,7 +105,7 @@ async def create_tag(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@router.get("/tags", response_model=List[TagSummary])
+@router.get("/tags", response_model=StandardResponse)
 async def list_tags(
     current_user = Depends(get_current_active_user),
     db: Session = Depends(get_db),
@@ -115,7 +116,10 @@ async def list_tags(
         user=current_user,
         db=db
     )
-    return tags
+    return create_success_response(
+        data=tags,
+        message="Tags retrieved successfully"
+    )
 
 @router.put("/tags/{tag_id}", response_model=Tag)
 async def update_tag(
@@ -263,7 +267,7 @@ async def bulk_remove_tags(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@router.post("/documents/tags/apply")
+@router.post("/documents/tags/apply", response_model=StandardResponse)
 async def apply_tags_to_documents(
     document_ids: List[int] = Body(...),
     tags: List[str] = Body(...),
@@ -279,12 +283,14 @@ async def apply_tags_to_documents(
             user=current_user,
             db=db
         )
-        return {
-            "message": f"Tags applied to {result['successful']} documents",
-            "successful": result['successful'],
-            "failed": result['failed'],
-            "errors": result.get('errors', [])
-        }
+        return create_success_response(
+            data={
+                "successful": result['successful'],
+                "failed": result['failed'],
+                "errors": result.get('errors', [])
+            },
+            message=f"Tags applied to {result['successful']} documents"
+        )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

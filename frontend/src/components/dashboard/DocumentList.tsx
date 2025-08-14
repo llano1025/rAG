@@ -385,7 +385,7 @@ export default function DocumentList({ refreshTrigger }: DocumentListProps) {
     );
   }
 
-  if (!documents || documents.documents.length === 0) {
+  if (!documents || !documents.documents || documents.documents.length === 0) {
     return (
       <div className="text-center py-12">
         <DocumentTextIcon className="mx-auto h-12 w-12 text-gray-400" />
@@ -508,7 +508,7 @@ export default function DocumentList({ refreshTrigger }: DocumentListProps) {
           </div>
           
           <p className="text-sm text-gray-500">
-            {sortedDocuments.length} of {documents ? documents.total_count : 0} document{documents && documents.total_count !== 1 ? 's' : ''}
+            {sortedDocuments.length} of {documents?.total_count || 0} document{(documents?.total_count || 0) !== 1 ? 's' : ''}
           </p>
         </div>
         
@@ -608,7 +608,7 @@ export default function DocumentList({ refreshTrigger }: DocumentListProps) {
       </div>
 
       {/* Pagination */}
-      {documents.total_count > documents.limit && (
+      {documents && documents.total_count > documents.limit && (
         <div className="flex items-center justify-between">
           <p className="text-sm text-gray-700">
             Showing {documents.skip + 1} to {Math.min(documents.skip + documents.limit, documents.total_count)} of {documents.total_count}
@@ -629,7 +629,7 @@ export default function DocumentList({ refreshTrigger }: DocumentListProps) {
             
             <button
               onClick={() => setCurrentPage(currentPage + 1)}
-              disabled={documents.skip + documents.limit >= documents.total_count}
+              disabled={documents && documents.skip + documents.limit >= documents.total_count}
               className="px-3 py-1 text-sm border border-gray-300 rounded-md disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
             >
               Next

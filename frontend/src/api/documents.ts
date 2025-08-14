@@ -1,13 +1,22 @@
 import { apiClient } from './client';
 import { Document, DocumentUpload, PaginatedResponse } from '@/types';
 
-// Backend response structure for documents
+// Backend response structure for documents (after API client transformation)
 interface DocumentsResponse {
   documents: Document[];
   total_count: number;
   skip: number;
   limit: number;
   filters: Record<string, any>;
+  // Pagination metadata from StandardResponse
+  current_page?: number;
+  page_size?: number;
+  total_items?: number;
+  total_pages?: number;
+  has_next?: boolean;
+  has_previous?: boolean;
+  next_page?: number | null;
+  previous_page?: number | null;
 }
 
 export const documentsApi = {

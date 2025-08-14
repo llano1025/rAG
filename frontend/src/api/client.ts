@@ -33,15 +33,51 @@ class ApiClient {
       }
     );
 
-    // Response interceptor for error handling
+    // Response interceptor for error handling and format unwrapping
     this.client.interceptors.response.use(
-      (response) => response,
+      (response) => {
+        // Check if response follows new StandardResponse format
+        if (response.data && typeof response.data === 'object' && 'success' in response.data) {
+          // New StandardResponse format - extract data
+          if (response.data.success) {
+            // For paginated responses, preserve pagination metadata at root level
+            if (response.data.pagination) {
+              return {
+                ...response,
+                data: {
+                  ...response.data.data,
+                  ...response.data.pagination
+                }
+              };
+            } else {
+              // For standard responses, return the data property
+              return {
+                ...response,
+                data: response.data.data
+              };
+            }
+          } else {
+            // Handle error in StandardResponse format
+            const error = response.data.error;
+            const errorMessage = error?.message || 'An error occurred';
+            toast.error(errorMessage);
+            return Promise.reject(new Error(errorMessage));
+          }
+        }
+        // Return response as-is for old format or non-API responses
+        return response;
+      },
       (error) => {
         if (error.response?.status === 401) {
           Cookies.remove('access_token');
           window.location.href = '/auth/login';
         } else if (error.response?.status >= 500) {
           toast.error('Server error occurred. Please try again later.');
+        } else if (error.response?.data?.error) {
+          // Handle new standardized error format
+          const errorData = error.response.data.error;
+          const errorMessage = errorData.message || 'An error occurred';
+          toast.error(errorMessage);
         }
         return Promise.reject(error);
       }

@@ -15,6 +15,7 @@ import hashlib
 from database.connection import get_db
 from database.models import User, UserSession, APIKey, UserRole, UserActivityLog, PermissionEnum
 from api.schemas.user_schemas import UserCreate, UserUpdate, User as UserSchema
+from api.schemas.responses import StandardResponse, create_success_response
 from utils.security.encryption import EncryptionManager
 from utils.security.audit_logger import AuditLogger
 from utils.exceptions import (
@@ -86,7 +87,10 @@ class AuthController:
             )
         
         # This would need database session - simplified for now
-        return {"status": "verified", "user_id": None}
+        return create_success_response(
+            data={"status": "verified", "user_id": None},
+            message="Credentials verified successfully"
+        )
 
     def hash_password(self, password: str) -> str:
         """Hash a password using bcrypt."""

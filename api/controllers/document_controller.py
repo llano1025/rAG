@@ -28,6 +28,7 @@ from utils.exceptions import (
     ExternalServiceException,
     ConfigurationException
 )
+from api.schemas.responses import StandardResponse, create_success_response, create_paginated_response
 
 logger = logging.getLogger(__name__)
 
@@ -301,15 +302,18 @@ class DocumentController:
                     }
                 )
             
-            return {
-                'successful_uploads': successful_uploads,
-                'failed_uploads': failed_uploads,
-                'summary': {
-                    'total': len(files),
-                    'successful': len(successful_uploads),
-                    'failed': len(failed_uploads)
-                }
-            }
+            return create_success_response(
+                data={
+                    'successful_uploads': successful_uploads,
+                    'failed_uploads': failed_uploads,
+                    'summary': {
+                        'total': len(files),
+                        'successful': len(successful_uploads),
+                        'failed': len(failed_uploads)
+                    }
+                },
+                message=f"Batch upload completed: {len(successful_uploads)} successful, {len(failed_uploads)} failed"
+            )
             
         except (DocumentProcessingException, InvalidFileTypeException, FileTooLargeException) as e:
             raise
@@ -561,15 +565,18 @@ class DocumentController:
                     }
                 )
             
-            return {
-                'successful_deletes': successful_deletes,
-                'failed_deletes': failed_deletes,
-                'summary': {
-                    'total': len(document_ids),
-                    'deleted': len(successful_deletes),
-                    'failed': len(failed_deletes)
-                }
-            }
+            return create_success_response(
+                data={
+                    'successful_deletes': successful_deletes,
+                    'failed_deletes': failed_deletes,
+                    'summary': {
+                        'total': len(document_ids),
+                        'deleted': len(successful_deletes),
+                        'failed': len(failed_deletes)
+                    }
+                },
+                message=f"Batch delete completed: {len(successful_deletes)} deleted, {len(failed_deletes)} failed"
+            )
             
         except DocumentProcessingException as e:
             raise
@@ -714,18 +721,20 @@ class DocumentController:
                        query_lower in doc.get('description', '').lower()
                 ]
             
-            return {
-                'documents': documents,
-                'total_count': len(documents),
-                'skip': skip,
-                'limit': limit,
-                'filters': {
-                    'folder_id': folder_id,
-                    'tags': tags,
-                    'search_query': search_query,
-                    'include_public': include_public
-                }
-            }
+            return create_success_response(
+                data={
+                    "documents": documents,
+                    "total_count": len(documents),
+                    "skip": skip,
+                    "limit": limit,
+                    "filters": {
+                        "folder_id": folder_id,
+                        "tags": tags,
+                        "search_query": search_query
+                    }
+                },
+                message="Documents retrieved successfully"
+            )
             
         except Exception as e:
             logger.error(f"Failed to list documents: {e}")

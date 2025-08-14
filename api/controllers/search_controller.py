@@ -18,6 +18,7 @@ from utils.exceptions import (
     SearchTimeoutException,
     DocumentNotFoundException
 )
+from api.schemas.responses import StandardResponse, create_success_response
 
 logger = logging.getLogger(__name__)
 
@@ -443,14 +444,17 @@ async def search_documents(query: str, filters=None, sort: Optional[str] = None,
         if not user:
             logger.warning(f"User {user_id} not found for search")
             execution_time = (time.time() - start_time) * 1000
-            return {
-                "results": [],
-                "total_hits": 0,
-                "execution_time_ms": execution_time,
-                "filters_applied": filters_applied,
-                "query_vector_id": None,
-                "query": query
-            }
+            return create_success_response(
+                data={
+                    "results": [],
+                    "total_hits": 0,
+                    "execution_time_ms": execution_time,
+                    "filters_applied": filters_applied,
+                    "query_vector_id": None,
+                    "query": query
+                },
+                message="No search results - user not found"
+            )
         
         logger.debug(f"Found user: {user.username} (ID: {user.id})")
         
@@ -689,15 +693,18 @@ async def search_documents(query: str, filters=None, sort: Optional[str] = None,
         logger.error(f"Text search failed after {execution_time:.2f}ms: {str(e)}", exc_info=True)
         
         # Return empty results on error
-        return {
-            "results": [],
-            "total_hits": 0,
-            "execution_time_ms": execution_time,
-            "filters_applied": SearchFilters(),
-            "query_vector_id": None,
-            "query": query,
-            "processing_time": execution_time / 1000.0
-        }
+        return create_success_response(
+            data={
+                "results": [],
+                "total_hits": 0,
+                "execution_time_ms": execution_time,
+                "filters_applied": SearchFilters(),
+                "query_vector_id": None,
+                "query": query,
+                "processing_time": execution_time / 1000.0
+            },
+            message="Search completed with errors - returning empty results"
+        )
 
 def _calculate_relevance_score(document, query: str, processed_query=None) -> float:
     """Calculate intelligent relevance score based on processed query components."""
@@ -1160,23 +1167,29 @@ async def get_available_filters(user_id: int):
         }
         
         logger.info(f"Successfully generated available filters for user {user_id}: {len(available_filters['file_types'])} file types, {len(available_filters['tags'])} tags, {len(available_filters['languages'])} languages")
-        return available_filters
+        return create_success_response(
+            data=available_filters,
+            message="Available search filters retrieved successfully"
+        )
         
     except Exception as e:
         logger.error(f"Failed to get available filters for user {user_id}: {str(e)}", exc_info=True)
-        return {
-            "file_types": [],
-            "tags": [],
-            "languages": [],
-            "folders": [],
-            "date_range": {"min_date": None, "max_date": None},
-            "file_size_range": {"min_size": 0, "max_size": 0, "avg_size": 0},
-            "search_types": [
-                {"value": "hybrid", "label": "Hybrid Search (Recommended)", "description": "Combined text and semantic search for best results"},
-                {"value": "semantic", "label": "Semantic Search", "description": "AI-powered context understanding"},
-                {"value": "basic", "label": "Basic Text Search", "description": "Keyword-based search"}
-            ]
-        }
+        return create_success_response(
+            data={
+                "file_types": [],
+                "tags": [],
+                "languages": [],
+                "folders": [],
+                "date_range": {"min_date": None, "max_date": None},
+                "file_size_range": {"min_size": 0, "max_size": 0, "avg_size": 0},
+                "search_types": [
+                    {"value": "hybrid", "label": "Hybrid Search (Recommended)", "description": "Combined text and semantic search for best results"},
+                    {"value": "semantic", "label": "Semantic Search", "description": "AI-powered context understanding"},
+                    {"value": "basic", "label": "Basic Text Search", "description": "Keyword-based search"}
+                ]
+            },
+            message="Default search filters returned due to error"
+        )
 
 def _get_file_type_label(content_type: str) -> str:
     """Get human-readable label for file type."""

@@ -10,6 +10,7 @@ from database.models import Document, User, DocumentChunk
 from utils.security.encryption import EncryptionManager
 from utils.security.audit_logger import AuditLogger
 from utils.security.pii_detector import PIIDetector, PIIConfig
+from api.schemas.responses import create_success_response
 
 logger = logging.getLogger(__name__)
 
@@ -58,12 +59,15 @@ class LibraryController:
                 details={"folder_path": folder_path, "description": description}
             )
             
-            return {
-                "folder_path": folder_path,
-                "description": description,
-                "created_at": datetime.utcnow().isoformat(),
-                "status": "created"
-            }
+            return create_success_response(
+                data={
+                    "folder_path": folder_path,
+                    "description": description,
+                    "created_at": datetime.utcnow().isoformat(),
+                    "status": "created"
+                },
+                message="Folder created successfully"
+            )
             
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -145,11 +149,14 @@ class LibraryController:
                 }
             )
             
-            return {
-                "moved_count": moved_count,
-                "target_folder": folder_path,
-                "status": "success"
-            }
+            return create_success_response(
+                data={
+                    "moved_count": moved_count,
+                    "target_folder": folder_path,
+                    "status": "success"
+                },
+                message=f"Successfully moved {moved_count} documents to {folder_path}"
+            )
             
         except Exception as e:
             db.rollback()
@@ -192,13 +199,16 @@ class LibraryController:
                 }
             )
             
-            return {
-                "tag_name": tag_name,
-                "description": description,
-                "color": color,
-                "created_at": datetime.utcnow().isoformat(),
-                "status": "created" if not existing_docs else "already_exists"
-            }
+            return create_success_response(
+                data={
+                    "tag_name": tag_name,
+                    "description": description,
+                    "color": color,
+                    "created_at": datetime.utcnow().isoformat(),
+                    "status": "created" if not existing_docs else "already_exists"
+                },
+                message=f"Tag '{tag_name}' {'created' if not existing_docs else 'already exists'}"
+            )
             
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
