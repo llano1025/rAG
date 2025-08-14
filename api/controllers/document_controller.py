@@ -7,7 +7,7 @@ import logging
 import asyncio
 from typing import List, Optional, Dict, Any, Tuple, Union
 from datetime import datetime, timezone
-from fastapi import HTTPException, UploadFile, status
+from fastapi import UploadFile, status
 from sqlalchemy.orm import Session
 from io import BytesIO
 
@@ -18,12 +18,20 @@ from file_processor.text_extractor import TextExtractor
 from file_processor.metadata_extractor import MetadataExtractor
 from utils.security.audit_logger import AuditLogger
 from api.schemas.document_schemas import DocumentUpdate, Document, DocumentCreate
+from utils.exceptions import (
+    DocumentNotFoundException,
+    DocumentProcessingException,
+    InvalidFileTypeException,
+    FileTooLargeException,
+    DocumentAccessDeniedException,
+    DuplicateResourceException,
+    ExternalServiceException,
+    ConfigurationException
+)
 
 logger = logging.getLogger(__name__)
 
-class DocumentProcessingError(Exception):
-    """Raised when document processing fails."""
-    pass
+# Removed DocumentProcessingError - using unified exception system
 
 class DocumentController:
     """
@@ -154,9 +162,9 @@ class DocumentController:
             # Check if vector controller is available
             if self.vector_controller is None:
                 logger.error("Vector controller not available for document processing")
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="Document processing service is currently unavailable"
+                raise ExternalServiceException(
+                    message="Document processing service is currently unavailable",
+                    service_name="vector_controller"
                 )
             
             # Read file content
@@ -201,13 +209,16 @@ class DocumentController:
             
             return result
             
-        except HTTPException:
+        except (DocumentProcessingException, InvalidFileTypeException, FileTooLargeException, 
+                ExternalServiceException) as e:
+            # Re-raise our unified exceptions
             raise
         except Exception as e:
             logger.error(f"Document upload failed: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Document upload failed"
+            raise DocumentProcessingException(
+                message="Document upload failed",
+                processing_stage="upload",
+                context={"error": str(e)}
             )
     
     async def process_batch_upload(
@@ -237,9 +248,10 @@ class DocumentController:
         """
         try:
             if len(files) > 10:  # Limit batch size
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Batch upload limited to 10 files maximum"
+                raise DocumentProcessingException(
+                    message="Batch upload limited to 10 files maximum",
+                    processing_stage="batch_validation",
+                    context={"file_count": len(files), "max_allowed": 10}
                 )
             
             # Process uploads concurrently
@@ -299,13 +311,14 @@ class DocumentController:
                 }
             }
             
-        except HTTPException:
+        except (DocumentProcessingException, InvalidFileTypeException, FileTooLargeException) as e:
             raise
         except Exception as e:
             logger.error(f"Batch upload failed: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Batch upload failed"
+            raise DocumentProcessingException(
+                message="Batch upload operation failed",
+                processing_stage="batch_processing",
+                context={"error": str(e)}
             )
     
     async def get_document(
@@ -335,13 +348,15 @@ class DocumentController:
             
             return document_data
             
-        except HTTPException:
+        except (DocumentNotFoundException, DocumentAccessDeniedException) as e:
             raise
         except Exception as e:
             logger.error(f"Failed to get document {document_id}: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to retrieve document"
+            raise DocumentProcessingException(
+                message="Failed to retrieve document", 
+                document_id=str(document_id),
+                processing_stage="retrieval",
+                context={"error": str(e)}
             )
     
     async def update_document(
@@ -371,23 +386,24 @@ class DocumentController:
             ).first()
             
             if not document:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Document not found"
+                raise DocumentNotFoundException(
+                    message="Document not found",
+                    document_id=str(document_id)
                 )
             
             # Check permissions
             if not document.can_access(user):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Access denied to this document"
+                raise DocumentAccessDeniedException(
+                    message="Access denied to this document",
+                    document_id=str(document_id)
                 )
             
             # Check if user can edit this document
             if document.user_id != user.id and not user.is_superuser:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Permission denied: cannot edit this document"
+                raise DocumentAccessDeniedException(
+                    message="Permission denied: cannot edit this document",
+                    document_id=str(document_id),
+                    context={"required_permission": "edit"}
                 )
             
             # Update fields
@@ -432,14 +448,16 @@ class DocumentController:
             # Return updated document data
             return await self.get_document(document_id, user, db)
             
-        except HTTPException:
+        except (DocumentNotFoundException, DocumentAccessDeniedException) as e:
             raise
         except Exception as e:
             db.rollback()
             logger.error(f"Failed to update document {document_id}: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Document update failed"
+            raise DocumentProcessingException(
+                message="Document update failed",
+                document_id=str(document_id), 
+                processing_stage="update",
+                context={"error": str(e)}
             )
     
     async def delete_document(
@@ -472,13 +490,15 @@ class DocumentController:
             
             return result.get('deleted', False)
             
-        except HTTPException:
+        except (DocumentNotFoundException, DocumentAccessDeniedException) as e:
             raise
         except Exception as e:
             logger.error(f"Failed to delete document {document_id}: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Document deletion failed"
+            raise DocumentProcessingException(
+                message="Document deletion failed",
+                document_id=str(document_id),
+                processing_stage="deletion",
+                context={"error": str(e)}
             )
     
     async def batch_delete_documents(
@@ -502,9 +522,10 @@ class DocumentController:
         """
         try:
             if len(document_ids) > 50:  # Limit batch size
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Batch delete limited to 50 documents maximum"
+                raise DocumentProcessingException(
+                    message="Batch delete limited to 50 documents maximum",
+                    processing_stage="batch_validation",
+                    context={"document_count": len(document_ids), "max_allowed": 50}
                 )
             
             successful_deletes = []
@@ -550,13 +571,14 @@ class DocumentController:
                 }
             }
             
-        except HTTPException:
+        except DocumentProcessingException as e:
             raise
         except Exception as e:
             logger.error(f"Batch delete failed: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Batch delete failed"
+            raise DocumentProcessingException(
+                message="Batch delete operation failed",
+                processing_stage="batch_delete",
+                context={"error": str(e)}
             )
     
     async def get_document_versions(
@@ -584,16 +606,16 @@ class DocumentController:
             ).first()
             
             if not document:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Document not found"
+                raise DocumentNotFoundException(
+                    message="Document not found",
+                    document_id=str(document_id)
                 )
             
             # Check permissions
             if not document.can_access(user):
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Access denied to this document"
+                raise DocumentAccessDeniedException(
+                    message="Access denied to this document",
+                    document_id=str(document_id)
                 )
             
             # Get all versions from vector controller's version manager
@@ -623,13 +645,15 @@ class DocumentController:
             
             return version_list
             
-        except HTTPException:
+        except (DocumentNotFoundException, DocumentAccessDeniedException) as e:
             raise
         except Exception as e:
             logger.error(f"Failed to get document versions {document_id}: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to retrieve document versions"
+            raise DocumentProcessingException(
+                message="Failed to retrieve document versions",
+                document_id=str(document_id),
+                processing_stage="version_retrieval",
+                context={"error": str(e)}
             )
     
     async def list_user_documents(
@@ -705,9 +729,10 @@ class DocumentController:
             
         except Exception as e:
             logger.error(f"Failed to list documents: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to list documents"
+            raise DocumentProcessingException(
+                message="Failed to list documents",
+                processing_stage="document_listing",
+                context={"error": str(e)}
             )
     
     async def _validate_file(self, file: UploadFile):
@@ -723,9 +748,10 @@ class DocumentController:
         
         if len(file_content) > self.max_file_size:
             logger.error(f"_validate_file: File size check failed - {len(file_content)} > {self.max_file_size}")
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"File size exceeds {self.max_file_size / (1024*1024)}MB limit"
+            raise FileTooLargeException(
+                message=f"File size exceeds {self.max_file_size / (1024*1024)}MB limit",
+                file_size=len(file_content),
+                max_size=self.max_file_size
             )
         
         logger.info(f"_validate_file: File size check passed")
@@ -744,12 +770,12 @@ class DocumentController:
             logger.error(f"_validate_file: Type detection error message: {str(te)}")
             logger.exception(f"_validate_file: Full type detection exception traceback:")
             
-            # Convert UnsupportedFileType to HTTPException with proper error message
+            # Convert UnsupportedFileType to unified exception
             from file_processor.type_detector import UnsupportedFileType
             if isinstance(te, UnsupportedFileType):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=str(te)
+                raise InvalidFileTypeException(
+                    message=str(te),
+                    file_type=getattr(te, 'file_type', None)
                 )
             else:
                 raise  # Re-raise other exceptions
@@ -812,9 +838,10 @@ class DocumentController:
             unique_formats = list(set(supported_formats))
             supported_text = ', '.join(unique_formats)
             
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Unsupported file type: {content_type}"
+            raise InvalidFileTypeException(
+                message=f"Unsupported file type: {content_type}",
+                file_type=content_type,
+                supported_types=unique_formats
             )
 
 

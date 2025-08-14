@@ -1,5 +1,4 @@
 from typing import List, Dict, Optional, Tuple
-from fastapi import HTTPException
 import numpy as np
 from sqlalchemy.ext.asyncio import AsyncSession
 import hashlib
@@ -13,6 +12,12 @@ from vector_db.context_processor import ContextProcessor
 from vector_db.chunking import Chunk
 from database.models import User, SearchQuery, Document, SavedSearch
 from utils.security.audit_logger import AuditLogger
+from utils.exceptions import (
+    InvalidSearchQueryException,
+    SearchEngineUnavailableException,
+    SearchTimeoutException,
+    DocumentNotFoundException
+)
 
 logger = logging.getLogger(__name__)
 
@@ -121,10 +126,16 @@ class SearchController:
                 status="error"
             )
             
-            raise HTTPException(
-                status_code=500,
-                detail=f"Search failed: {str(e)}"
-            )
+            if isinstance(e, SearchError):
+                raise SearchEngineUnavailableException(
+                    message=f"Search engine error: {str(e)}",
+                    query=query
+                )
+            else:
+                raise SearchEngineUnavailableException(
+                    message=f"Search operation failed: {str(e)}",
+                    query=query
+                )
 
     async def batch_search(
         self,
@@ -216,9 +227,9 @@ class SearchController:
                 status="error"
             )
             
-            raise HTTPException(
-                status_code=500,
-                detail=f"Batch search failed: {str(e)}"
+            raise SearchEngineUnavailableException(
+                message=f"Batch search operation failed: {str(e)}",
+                context={"batch_size": len(queries)}
             )
 
     async def _combine_and_filter_results(
@@ -1275,7 +1286,10 @@ async def save_search(name: str, search_request: Dict, user_id: int):
         logger.error(f"Failed to save search '{name}' for user {user_id}: {str(e)}", exc_info=True)
         if "db" in locals():
             db.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
+        raise InvalidSearchQueryException(
+            message="Failed to save search query",
+            context={"error": str(e), "search_name": name}
+        )
 
 async def get_saved_searches(user_id: int):
     """Get user's saved searches."""

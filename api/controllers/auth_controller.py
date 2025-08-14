@@ -2,7 +2,7 @@
 Authentication controller for user management and security operations.
 """
 
-from fastapi import HTTPException, Depends, status
+from fastapi import Depends, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from passlib.context import CryptContext
@@ -17,6 +17,17 @@ from database.models import User, UserSession, APIKey, UserRole, UserActivityLog
 from api.schemas.user_schemas import UserCreate, UserUpdate, User as UserSchema
 from utils.security.encryption import EncryptionManager
 from utils.security.audit_logger import AuditLogger
+from utils.exceptions import (
+    AuthenticationFailedException,
+    InvalidCredentialsException, 
+    AccountLockedException,
+    TokenExpiredException,
+    InvalidTokenException,
+    DuplicateResourceException,
+    ValidationException,
+    MissingFieldException,
+    DocumentNotFoundException
+)
 from config import get_settings
 
 settings = get_settings()
@@ -55,7 +66,10 @@ class AuthController:
             
             return auth_result
         except Exception as e:
-            raise HTTPException(status_code=401, detail=str(e))
+            raise AuthenticationFailedException(
+                message="Authentication processing failed",
+                context={"error": str(e)}
+            )
 
     async def _verify_credentials(self, encrypted_creds: bytes) -> dict:
         """Internal method to verify credentials."""
@@ -65,9 +79,10 @@ class AuthController:
         password = credentials.get("password")
         
         if not email or not password:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Email and password required"
+            raise MissingFieldException(
+                message="Email and password are required",
+                missing_fields=["email", "password"] if not email and not password 
+                else ["email"] if not email else ["password"]
             )
         
         # This would need database session - simplified for now
@@ -99,17 +114,13 @@ class AuthController:
             payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
             email: str = payload.get("sub")
             if email is None:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Could not validate credentials",
-                    headers={"WWW-Authenticate": "Bearer"},
+                raise InvalidTokenException(
+                    message="Token does not contain user identifier"
                 )
             return payload
         except JWTError:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Could not validate credentials",
-                headers={"WWW-Authenticate": "Bearer"},
+            raise InvalidTokenException(
+                message="Token validation failed"
             )
 
     async def get_user_by_email(self, email: str, db: Session) -> Optional[User]:
@@ -138,17 +149,19 @@ class AuthController:
         # Check if user already exists
         existing_user = await self.get_user_by_email(user_data.email, db)
         if existing_user:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Email already registered"
+            raise DuplicateResourceException(
+                message="Email address is already registered",
+                resource_type="user",
+                resource_id=user_data.email
             )
         
         # Check username availability
         existing_username = db.query(User).filter(User.username == user_data.username).first()
         if existing_username:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Username already taken"
+            raise DuplicateResourceException(
+                message="Username is already taken",
+                resource_type="username",
+                resource_id=user_data.username
             )
         
         # Create user
@@ -191,9 +204,9 @@ class AuthController:
         
         # Check if account is locked
         if user.is_account_locked():
-            raise HTTPException(
-                status_code=status.HTTP_423_LOCKED,
-                detail=f"Account locked until {user.locked_until}"
+            raise AccountLockedException(
+                message="Account is temporarily locked due to failed login attempts",
+                locked_until=user.locked_until
             )
         
         if not self.verify_password(password, user.hashed_password):
@@ -226,9 +239,9 @@ class AuthController:
         """Update user information."""
         user = await self.get_user_by_id(user_id, db)
         if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
+            raise DocumentNotFoundException(
+                message="User not found",
+                document_id=str(user_id)
             )
         
         # Update fields
@@ -261,9 +274,9 @@ class AuthController:
         """Soft delete a user."""
         user = await self.get_user_by_id(user_id, db)
         if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
+            raise DocumentNotFoundException(
+                message="User not found for deletion",
+                document_id=str(user_id)
             )
         
         # Soft delete
@@ -360,9 +373,9 @@ class AuthController:
         """Create new API key for user."""
         user = await self.get_user_by_id(user_id, db)
         if not user:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found"
+            raise DocumentNotFoundException(
+                message="User not found for API key creation",
+                document_id=str(user_id)
             )
         
         # Generate API key
