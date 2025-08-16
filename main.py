@@ -7,7 +7,7 @@ import os
 from typing import Dict, Any
 from pathlib import Path
 
-from api.routes import document_routes, search_routes, vector_routes, library_routes, user_routes, auth_routes, health_routes, admin_routes, advanced_routes, analytics_routes, chat_routes, ocr_routes
+from api.routes import document_routes, search_routes, vector_routes, library_routes, user_routes, auth_routes, health_routes, admin_routes, advanced_routes, analytics_routes, chat_routes, ocr_routes, model_routes
 from api.middleware.auth import AuthMiddleware
 from api.middleware.error_handler import ErrorHandler
 from api.middleware.rate_limiter import RateLimiter
@@ -181,6 +181,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_routes.router, prefix="/api")
     app.include_router(advanced_routes.router, prefix="/api")
     app.include_router(analytics_routes.router, prefix="/api")
+    app.include_router(model_routes.router, prefix="/api")
     
     @app.get("/")
     async def root():

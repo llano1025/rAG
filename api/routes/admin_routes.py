@@ -7,12 +7,13 @@ from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List, Optional, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
 
 from database.connection import get_db
 from api.middleware.auth import get_current_active_user
 from database.models import User, Document, DocumentChunk, VectorIndex, UserRole, Permission, SearchQuery
+from api.schemas.responses import create_success_response
 from api.controllers.auth_controller import AuthController
 from vector_db.health_checker import get_vector_health_checker
 from utils.monitoring.health_check import HealthChecker
@@ -50,6 +51,32 @@ class PermissionRequest(BaseModel):
     user_id: int
     permission_name: str
 
+class UserResponse(BaseModel):
+    id: str
+    username: str
+    email: str
+    full_name: Optional[str]
+    role: str
+    is_active: bool
+    created_at: str
+    last_login: Optional[str]
+    
+    class Config:
+        from_attributes = True
+
+class PaginatedUserResponse(BaseModel):
+    items: List[UserResponse]
+    total: int
+    page: int
+    per_page: int
+    total_pages: int
+
+class UserUpdateRequest(BaseModel):
+    username: Optional[str] = None
+    email: Optional[str] = None
+    full_name: Optional[str] = None
+    is_active: Optional[bool] = None
+
 async def verify_admin_user(current_user: User = Depends(get_current_active_user)) -> User:
     """Verify that the current user is an admin."""
     if not current_user.is_superuser:
@@ -58,6 +85,255 @@ async def verify_admin_user(current_user: User = Depends(get_current_active_user
             detail="Administrative privileges required"
         )
     return current_user
+
+# ==============================================================================
+# User Management Endpoints
+# ==============================================================================
+
+@router.get("/users", response_model=PaginatedUserResponse)
+async def get_users(
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    admin_user: User = Depends(verify_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Get paginated list of all users."""
+    try:
+        # Calculate offset
+        offset = (page - 1) * per_page
+        
+        # Get total count
+        total = db.query(User).filter(User.is_deleted == False).count()
+        
+        # Get users with pagination
+        users = db.query(User).filter(
+            User.is_deleted == False
+        ).offset(offset).limit(per_page).all()
+        
+        # Convert to response format
+        user_responses = []
+        for user in users:
+            user_responses.append(UserResponse(
+                id=str(user.id),
+                username=user.username,
+                email=user.email,
+                full_name=user.full_name,
+                role="admin" if user.is_superuser else "user",
+                is_active=user.is_active,
+                created_at=user.created_at.isoformat(),
+                last_login=user.last_login.isoformat() if user.last_login else None
+            ))
+        
+        # Calculate total pages
+        total_pages = (total + per_page - 1) // per_page
+        
+        return PaginatedUserResponse(
+            items=user_responses,
+            total=total,
+            page=page,
+            per_page=per_page,
+            total_pages=total_pages
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve users: {str(e)}"
+        )
+
+@router.get("/users/{user_id}", response_model=UserResponse)
+async def get_user_by_id(
+    user_id: int,
+    admin_user: User = Depends(verify_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Get specific user by ID."""
+    try:
+        user = db.query(User).filter(
+            User.id == user_id,
+            User.is_deleted == False
+        ).first()
+        
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        return UserResponse(
+            id=str(user.id),
+            username=user.username,
+            email=user.email,
+            full_name=user.full_name,
+            role="admin" if user.is_superuser else "user",
+            is_active=user.is_active,
+            created_at=user.created_at.isoformat(),
+            last_login=user.last_login.isoformat() if user.last_login else None
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve user: {str(e)}"
+        )
+
+@router.put("/users/{user_id}", response_model=UserResponse)
+async def update_user(
+    user_id: int,
+    update_request: UserUpdateRequest,
+    admin_user: User = Depends(verify_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Update user information."""
+    try:
+        user = db.query(User).filter(
+            User.id == user_id,
+            User.is_deleted == False
+        ).first()
+        
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Prevent modifying superuser status through this endpoint
+        if user.is_superuser and update_request.is_active is False:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot deactivate superuser through this endpoint"
+            )
+        
+        # Update fields if provided
+        update_data = update_request.dict(exclude_unset=True)
+        for field, value in update_data.items():
+            if hasattr(user, field):
+                setattr(user, field, value)
+        
+        user.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(user)
+        
+        return UserResponse(
+            id=str(user.id),
+            username=user.username,
+            email=user.email,
+            full_name=user.full_name,
+            role="admin" if user.is_superuser else "user",
+            is_active=user.is_active,
+            created_at=user.created_at.isoformat(),
+            last_login=user.last_login.isoformat() if user.last_login else None
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update user: {str(e)}"
+        )
+
+@router.delete("/users/{user_id}")
+async def delete_user(
+    user_id: int,
+    admin_user: User = Depends(verify_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Soft delete a user."""
+    try:
+        user = db.query(User).filter(
+            User.id == user_id,
+            User.is_deleted == False
+        ).first()
+        
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Prevent deleting superusers
+        if user.is_superuser:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot delete superuser accounts"
+            )
+        
+        # Prevent self-deletion
+        if user.id == admin_user.id:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot delete your own account"
+            )
+        
+        # Soft delete
+        user.is_deleted = True
+        user.deleted_at = datetime.now(timezone.utc)
+        user.is_active = False
+        
+        db.commit()
+        
+        return {"message": f"User '{user.username}' deleted successfully"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete user: {str(e)}"
+        )
+
+@router.post("/users/{user_id}/toggle-status", response_model=UserResponse)
+async def toggle_user_status(
+    user_id: int,
+    admin_user: User = Depends(verify_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Toggle user active status (activate/deactivate)."""
+    try:
+        user = db.query(User).filter(
+            User.id == user_id,
+            User.is_deleted == False
+        ).first()
+        
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Prevent modifying superuser status
+        if user.is_superuser:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot modify superuser account status"
+            )
+        
+        # Prevent self-modification
+        if user.id == admin_user.id:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot modify your own account status"
+            )
+        
+        # Toggle status
+        user.is_active = not user.is_active
+        user.updated_at = datetime.now(timezone.utc)
+        
+        db.commit()
+        db.refresh(user)
+        
+        return UserResponse(
+            id=str(user.id),
+            username=user.username,
+            email=user.email,
+            full_name=user.full_name,
+            role="admin" if user.is_superuser else "user",
+            is_active=user.is_active,
+            created_at=user.created_at.isoformat(),
+            last_login=user.last_login.isoformat() if user.last_login else None
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to toggle user status: {str(e)}"
+        )
 
 @router.get("/stats/system", response_model=SystemStatsResponse)
 async def get_system_statistics(

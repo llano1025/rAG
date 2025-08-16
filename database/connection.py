@@ -48,3 +48,7 @@ def drop_tables():
     """Drop all database tables."""
     from .base import Base
     Base.metadata.drop_all(bind=engine)
+
+def get_database_url():
+    """Get database URL for migrations and external scripts."""
+    return settings.DATABASE_URL

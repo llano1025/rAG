@@ -926,3 +926,280 @@ class ChatSessionModel(Base, TimestampMixin):
         """Deactivate the session."""
         self.is_active = False
         self.update_activity()
+
+
+# ==============================================================================
+# LLM Model Registration Models
+# ==============================================================================
+
+class ModelProviderEnum(str, Enum):
+    """Supported LLM providers."""
+    OPENAI = "openai"
+    GEMINI = "gemini"
+    ANTHROPIC = "anthropic"
+    OLLAMA = "ollama"
+    LMSTUDIO = "lmstudio"
+
+
+class ModelTestStatusEnum(str, Enum):
+    """Model test status enumeration."""
+    PENDING = "pending"
+    RUNNING = "running"
+    PASSED = "passed"
+    FAILED = "failed"
+    TIMEOUT = "timeout"
+
+
+class RegisteredModel(Base, TimestampMixin, SoftDeleteMixin):
+    """User-registered LLM model configurations."""
+    
+    __tablename__ = "registered_models"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    
+    # Model identification
+    name = Column(String(100), nullable=False)  # User-defined name
+    display_name = Column(String(200), nullable=True)
+    description = Column(Text, nullable=True)
+    model_name = Column(String(200), nullable=False)  # Actual model name for API
+    provider = Column(SQLEnum(ModelProviderEnum), nullable=False)
+    
+    # Model configuration (stored as JSON)
+    config_json = Column(Text, nullable=False)  # ModelConfig serialized
+    provider_config_json = Column(Text, nullable=True)  # Provider-specific config
+    
+    # Model metadata
+    version = Column(String(50), nullable=True)
+    context_window = Column(Integer, nullable=True)
+    max_tokens = Column(Integer, nullable=True)
+    supports_streaming = Column(Boolean, default=True, nullable=False)
+    supports_embeddings = Column(Boolean, default=False, nullable=False)
+    
+    # Model status and management
+    is_active = Column(Boolean, default=True, nullable=False)
+    is_public = Column(Boolean, default=False, nullable=False)  # Share with other users
+    fallback_priority = Column(Integer, nullable=True)  # Order in fallback chain
+    
+    # Usage tracking
+    usage_count = Column(Integer, default=0, nullable=False)
+    last_used = Column(DateTime(timezone=True), nullable=True)
+    total_tokens_used = Column(Integer, default=0, nullable=False)
+    estimated_cost = Column(Float, default=0.0, nullable=False)
+    
+    # Performance metrics
+    average_response_time = Column(Float, nullable=True)
+    success_rate = Column(Float, default=100.0, nullable=False)
+    error_count = Column(Integer, default=0, nullable=False)
+    
+    # Relationships
+    user = relationship("User", backref="registered_models")
+    model_tests = relationship("ModelTest", back_populates="model", cascade="all, delete-orphan")
+    
+    # Indexes for performance
+    __table_args__ = (
+        Index('idx_registered_models_user_provider', 'user_id', 'provider'),
+        Index('idx_registered_models_active', 'is_active'),
+        Index('idx_registered_models_public', 'is_public'),
+        Index('idx_registered_models_name', 'name'),
+    )
+    
+    def __repr__(self):
+        return f"<RegisteredModel(id={self.id}, name='{self.name}', provider='{self.provider}', user_id={self.user_id})>"
+    
+    def get_config(self) -> Dict:
+        """Get model configuration as dictionary."""
+        if self.config_json:
+            import json
+            try:
+                return json.loads(self.config_json)
+            except (json.JSONDecodeError, TypeError):
+                return {}
+        return {}
+    
+    def set_config(self, config: Dict):
+        """Set model configuration from dictionary."""
+        if config:
+            import json
+            self.config_json = json.dumps(config, indent=2)
+        else:
+            self.config_json = "{}"
+    
+    def get_provider_config(self) -> Dict:
+        """Get provider-specific configuration as dictionary."""
+        if self.provider_config_json:
+            import json
+            try:
+                return json.loads(self.provider_config_json)
+            except (json.JSONDecodeError, TypeError):
+                return {}
+        return {}
+    
+    def set_provider_config(self, config: Dict):
+        """Set provider-specific configuration from dictionary."""
+        if config:
+            import json
+            self.provider_config_json = json.dumps(config, indent=2)
+        else:
+            self.provider_config_json = None
+    
+    def update_usage_stats(self, tokens_used: int = 0, response_time: float = None, success: bool = True):
+        """Update model usage statistics."""
+        self.usage_count += 1
+        self.total_tokens_used += tokens_used
+        self.last_used = datetime.utcnow()
+        
+        if response_time is not None:
+            if self.average_response_time is None:
+                self.average_response_time = response_time
+            else:
+                # Update running average
+                self.average_response_time = (self.average_response_time * (self.usage_count - 1) + response_time) / self.usage_count
+        
+        if not success:
+            self.error_count += 1
+        
+        # Update success rate
+        self.success_rate = ((self.usage_count - self.error_count) / self.usage_count) * 100
+    
+    def is_healthy(self) -> bool:
+        """Check if model is considered healthy for use."""
+        return (self.is_active and 
+                not self.is_deleted and 
+                self.success_rate >= 50.0)  # At least 50% success rate
+    
+    def to_model_info_dict(self) -> Dict:
+        """Convert to ModelInfo dictionary format."""
+        return {
+            'model_id': str(self.id),
+            'model_name': self.model_name,
+            'provider': self.provider.value,
+            'display_name': self.display_name or self.name,
+            'description': self.description,
+            'context_window': self.context_window,
+            'max_tokens': self.max_tokens,
+            'supports_streaming': self.supports_streaming,
+            'supports_embeddings': self.supports_embeddings,
+            'usage_count': self.usage_count,
+            'success_rate': self.success_rate,
+            'average_response_time': self.average_response_time
+        }
+
+
+class ModelTest(Base, TimestampMixin):
+    """Model testing and validation results."""
+    
+    __tablename__ = "model_tests"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    model_id = Column(Integer, ForeignKey("registered_models.id", ondelete="CASCADE"), nullable=False)
+    
+    # Test details
+    test_type = Column(String(50), nullable=False)  # connectivity, generation, embedding
+    test_prompt = Column(Text, nullable=True)
+    test_parameters = Column(Text, nullable=True)  # JSON string
+    
+    # Test results
+    status = Column(SQLEnum(ModelTestStatusEnum), default=ModelTestStatusEnum.PENDING, nullable=False)
+    response_text = Column(Text, nullable=True)
+    response_time_ms = Column(Float, nullable=True)
+    tokens_used = Column(Integer, nullable=True)
+    estimated_cost = Column(Float, nullable=True)
+    
+    # Error information
+    error_message = Column(Text, nullable=True)
+    error_code = Column(String(50), nullable=True)
+    error_details = Column(Text, nullable=True)  # JSON string
+    
+    # Test metadata
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    timeout_seconds = Column(Integer, default=30, nullable=False)
+    
+    # Relationships
+    model = relationship("RegisteredModel", back_populates="model_tests")
+    
+    # Indexes for performance
+    __table_args__ = (
+        Index('idx_model_tests_model_status', 'model_id', 'status'),
+        Index('idx_model_tests_type', 'test_type'),
+        Index('idx_model_tests_created', 'created_at'),
+    )
+    
+    def __repr__(self):
+        return f"<ModelTest(id={self.id}, model_id={self.model_id}, test_type='{self.test_type}', status='{self.status}')>"
+    
+    def get_test_parameters(self) -> Dict:
+        """Get test parameters as dictionary."""
+        if self.test_parameters:
+            import json
+            try:
+                return json.loads(self.test_parameters)
+            except (json.JSONDecodeError, TypeError):
+                return {}
+        return {}
+    
+    def set_test_parameters(self, parameters: Dict):
+        """Set test parameters from dictionary."""
+        if parameters:
+            import json
+            self.test_parameters = json.dumps(parameters, indent=2)
+        else:
+            self.test_parameters = None
+    
+    def get_error_details(self) -> Dict:
+        """Get error details as dictionary."""
+        if self.error_details:
+            import json
+            try:
+                return json.loads(self.error_details)
+            except (json.JSONDecodeError, TypeError):
+                return {}
+        return {}
+    
+    def set_error_details(self, details: Dict):
+        """Set error details from dictionary."""
+        if details:
+            import json
+            self.error_details = json.dumps(details, indent=2)
+        else:
+            self.error_details = None
+    
+    def start_test(self):
+        """Mark test as started."""
+        self.status = ModelTestStatusEnum.RUNNING
+        self.started_at = datetime.utcnow()
+    
+    def complete_test(self, success: bool, response_text: str = None, 
+                     response_time_ms: float = None, tokens_used: int = None,
+                     error_message: str = None, error_code: str = None, error_details: Dict = None):
+        """Mark test as completed with results."""
+        self.status = ModelTestStatusEnum.PASSED if success else ModelTestStatusEnum.FAILED
+        self.completed_at = datetime.utcnow()
+        self.response_text = response_text
+        self.response_time_ms = response_time_ms
+        self.tokens_used = tokens_used
+        
+        if not success:
+            self.error_message = error_message
+            self.error_code = error_code
+            if error_details:
+                self.set_error_details(error_details)
+    
+    def timeout_test(self):
+        """Mark test as timed out."""
+        self.status = ModelTestStatusEnum.TIMEOUT
+        self.completed_at = datetime.utcnow()
+        self.error_message = f"Test timed out after {self.timeout_seconds} seconds"
+        self.error_code = "TIMEOUT"
+    
+    @property
+    def duration_ms(self) -> float:
+        """Get test duration in milliseconds."""
+        if self.started_at and self.completed_at:
+            return (self.completed_at - self.started_at).total_seconds() * 1000
+        return 0.0
+    
+    def is_successful(self) -> bool:
+        """Check if test was successful."""
+        return self.status == ModelTestStatusEnum.PASSED

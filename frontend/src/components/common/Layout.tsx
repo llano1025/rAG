@@ -1,4 +1,4 @@
-import { ReactNode } from 'react';
+import { ReactNode, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 import {
@@ -6,9 +6,14 @@ import {
   MagnifyingGlassIcon,
   UserGroupIcon,
   ChartBarIcon,
-  Cog6ToothIcon,
   ArrowRightOnRectangleIcon,
   ChatBubbleLeftRightIcon,
+  CpuChipIcon,
+  HomeIcon,
+  PlusIcon,
+  EyeIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
 } from '@heroicons/react/24/outline';
 import { useAuth } from '@/hooks/useAuth';
 
@@ -17,6 +22,7 @@ interface LayoutProps {
 }
 
 const navigation = [
+  { name: 'Dashboard', href: '/', icon: HomeIcon },
   { name: 'Documents', href: '/documents', icon: DocumentTextIcon },
   { name: 'Search', href: '/search', icon: MagnifyingGlassIcon },
   { name: 'Chat', href: '/chat', icon: ChatBubbleLeftRightIcon },
@@ -25,14 +31,41 @@ const navigation = [
 
 const adminNavigation = [
   { name: 'Users', href: '/admin/users', icon: UserGroupIcon },
-  { name: 'Settings', href: '/admin/settings', icon: Cog6ToothIcon },
+  { 
+    name: 'Models', 
+    icon: CpuChipIcon,
+    expandable: true,
+    children: [
+      { name: 'Manage Models', href: '/admin/models/manage', icon: CpuChipIcon },
+      { name: 'Discover Models', href: '/admin/models/discover', icon: MagnifyingGlassIcon },
+      { name: 'Register Model', href: '/admin/models/register', icon: PlusIcon },
+    ]
+  },
 ];
 
 export default function Layout({ children }: LayoutProps) {
   const { user, logout } = useAuth();
   const router = useRouter();
+  const [expandedMenus, setExpandedMenus] = useState<string[]>([]);
 
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = user?.roles?.includes('admin') || user?.role === 'admin';
+
+  const toggleMenu = (menuName: string) => {
+    setExpandedMenus(prev => 
+      prev.includes(menuName) 
+        ? prev.filter(name => name !== menuName)
+        : [...prev, menuName]
+    );
+  };
+
+  const isMenuExpanded = (menuName: string) => expandedMenus.includes(menuName);
+
+  const isActiveRoute = (item: any) => {
+    if (item.expandable) {
+      return item.children?.some((child: any) => router.pathname === child.href);
+    }
+    return router.pathname === item.href;
+  };
 
   return (
     <div className="min-h-screen bg-gray-50 flex">
@@ -75,11 +108,67 @@ export default function Layout({ children }: LayoutProps) {
                     </p>
                   </div>
                   {adminNavigation.map((item) => {
-                    const isActive = router.pathname === item.href;
+                    const isActive = isActiveRoute(item);
+                    const isExpanded = isMenuExpanded(item.name);
+                    
+                    if (item.expandable) {
+                      return (
+                        <div key={item.name}>
+                          <button
+                            onClick={() => toggleMenu(item.name)}
+                            className={`group w-full flex items-center justify-between px-2 py-2 text-sm font-medium rounded-md ${
+                              isActive
+                                ? 'bg-primary-100 text-primary-900'
+                                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                            }`}
+                          >
+                            <div className="flex items-center">
+                              <item.icon
+                                className={`mr-3 h-6 w-6 ${
+                                  isActive ? 'text-primary-500' : 'text-gray-400 group-hover:text-gray-500'
+                                }`}
+                              />
+                              {item.name}
+                            </div>
+                            {isExpanded ? (
+                              <ChevronDownIcon className="h-4 w-4" />
+                            ) : (
+                              <ChevronRightIcon className="h-4 w-4" />
+                            )}
+                          </button>
+                          {isExpanded && item.children && (
+                            <div className="ml-6 mt-1 space-y-1">
+                              {item.children.map((child) => {
+                                const isChildActive = router.pathname === child.href;
+                                return (
+                                  <Link
+                                    key={child.name}
+                                    href={child.href}
+                                    className={`group flex items-center px-2 py-2 text-sm font-medium rounded-md ${
+                                      isChildActive
+                                        ? 'bg-primary-100 text-primary-900'
+                                        : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                                    }`}
+                                  >
+                                    <child.icon
+                                      className={`mr-3 h-5 w-5 ${
+                                        isChildActive ? 'text-primary-500' : 'text-gray-400 group-hover:text-gray-500'
+                                      }`}
+                                    />
+                                    {child.name}
+                                  </Link>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
+                    
                     return (
                       <Link
                         key={item.name}
-                        href={item.href}
+                        href={item.href || '#'}
                         className={`group flex items-center px-2 py-2 text-sm font-medium rounded-md ${
                           isActive
                             ? 'bg-primary-100 text-primary-900'
