@@ -30,6 +30,15 @@ interface EmbeddingModel {
   quality_score?: number;
 }
 
+interface VisionModelInfo {
+  id: number;
+  name: string;
+  display_name?: string;
+  model_name: string;
+  provider: string;
+  loaded?: boolean;
+}
+
 export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps) {
   const [files, setFiles] = useState<UploadFile[]>([]);
   const [isUploading, setIsUploading] = useState(false);
@@ -43,6 +52,7 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
   const [ocrMethod, setOcrMethod] = useState<string>('tesseract');
   const [ocrLanguage, setOcrLanguage] = useState<string>('eng');
   const [visionProvider, setVisionProvider] = useState<string>('gemini');
+  const [selectedVisionModel, setSelectedVisionModel] = useState<string>('');
   const [showOcrSettings, setShowOcrSettings] = useState(false);
   const [previewFile, setPreviewFile] = useState<File | null>(null);
 
@@ -115,6 +125,9 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
           uploadParams.ocr_language = ocrLanguage;
           if (ocrMethod === 'vision_llm') {
             uploadParams.vision_provider = visionProvider;
+            if (selectedVisionModel) {
+              uploadParams.vision_model = selectedVisionModel;
+            }
           }
         }
 
@@ -328,9 +341,14 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
                 selectedMethod={ocrMethod}
                 selectedLanguage={ocrLanguage}
                 selectedVisionProvider={visionProvider}
+                selectedVisionModel={selectedVisionModel}
                 onMethodChange={setOcrMethod}
                 onLanguageChange={setOcrLanguage}
                 onVisionProviderChange={setVisionProvider}
+                onVisionModelChange={(modelId: string, model: VisionModelInfo) => {
+                  setSelectedVisionModel(modelId);
+                  setVisionProvider(model.provider); // Keep legacy provider sync
+                }}
                 showAdvanced={true}
               />
             )}
@@ -431,6 +449,7 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
           ocrMethod={ocrMethod}
           ocrLanguage={ocrLanguage}
           visionProvider={ocrMethod === 'vision_llm' ? visionProvider : undefined}
+          visionModel={ocrMethod === 'vision_llm' && selectedVisionModel ? selectedVisionModel : undefined}
           onClose={() => setPreviewFile(null)}
           onAccept={(result) => {
             // Handle OCR result if needed

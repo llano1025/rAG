@@ -9,7 +9,7 @@ from datetime import datetime
 
 from database.connection import get_db
 from api.middleware.auth import get_current_user, get_current_active_user
-from api.controllers.chat_controller import chat_controller
+from api.controllers.chat_controller import get_chat_controller
 from database.models import User
 
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -76,7 +76,8 @@ async def get_available_models(
 ):
     """Get available LLM and embedding models."""
     try:
-        models = await chat_controller.get_available_models(current_user)
+        controller = get_chat_controller(current_user.id)
+        models = await controller.get_available_models(current_user)
         return ModelListResponse(**models)
     except Exception as e:
         raise HTTPException(
@@ -93,7 +94,8 @@ async def create_chat_session(
     """Create a new chat session."""
     try:
         settings = request.settings.dict() if request.settings else {}
-        session_info = await chat_controller.create_chat_session(
+        controller = get_chat_controller(current_user.id)
+        session_info = await controller.create_chat_session(
             user=current_user,
             settings=settings,
             db=db
@@ -111,7 +113,7 @@ async def list_chat_sessions(
 ):
     """List active chat sessions for the current user."""
     try:
-        sessions_info = await chat_controller.list_chat_sessions(current_user)
+        sessions_info = await get_chat_controller(current_user.id).list_chat_sessions(current_user)
         return SessionListResponse(**sessions_info)
     except Exception as e:
         raise HTTPException(
@@ -127,7 +129,7 @@ async def get_chat_history(
 ):
     """Get chat history for a specific session."""
     try:
-        history = await chat_controller.get_chat_history(
+        history = await get_chat_controller(current_user.id).get_chat_history(
             session_id=session_id,
             user=current_user,
             limit=limit,
@@ -148,7 +150,7 @@ async def delete_chat_session(
 ):
     """Delete a chat session."""
     try:
-        result = await chat_controller.delete_chat_session(
+        result = await get_chat_controller(current_user.id).delete_chat_session(
             session_id=session_id,
             user=current_user,
             db=db
@@ -172,7 +174,7 @@ async def stream_chat_response(
         session_id = request.session_id
         if not session_id:
             settings = request.settings.dict() if request.settings else {}
-            session_info = await chat_controller.create_chat_session(
+            session_info = await get_chat_controller(current_user.id).create_chat_session(
                 user=current_user,
                 settings=settings,
                 db=db
@@ -182,7 +184,7 @@ async def stream_chat_response(
         # Create streaming response
         async def event_stream():
             try:
-                async for chunk in chat_controller.process_chat_message(
+                async for chunk in get_chat_controller(current_user.id).process_chat_message(
                     session_id=session_id,
                     message=request.message,
                     user=current_user,
@@ -225,7 +227,7 @@ async def send_chat_message(
         session_id = request.session_id
         if not session_id:
             settings = request.settings.dict() if request.settings else {}
-            session_info = await chat_controller.create_chat_session(
+            session_info = await get_chat_controller(current_user.id).create_chat_session(
                 user=current_user,
                 settings=settings,
                 db=db
@@ -236,7 +238,7 @@ async def send_chat_message(
         response_content = ""
         sources = []
         
-        async for chunk in chat_controller.process_chat_message(
+        async for chunk in get_chat_controller(current_user.id).process_chat_message(
             session_id=session_id,
             message=request.message,
             user=current_user,
@@ -339,7 +341,7 @@ async def cleanup_old_sessions(
                 detail="Admin access required"
             )
         
-        await chat_controller.cleanup_old_sessions(max_age_hours, db)
+        await get_chat_controller(current_user.id).cleanup_old_sessions(max_age_hours, db)
         
         return {
             "message": f"Cleaned up sessions older than {max_age_hours} hours",

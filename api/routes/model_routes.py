@@ -16,7 +16,7 @@ import logging
 from database.connection import get_db
 from database.models import RegisteredModel, ModelTest, ModelProviderEnum
 from api.middleware.auth import get_current_active_user
-from services.model_discovery_service import get_discovery_service
+from llm.services.model_discovery_service import get_discovery_service
 from llm.base.models import ModelConfig
 
 logger = logging.getLogger(__name__)
@@ -501,7 +501,7 @@ async def load_registered_models(
 ):
     """Load all registered models into the ModelManager."""
     try:
-        from services.model_registration_service import get_registration_service
+        from llm.services.model_registration_service import get_registration_service
         
         # Check if user_id filtering is requested
         if user_id is not None and not current_user.is_admin:
@@ -531,7 +531,7 @@ async def sync_registered_models(
 ):
     """Synchronize loaded models with database state."""
     try:
-        from services.model_registration_service import get_registration_service
+        from llm.services.model_registration_service import get_registration_service
         
         registration_service = get_registration_service()
         stats = await registration_service.sync_with_database(current_user.id)
@@ -551,7 +551,7 @@ async def get_loaded_models(
 ):
     """Get list of currently loaded models."""
     try:
-        from services.model_registration_service import get_registration_service
+        from llm.services.model_registration_service import get_registration_service
         
         registration_service = get_registration_service()
         model_infos = await registration_service.get_model_info_list(current_user.id)
@@ -597,7 +597,7 @@ async def reload_registered_model(
         if not model:
             raise HTTPException(status_code=404, detail="Model not found")
         
-        from services.model_registration_service import get_registration_service
+        from llm.services.model_registration_service import get_registration_service
         
         registration_service = get_registration_service()
         success = await registration_service.reload_model(model_id)

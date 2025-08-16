@@ -8,11 +8,14 @@ import {
   CpuChipIcon,
   AdjustmentsHorizontalIcon,
   ClipboardDocumentListIcon,
-  TrashIcon
+  TrashIcon,
+  ArrowPathIcon
 } from '@heroicons/react/24/outline';
 import { useAuth } from '../../hooks/useAuth';
 import { apiClient } from '../../api/client';
 import { chatApi } from '../../api/chat';
+import { modelsApi, LoadedModel } from '../../api/models';
+import ModelHealthIndicator from '../models/ModelHealthIndicator';
 
 interface Message {
   id: string;
@@ -68,9 +71,10 @@ const ChatInterface: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [sessionInfo, setSessionInfo] = useState<ChatSessionInfo | null>(null);
   const [availableModels, setAvailableModels] = useState<{
-    llm_models: Array<{ id: string; name: string; provider: string }>;
-    embedding_models: Array<{ id: string; name: string; provider: string }>;
+    llm_models: LoadedModel[];
+    embedding_models: LoadedModel[];
   }>({ llm_models: [], embedding_models: [] });
+  const [modelsLoading, setModelsLoading] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -85,17 +89,42 @@ const ChatInterface: React.FC = () => {
     scrollToBottom();
   }, [messages, scrollToBottom]);
 
+  // Load available models function
+  const loadAvailableModels = async () => {
+    try {
+      setModelsLoading(true);
+      
+      // Use chatApi.getAvailableModels() which includes enhanced filtering
+      const availableModels = await chatApi.getAvailableModels();
+      
+      setAvailableModels({
+        llm_models: availableModels.llm_models,
+        embedding_models: availableModels.embedding_models
+      });
+
+      // Update default settings if current models are not available
+      if (availableModels.llm_models.length > 0 && !availableModels.llm_models.find(m => m.model_id === settings.llm_model)) {
+        setSettings(prev => ({ ...prev, llm_model: availableModels.llm_models[0].model_id }));
+      }
+      
+      if (availableModels.embedding_models.length > 0 && !availableModels.embedding_models.find(m => m.model_id === settings.embedding_model)) {
+        setSettings(prev => ({ ...prev, embedding_model: availableModels.embedding_models[0].model_id }));
+      }
+        
+    } catch (error) {
+      console.error('Failed to load available models:', error);
+      // The chatApi.getAvailableModels() already includes fallback logic
+      setAvailableModels({
+        llm_models: [],
+        embedding_models: []
+      });
+    } finally {
+      setModelsLoading(false);
+    }
+  };
+
   // Load available models on component mount
   useEffect(() => {
-    const loadAvailableModels = async () => {
-      try {
-        const models: any = await apiClient.get('/api/chat/models');
-        setAvailableModels(models);
-      } catch (error) {
-        console.error('Failed to load available models:', error);
-      }
-    };
-
     loadAvailableModels();
   }, []);
 
@@ -362,39 +391,76 @@ const ChatInterface: React.FC = () => {
       {/* Settings Panel */}
       {showSettings && (
         <div className="p-4 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-medium text-gray-900 dark:text-white">Chat Settings</h3>
+            <button
+              onClick={loadAvailableModels}
+              disabled={modelsLoading}
+              className="flex items-center px-3 py-1 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+            >
+              <ArrowPathIcon className={`h-4 w-4 mr-1 ${modelsLoading ? 'animate-spin' : ''}`} />
+              Refresh Models
+            </button>
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 LLM Model
               </label>
-              <select
-                value={settings.llm_model}
-                onChange={(e) => setSettings(prev => ({ ...prev, llm_model: e.target.value }))}
-                className="w-full p-2 border border-gray-300 rounded-md dark:border-gray-600 dark:bg-gray-700 dark:text-white"
-              >
-                {availableModels.llm_models.map(model => (
-                  <option key={model.id} value={model.id}>
-                    {model.name} ({model.provider})
-                  </option>
-                ))}
-              </select>
+              <div className="relative">
+                <select
+                  value={settings.llm_model}
+                  onChange={(e) => setSettings(prev => ({ ...prev, llm_model: e.target.value }))}
+                  className="w-full p-2 border border-gray-300 rounded-md dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                >
+                  {availableModels.llm_models.map(model => (
+                    <option key={model.model_id} value={model.model_id}>
+                      {model.display_name} ({model.provider})
+                      {model.context_window ? ` - ${(model.context_window / 1000).toFixed(0)}K context` : ''}
+                    </option>
+                  ))}
+                </select>
+                {availableModels.llm_models.length === 0 && (
+                  <div className="absolute inset-y-0 right-3 flex items-center">
+                    <ModelHealthIndicator status="not_loaded" size="sm" />
+                  </div>
+                )}
+              </div>
+              {availableModels.llm_models.length === 0 && (
+                <p className="text-xs text-red-600 mt-1">
+                  No LLM models are currently loaded. Contact admin to register and load models.
+                </p>
+              )}
             </div>
 
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 Embedding Model
               </label>
-              <select
-                value={settings.embedding_model}
-                onChange={(e) => setSettings(prev => ({ ...prev, embedding_model: e.target.value }))}
-                className="w-full p-2 border border-gray-300 rounded-md dark:border-gray-600 dark:bg-gray-700 dark:text-white"
-              >
-                {availableModels.embedding_models.map(model => (
-                  <option key={model.id} value={model.id}>
-                    {model.name} ({model.provider})
-                  </option>
-                ))}
-              </select>
+              <div className="relative">
+                <select
+                  value={settings.embedding_model}
+                  onChange={(e) => setSettings(prev => ({ ...prev, embedding_model: e.target.value }))}
+                  className="w-full p-2 border border-gray-300 rounded-md dark:border-gray-600 dark:bg-gray-700 dark:text-white"
+                >
+                  {availableModels.embedding_models.map(model => (
+                    <option key={model.model_id} value={model.model_id}>
+                      {model.display_name} ({model.provider})
+                      {model.context_window ? ` - ${(model.context_window / 1000).toFixed(0)}K context` : ''}
+                    </option>
+                  ))}
+                </select>
+                {availableModels.embedding_models.length === 0 && (
+                  <div className="absolute inset-y-0 right-3 flex items-center">
+                    <ModelHealthIndicator status="not_loaded" size="sm" />
+                  </div>
+                )}
+              </div>
+              {availableModels.embedding_models.length === 0 && (
+                <p className="text-xs text-red-600 mt-1">
+                  No embedding models are currently loaded. Contact admin to register and load models.
+                </p>
+              )}
             </div>
 
             <div>

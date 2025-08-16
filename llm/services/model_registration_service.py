@@ -12,9 +12,9 @@ from sqlalchemy import and_
 
 from database.models import RegisteredModel, ModelTest, ModelProviderEnum
 from database.connection import SessionLocal
-from llm.model_manager import ModelManager
-from llm.base.models import ModelConfig, ModelInfo
-from llm.config.provider_registry import get_provider_registry
+from ..model_manager import ModelManager
+from ..base.models import ModelConfig, ModelInfo
+from ..config.provider_registry import get_provider_registry
 
 logger = logging.getLogger(__name__)
 

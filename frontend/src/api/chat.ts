@@ -1,6 +1,8 @@
 // frontend/src/api/chat.ts
 
 import { apiClient } from './client';
+import { modelsApi, LoadedModel } from './models';
+import { filterLLMModels, filterEmbeddingModels } from '../utils/modelFilters';
 import Cookies from 'js-cookie';
 
 export interface ChatSettings {
@@ -38,34 +40,32 @@ export interface DocumentSource {
   text_snippet: string;
 }
 
-export interface ModelInfo {
-  id: string;
-  name: string;
-  display_name: string;
-  provider: string;
-  description: string;
-  embedding_dimension?: number;
-  performance_tier?: string;
-  quality_score?: number;
-  use_cases?: string[];
-  language_support?: string[];
-  api_cost_per_1k_tokens?: number;
-  model_size_mb?: number;
-  memory_requirements_mb?: number;
-  gpu_required?: boolean;
-  status?: 'healthy' | 'unhealthy' | 'unknown';
-  last_used?: string;
-}
-
 export interface AvailableModels {
-  llm_models: ModelInfo[];
-  embedding_models: ModelInfo[];
+  llm_models: LoadedModel[];
+  embedding_models: LoadedModel[];
 }
 
 export const chatApi = {
   // Get available models
   async getAvailableModels(): Promise<AvailableModels> {
-    return apiClient.get('/api/chat/models');
+    try {
+      // Try to get models from registered models API first
+      const loadedModelsData = await modelsApi.getLoadedModels();
+      
+      return {
+        llm_models: filterLLMModels(loadedModelsData.models),
+        embedding_models: filterEmbeddingModels(loadedModelsData.models)
+      };
+    } catch (error) {
+      console.warn('Failed to load registered models, falling back to legacy API:', error);
+      
+      // Fallback to legacy chat models API
+      const legacyModels = await apiClient.get('/api/chat/models');
+      return {
+        llm_models: legacyModels.llm_models || [],
+        embedding_models: legacyModels.embedding_models || []
+      };
+    }
   },
 
   // Create a new chat session

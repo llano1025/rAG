@@ -10,11 +10,11 @@ backward compatibility after the architectural restructuring.
 # Core components
 from .model_manager import ModelManager
 from .factory import (
+    create_model_manager_with_registered_models,
+    create_model_manager_with_registered_models_sync,
     create_model_manager_with_defaults,
-    create_custom_model_manager,
-    create_single_provider_manager,
-    get_available_providers,
-    check_provider_health
+    load_models_for_user,
+    get_available_models_count
 )
 
 # Base interfaces and models (for advanced users)
@@ -22,8 +22,8 @@ from .base.interfaces import BaseLLM, StreamingLLM, EmbeddingLLM
 from .base.models import ModelConfig, LLMResponse, ModelInfo
 from .base.exceptions import LLMError, LLMProviderError, LLMConfigError
 
-# Configuration and registry
-from .config.model_configs import ModelConfigTemplates, get_default_config
+# Services and registry
+from .services import ModelDiscoveryService, ModelRegistrationService, get_discovery_service, get_registration_service
 from .config.provider_registry import get_provider_registry
 
 # Provider implementations (for direct access if needed)
@@ -40,11 +40,11 @@ __all__ = [
     'ModelManager',
     
     # Factory functions (recommended approach)
+    'create_model_manager_with_registered_models',
+    'create_model_manager_with_registered_models_sync',
     'create_model_manager_with_defaults',
-    'create_custom_model_manager',
-    'create_single_provider_manager',
-    'get_available_providers',
-    'check_provider_health',
+    'load_models_for_user',
+    'get_available_models_count',
     
     # Base interfaces (for advanced users)
     'BaseLLM',
@@ -57,9 +57,11 @@ __all__ = [
     'LLMProviderError',
     'LLMConfigError',
     
-    # Configuration utilities
-    'ModelConfigTemplates',
-    'get_default_config',
+    # Services and utilities
+    'ModelDiscoveryService',
+    'ModelRegistrationService',
+    'get_discovery_service',
+    'get_registration_service',
     'get_provider_registry',
     
     # Provider implementations (for direct access)

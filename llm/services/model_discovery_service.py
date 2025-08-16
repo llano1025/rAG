@@ -14,9 +14,7 @@ import json
 import time
 from functools import wraps
 
-from llm.config.provider_registry import get_provider_registry
-from llm.config.model_configs import ModelConfigTemplates
-from llm.base.models import ModelInfo
+from ..config.provider_registry import get_provider_registry
 
 logger = logging.getLogger(__name__)
 
@@ -233,14 +231,13 @@ class ModelDiscoveryService:
                 if cached_models:
                     logger.info(f"Returning cached models for {provider} due to API error")
                     return cached_models
-            return []
+            raise Exception(f"Failed to discover models for {provider}: {str(e)}")
     
     @retry_on_failure(max_retries=2, delay=1.0)
     async def _discover_openai_models(self, api_key: Optional[str]) -> List[DiscoveredModel]:
         """Discover OpenAI models using their API."""
         if not api_key:
-            # Return known models without API call
-            return self._get_openai_models()
+            raise ValueError("OpenAI API key is required for model discovery")
         
         try:
             session = await self._get_session()
@@ -293,11 +290,11 @@ class ModelDiscoveryService:
                     return models
                 else:
                     logger.warning(f"OpenAI API returned status {response.status}")
-                    return self._get_openai_models()
+                    raise Exception(f"OpenAI API returned status {response.status}")
                     
         except Exception as e:
             logger.error(f"Error fetching OpenAI models: {str(e)}")
-            return self._get_openai_models()
+            raise
     
     def _categorize_openai_model(self, model_id: str) -> str:
         """Categorize OpenAI model by type."""
@@ -372,25 +369,6 @@ class ModelDiscoveryService:
         
         return display_name
     
-    def _get_openai_models(self) -> List[DiscoveredModel]:
-        """Get known OpenAI models from config templates (fallback)."""
-        templates = ModelConfigTemplates.get_provider_templates('openai')
-        models = []
-        
-        for template_name, config in templates.items():
-            model_name = config.model_name
-            models.append(DiscoveredModel(
-                id=model_name,
-                name=model_name,
-                provider='openai',
-                display_name=model_name,
-                context_window=config.context_window,
-                max_tokens=config.max_tokens,
-                supports_embeddings='embedding' in model_name.lower(),
-                metadata={'template': template_name, 'api_discovered': False}
-            ))
-        
-        return models
     
     async def _discover_ollama_models(self, base_url: str) -> List[DiscoveredModel]:
         """Discover Ollama models by calling the local API."""
@@ -477,8 +455,7 @@ class ModelDiscoveryService:
     async def _discover_gemini_models(self, api_key: Optional[str]) -> List[DiscoveredModel]:
         """Discover Gemini models using their API."""
         if not api_key:
-            # Return known models without API call
-            return self._get_gemini_models()
+            raise ValueError("Gemini API key is required for model discovery")
         
         try:
             session = await self._get_session()
@@ -526,15 +503,15 @@ class ModelDiscoveryService:
                             ))
                     
                     logger.info(f"Discovered {len(models)} Gemini models via API")
-                    return models if models else self._get_gemini_models()
+                    return models
                     
                 else:
                     logger.warning(f"Gemini API returned status {response.status}")
-                    return self._get_gemini_models()
+                    raise Exception(f"Gemini API returned status {response.status}")
                     
         except Exception as e:
             logger.error(f"Error fetching Gemini models: {str(e)}")
-            return self._get_gemini_models()
+            raise
     
     def _estimate_gemini_context_window(self, model_id: str) -> int:
         """Estimate context window based on Gemini model ID."""
@@ -564,31 +541,12 @@ class ModelDiscoveryService:
         # Gemini models typically support up to 65536 output tokens
         return 65536
     
-    def _get_gemini_models(self) -> List[DiscoveredModel]:
-        """Get known Gemini models from config templates (fallback)."""
-        templates = ModelConfigTemplates.get_provider_templates('gemini')
-        models = []
-        
-        for template_name, config in templates.items():
-            model_name = config.model_name
-            models.append(DiscoveredModel(
-                id=model_name,
-                name=model_name,
-                provider='gemini',
-                display_name=model_name,
-                context_window=config.context_window,
-                max_tokens=config.max_tokens,
-                metadata={'template': template_name, 'api_discovered': False}
-            ))
-        
-        return models
     
     @retry_on_failure(max_retries=2, delay=1.0)
     async def _discover_anthropic_models(self, api_key: Optional[str]) -> List[DiscoveredModel]:
         """Discover Anthropic models using their API."""
         if not api_key:
-            # Return known models without API call
-            return self._get_anthropic_models()
+            raise ValueError("Anthropic API key is required for model discovery")
         
         try:
             session = await self._get_session()
@@ -636,15 +594,15 @@ class ModelDiscoveryService:
                             ))
                     
                     logger.info(f"Discovered {len(models)} Anthropic models via API")
-                    return models if models else self._get_anthropic_models()
+                    return models
                     
                 else:
                     logger.warning(f"Anthropic API returned status {response.status}")
-                    return self._get_anthropic_models()
+                    raise Exception(f"Anthropic API returned status {response.status}")
                     
         except Exception as e:
             logger.error(f"Error fetching Anthropic models: {str(e)}")
-            return self._get_anthropic_models()
+            raise
     
     def _estimate_anthropic_context_window(self, model_id: str) -> int:
         """Estimate context window based on Anthropic model ID."""
@@ -668,24 +626,6 @@ class ModelDiscoveryService:
         # Anthropic models typically support up to 8192 output tokens
         return 8192
     
-    def _get_anthropic_models(self) -> List[DiscoveredModel]:
-        """Get known Anthropic models from config templates (fallback)."""
-        templates = ModelConfigTemplates.get_provider_templates('anthropic')
-        models = []
-        
-        for template_name, config in templates.items():
-            model_name = config.model_name
-            models.append(DiscoveredModel(
-                id=model_name,
-                name=model_name,
-                provider='anthropic',
-                display_name=model_name,
-                context_window=config.context_window,
-                max_tokens=config.max_tokens,
-                metadata={'template': template_name, 'api_discovered': False}
-            ))
-        
-        return models
     
     def _format_size(self, size_bytes: int) -> str:
         """Format size in bytes to human readable format."""
@@ -697,27 +637,41 @@ class ModelDiscoveryService:
             return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
     
     async def get_model_templates(self, provider: Optional[str] = None) -> Dict[str, Any]:
-        """Get model configuration templates for a provider or all providers."""
-        if provider:
-            templates = ModelConfigTemplates.get_provider_templates(provider)
-            return {
-                provider: {
-                    name: config.to_dict() 
-                    for name, config in templates.items()
+        """Get basic model configuration templates based on provider capabilities."""
+        # Return basic templates for model configuration
+        base_templates = {
+            'openai': {
+                'chat_completion': {
+                    'temperature': 0.7,
+                    'top_p': 1.0,
+                    'presence_penalty': 0.0,
+                    'frequency_penalty': 0.0,
+                    'max_tokens': 4096,
+                    'context_window': 128000
+                }
+            },
+            'anthropic': {
+                'chat_completion': {
+                    'temperature': 0.7,
+                    'top_p': 1.0,
+                    'max_tokens': 8192,
+                    'context_window': 200000
+                }
+            },
+            'gemini': {
+                'chat_completion': {
+                    'temperature': 0.7,
+                    'top_p': 0.95,
+                    'max_tokens': 65536,
+                    'context_window': 1048576
                 }
             }
+        }
+        
+        if provider:
+            return {provider: base_templates.get(provider, {})}
         else:
-            all_templates = ModelConfigTemplates.get_all_templates()
-            organized = {}
-            
-            for template_name, config in all_templates.items():
-                # Extract provider from template name
-                provider_name = template_name.split('_')[0]
-                if provider_name not in organized:
-                    organized[provider_name] = {}
-                organized[provider_name][template_name] = config.to_dict()
-            
-            return organized
+            return base_templates
     
     async def test_provider_connectivity(
         self, 

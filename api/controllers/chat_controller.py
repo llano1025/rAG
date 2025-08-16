@@ -11,7 +11,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import and_, or_, desc
 
 from database.models import User, Document, DocumentChunk, ChatSessionModel
-from llm import create_model_manager_with_defaults
+from llm.factory import create_model_manager_with_registered_models_sync
 from vector_db.embedding_manager import EnhancedEmbeddingManager
 from vector_db.embedding_model_registry import get_embedding_model_registry, EmbeddingProvider
 from vector_db.search_engine import EnhancedSearchEngine
@@ -33,8 +33,8 @@ class ChatSession:
 class ChatController:
     """Controller for chat functionality with RAG support."""
     
-    def __init__(self):
-        self.model_manager = create_model_manager_with_defaults()
+    def __init__(self, user_id: Optional[int] = None):
+        self.model_manager = create_model_manager_with_registered_models_sync(user_id)
         self.embedding_registry = get_embedding_model_registry()
         self.search_engine = None  # Will be initialized per request
         self.active_sessions: Dict[str, ChatSession] = {}
@@ -1488,5 +1488,10 @@ class ChatController:
             "Contact support if the issue persists"
         ])
 
-# Global instance
+# Factory function for creating chat controllers with user context
+def get_chat_controller(user_id: Optional[int] = None) -> ChatController:
+    """Get a ChatController instance with models loaded for the specified user."""
+    return ChatController(user_id)
+
+# Backward compatibility - default instance with no user context
 chat_controller = ChatController()

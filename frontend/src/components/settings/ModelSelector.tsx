@@ -11,6 +11,8 @@ import {
   ArrowPathIcon
 } from '@heroicons/react/24/outline';
 import { apiClient } from '../../api/client';
+import { modelsApi, LoadedModel } from '../../api/models';
+import ModelHealthIndicator from '../models/ModelHealthIndicator';
 
 interface ModelInfo {
   id: string;
@@ -64,9 +66,51 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
       setIsLoading(true);
       setError(null);
 
-      const data: any = await apiClient.get('/api/chat/models');
-      setLLMModels(data.llm_models || []);
-      setEmbeddingModels(data.embedding_models || []);
+      // Try to load from registered models API first
+      try {
+        const loadedModelsData = await modelsApi.getLoadedModels();
+        
+        // Convert LoadedModel to ModelInfo format
+        const convertToModelInfo = (model: LoadedModel): ModelInfo => ({
+          id: model.model_id,
+          name: model.model_name,
+          display_name: model.display_name,
+          provider: model.provider,
+          description: model.description || '',
+          embedding_dimension: model.supports_embeddings ? 384 : undefined, // Default dimension
+          performance_tier: 'balanced', // Default tier
+          quality_score: 0.85, // Default score
+          use_cases: model.capabilities || [],
+          language_support: ['en'], // Default language
+          api_cost_per_1k_tokens: 0.002, // Default cost
+          model_size_mb: undefined,
+          memory_requirements_mb: undefined,
+          gpu_required: false,
+          status: 'healthy' as const,
+          last_used: undefined
+        });
+
+        // Filter models by capability
+        const llmModels = loadedModelsData.models
+          .filter(model => !model.supports_embeddings && model.supports_streaming)
+          .map(convertToModelInfo);
+        
+        const embeddingModels = loadedModelsData.models
+          .filter(model => model.supports_embeddings)
+          .map(convertToModelInfo);
+        
+        setLLMModels(llmModels);
+        setEmbeddingModels(embeddingModels);
+        
+      } catch (registeredError) {
+        console.warn('Failed to load registered models, falling back to legacy API:', registeredError);
+        
+        // Fallback to legacy API
+        const data: any = await apiClient.get('/api/chat/models');
+        setLLMModels(data.llm_models || []);
+        setEmbeddingModels(data.embedding_models || []);
+      }
+      
     } catch (err: any) {
       setError(err.message);
       console.error('Error loading models:', err);
@@ -216,7 +260,11 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
                       <span className="font-medium text-gray-900 dark:text-white">
                         {model.display_name || model.name}
                       </span>
-                      {getStatusIcon(model.status)}
+                      <ModelHealthIndicator 
+                        status={model.status || 'healthy'} 
+                        size="sm" 
+                        showTooltip={true}
+                      />
                     </div>
                     <div className="text-sm text-gray-600 dark:text-gray-400">
                       {model.provider} • {model.description}
@@ -312,7 +360,11 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
                       <span className="font-medium text-gray-900 dark:text-white">
                         {model.display_name || model.name}
                       </span>
-                      {getStatusIcon(model.status)}
+                      <ModelHealthIndicator 
+                        status={model.status || 'healthy'} 
+                        size="sm" 
+                        showTooltip={true}
+                      />
                       {model.performance_tier && (
                         <span className={`px-2 py-1 text-xs rounded-full ${getPerformanceTierColor(model.performance_tier)}`}>
                           {model.performance_tier}
