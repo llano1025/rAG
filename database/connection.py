@@ -17,7 +17,7 @@ if settings.DATABASE_URL.startswith("sqlite"):
         settings.DATABASE_URL,
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
-        echo=settings.DEBUG
+        echo=False
     )
 else:
     # PostgreSQL configuration
@@ -25,7 +25,7 @@ else:
         settings.DATABASE_URL,
         pool_pre_ping=True,
         pool_recycle=300,
-        echo=settings.DEBUG
+        echo=False
     )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
