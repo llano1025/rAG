@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
 from sqlalchemy import and_, or_, desc
 
-from database.models import User, Document, DocumentChunk, ChatSessionModel
+from database.models import User, Document, DocumentChunk, ChatSessionModel, RegisteredModel
 from llm.factory import create_model_manager_with_registered_models_sync
 from vector_db.embedding_manager import EnhancedEmbeddingManager
 from vector_db.embedding_model_registry import get_embedding_model_registry, EmbeddingProvider
@@ -165,23 +165,79 @@ class ChatController:
             logger.error(f"Failed to cleanup expired sessions: {str(e)}")
             db.rollback()
         
-    async def get_available_models(self, user: User) -> Dict[str, Any]:
+    async def get_available_models(self, user: User, db: Session = None) -> Dict[str, Any]:
         """Get available LLM and embedding models."""
         try:
-            # Get registered LLM models
+            # Get registered LLM models directly from PostgreSQL database
             llm_models = []
-            for model_id in self.model_manager.list_registered_models():
-                config = self.model_manager.get_model_config(model_id)
-                if config:
-                    llm_models.append({
-                        "id": model_id,
-                        "name": config.model_name,
-                        "display_name": config.model_name,
-                        "provider": self._get_provider_from_model_id(model_id),
-                        "description": f"Max tokens: {config.max_tokens}, Temperature: {config.temperature}",
-                        "max_tokens": config.max_tokens,
-                        "temperature": config.temperature
-                    })
+            
+            if db is not None:
+                try:
+                    # Query registered models for this user and public models
+                    query = db.query(RegisteredModel).filter(
+                        and_(
+                            or_(
+                                RegisteredModel.user_id == user.id,  # User's own models
+                                RegisteredModel.is_public == True    # Public models
+                            ),
+                            RegisteredModel.is_active == True,       # Only active models
+                            RegisteredModel.deleted_at.is_(None),   # Not soft-deleted
+                            RegisteredModel.supports_embeddings == False  # LLM models only
+                        )
+                    ).order_by(RegisteredModel.fallback_priority.asc().nullslast()).all()
+                    
+                    logger.info(f"Found {len(query)} registered LLM models in database for user {user.id}")
+                    
+                    for model in query:
+                        try:
+                            # Parse model configuration from JSON
+                            import json
+                            config_data = json.loads(model.config_json) if model.config_json else {}
+                            
+                            llm_models.append({
+                                "model_id": f"registered_{model.id}",
+                                "model_name": model.model_name,
+                                "display_name": model.display_name or model.name,
+                                "provider": model.provider.value,
+                                "description": model.description or f"Registered {model.provider.value} model",
+                                "max_tokens": model.max_tokens or config_data.get("max_tokens", 2048),
+                                "context_window": model.context_window or config_data.get("context_window", 4096),
+                                "supports_streaming": model.supports_streaming,
+                                "supports_embeddings": model.supports_embeddings,
+                                "capabilities": ["text_generation", "chat"],
+                                "usage_count": model.usage_count,
+                                "success_rate": model.success_rate,
+                                "is_public": model.is_public,
+                                "owner_id": model.user_id
+                            })
+                            
+                        except Exception as model_error:
+                            logger.warning(f"Failed to process registered model {model.id}: {str(model_error)}")
+                            continue
+                            
+                except Exception as db_error:
+                    logger.error(f"Failed to query registered models from database: {str(db_error)}")
+                    
+            # Fallback: try model manager if database query failed or no db session
+            if not llm_models:
+                logger.info("No models from database, trying model manager as fallback")
+                registered_model_ids = self.model_manager.list_registered_models()
+                
+                for model_id in registered_model_ids:
+                    config = self.model_manager.get_model_config(model_id)
+                    if config:
+                        llm_models.append({
+                            "model_id": model_id,
+                            "model_name": config.model_name,
+                            "display_name": config.model_name,
+                            "provider": self._get_provider_from_model_id(model_id),
+                            "description": f"Max tokens: {config.max_tokens}, Temperature: {config.temperature}",
+                            "max_tokens": config.max_tokens,
+                            "context_window": config.context_window,
+                            "supports_streaming": True,
+                            "supports_embeddings": False,
+                            "capabilities": ["text_generation", "chat"]
+                        })
             
             # Get registered embedding models
             embedding_models = []
@@ -189,12 +245,17 @@ class ChatController:
             
             for model in available_embedding_models:
                 embedding_models.append({
-                    "id": model.model_id,
-                    "name": model.model_name,
+                    "model_id": model.model_id,
+                    "model_name": model.model_name,
                     "display_name": model.display_name,
                     "provider": model.provider.value,
                     "description": model.description,
                     "embedding_dimension": model.embedding_dimension,
+                    "max_tokens": model.max_input_length,
+                    "context_window": model.max_input_length,
+                    "supports_streaming": False,
+                    "supports_embeddings": True,
+                    "capabilities": ["embeddings", "semantic_search"],
                     "performance_tier": model.performance_tier,
                     "quality_score": model.quality_score,
                     "use_cases": model.use_cases,
@@ -204,6 +265,8 @@ class ChatController:
                     "gpu_required": model.gpu_required,
                     "api_cost_per_1k_tokens": model.api_cost_per_1k_tokens
                 })
+            
+            logger.info(f"Returning {len(llm_models)} LLM models and {len(embedding_models)} embedding models")
             
             return {
                 "llm_models": llm_models,
@@ -217,6 +280,122 @@ class ChatController:
                 detail=f"Failed to get available models: {str(e)}"
             )
 
+    async def _ensure_model_registered(self, model_id: str, user: User, db: Session) -> bool:
+        """Ensure a database model is registered in the model manager for execution."""
+        try:
+            # If it's not a database model, assume it's already registered
+            if not model_id.startswith("registered_"):
+                return model_id in self.model_manager.list_registered_models()
+            
+            # If already registered in model manager, we're good
+            if model_id in self.model_manager.list_registered_models():
+                logger.debug(f"Model {model_id} already registered in model manager")
+                return True
+            
+            # Extract database ID from model_id
+            try:
+                db_id = int(model_id.replace("registered_", ""))
+            except ValueError:
+                logger.error(f"Invalid registered model ID format: {model_id}")
+                return False
+            
+            # Query database for model details
+            db_model = db.query(RegisteredModel).filter(
+                and_(
+                    RegisteredModel.id == db_id,
+                    RegisteredModel.is_active == True,
+                    RegisteredModel.deleted_at.is_(None),
+                    or_(
+                        RegisteredModel.user_id == user.id,
+                        RegisteredModel.is_public == True
+                    )
+                )
+            ).first()
+            
+            if not db_model:
+                logger.error(f"Database model {model_id} not found or not accessible")
+                return False
+            
+            # Parse model configuration
+            import json
+            try:
+                config_data = json.loads(db_model.config_json) if db_model.config_json else {}
+                provider_config = json.loads(db_model.provider_config_json) if db_model.provider_config_json else {}
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse model configuration for {model_id}: {e}")
+                return False
+            
+            # Create ModelConfig for registration
+            from llm.base.models import ModelConfig
+            model_config = ModelConfig(
+                model_name=db_model.model_name,
+                max_tokens=db_model.max_tokens or config_data.get("max_tokens", 2048),
+                temperature=config_data.get("temperature", 0.7),
+                top_p=config_data.get("top_p", 1.0),
+                presence_penalty=config_data.get("presence_penalty", 0.0),
+                frequency_penalty=config_data.get("frequency_penalty", 0.0),
+                context_window=db_model.context_window or config_data.get("context_window", 4096),
+                api_base=config_data.get("api_base"),
+                api_key=provider_config.get("api_key"),
+                stop_sequences=config_data.get("stop_sequences"),
+                repeat_penalty=config_data.get("repeat_penalty"),
+                top_k=config_data.get("top_k"),
+                provider_config=provider_config
+            )
+            
+            # Register model in model manager
+            provider_name = db_model.provider.value.lower()
+            self.model_manager.register_model(
+                model_id=model_id,
+                provider_name=provider_name,
+                config=model_config,
+                provider_kwargs=provider_config,
+                fallback_priority=db_model.fallback_priority
+            )
+            
+            logger.info(f"Successfully registered database model {model_id} ({provider_name}) in model manager")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to register database model {model_id}: {str(e)}")
+            return False
+
+    async def _get_available_llm_model_ids(self, user: User, db: Session) -> List[str]:
+        """Get list of available LLM model IDs for validation."""
+        try:
+            # Get from database first
+            if db is not None:
+                query = db.query(RegisteredModel).filter(
+                    and_(
+                        or_(
+                            RegisteredModel.user_id == user.id,  # User's own models
+                            RegisteredModel.is_public == True    # Public models
+                        ),
+                        RegisteredModel.is_active == True,       # Only active models
+                        RegisteredModel.deleted_at.is_(None),   # Not soft-deleted
+                        RegisteredModel.supports_embeddings == False  # LLM models only
+                    )
+                ).all()
+                
+                model_ids = [f"registered_{model.id}" for model in query]
+                if model_ids:
+                    logger.debug(f"Found {len(model_ids)} LLM models from database: {model_ids}")
+                    return model_ids
+            
+            # Fallback to model manager
+            manager_models = self.model_manager.list_registered_models()
+            if manager_models:
+                logger.debug(f"Found {len(manager_models)} LLM models from model manager: {manager_models}")
+                return manager_models
+                
+            # Final fallback - provide default model
+            logger.warning("No LLM models found anywhere, providing default")
+            return ["default-llm"]
+            
+        except Exception as e:
+            logger.error(f"Error getting available LLM models: {str(e)}")
+            return ["default-llm"]
+
     def _get_provider_from_model_id(self, model_id: str) -> str:
         """Extract provider name from model ID."""
         if model_id.startswith("openai-"):
@@ -227,6 +406,8 @@ class ChatController:
             return "ollama"
         elif model_id.startswith("lmstudio-"):
             return "lmstudio"
+        elif model_id.startswith("registered_"):
+            return "registered"
         else:
             return "unknown"
 
@@ -279,9 +460,14 @@ class ChatController:
         db: Session
     ) -> Dict[str, Any]:
         """Validate and normalize chat settings."""
-        # Default settings
+        # Get available LLM models first
+        available_llm_models = await self._get_available_llm_model_ids(user, db)
+        
+        # Default settings - use first available model as default
+        default_llm_model = available_llm_models[0] if available_llm_models else "default-llm"
+        
         default_settings = {
-            "llm_model": "openai-gpt35",
+            "llm_model": default_llm_model,
             "embedding_model": "hf-minilm-l6-v2",
             "temperature": 0.7,
             "max_tokens": 2048,
@@ -296,11 +482,11 @@ class ChatController:
         validated_settings = {**default_settings, **settings}
         
         # Validate LLM model
-        if validated_settings["llm_model"] not in self.model_manager.list_registered_models():
+        if validated_settings["llm_model"] not in available_llm_models:
             # Fallback to first available model
-            available_models = self.model_manager.list_registered_models()
-            if available_models:
-                validated_settings["llm_model"] = available_models[0]
+            if available_llm_models:
+                validated_settings["llm_model"] = available_llm_models[0]
+                logger.info(f"LLM model '{settings.get('llm_model', 'None')}' not found, using '{available_llm_models[0]}'")
             else:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -429,6 +615,22 @@ class ChatController:
             llm_model = session.settings["llm_model"]
             logger.info(f"[CHAT] Starting LLM generation - Model: {llm_model}, Stream: True")
             
+            # Ensure model is registered in model manager if it's a database model
+            if llm_model.startswith("registered_"):
+                logger.info(f"[CHAT] Ensuring database model {llm_model} is registered in model manager")
+                model_registered = await self._ensure_model_registered(llm_model, user, db)
+                if not model_registered:
+                    logger.error(f"[CHAT] Failed to register database model {llm_model}")
+                    error_data = {
+                        "type": "error",
+                        "error": f"Model {llm_model} could not be loaded. Please try a different model.",
+                        "error_code": "model_registration_failed"
+                    }
+                    yield f"data: {json.dumps(error_data)}\n\n"
+                    return
+                else:
+                    logger.info(f"[CHAT] Database model {llm_model} successfully registered")
+            
             response_content = ""
             chunk_count = 0
             
@@ -438,9 +640,9 @@ class ChatController:
                 generator = None
                 
                 try:
-                    generator = await self.model_manager.generate_with_fallback(
+                    generator = await self.model_manager.generate(
                         prompt=context,
-                        primary_model_id=llm_model,
+                        model_id=llm_model,
                         stream=True
                     )
                     logger.info(f"[CHAT] Successfully obtained generator from model manager")
@@ -448,27 +650,35 @@ class ChatController:
                 except Exception as model_error:
                     logger.error(f"[CHAT] Failed to get generator from model manager: {str(model_error)}", exc_info=True)
                     
-                    # Try to determine the specific error type for better error messages
-                    error_message = "LLM service unavailable"
-                    if "authentication" in str(model_error).lower():
-                        error_message = "LLM authentication failed. Please check API credentials."
-                    elif "rate limit" in str(model_error).lower():
-                        error_message = "LLM rate limit exceeded. Please try again later."
-                    elif "quota" in str(model_error).lower() or "billing" in str(model_error).lower():
-                        error_message = "LLM quota exceeded. Please check your account limits."
-                    elif "model not found" in str(model_error).lower():
-                        error_message = f"Model '{llm_model}' not available. Please try a different model."
-                    elif "connection" in str(model_error).lower() or "timeout" in str(model_error).lower():
-                        error_message = "Unable to connect to LLM service. Please try again."
-                    else:
-                        error_message = f"LLM service error: {str(model_error)}"
+                    # Use the specific error message from the model manager (no fallback)
+                    error_message = str(model_error)
+                    error_code = "model_specific_error"
                     
-                    # Send error response and return early
+                    # Determine error code based on error type
+                    error_lower = error_message.lower()
+                    if "not registered" in error_lower:
+                        error_code = "model_not_registered"
+                    elif "authentication" in error_lower or "api key" in error_lower:
+                        error_code = "authentication_failed"
+                    elif "rate limit" in error_lower or "quota" in error_lower:
+                        error_code = "rate_limit_exceeded"
+                    elif "not found" in error_lower:
+                        error_code = "model_not_found"
+                    elif "connection" in error_lower or "timeout" in error_lower:
+                        error_code = "connection_failed"
+                    elif "unavailable" in error_lower:
+                        error_code = "model_unavailable"
+                    elif "configuration" in error_lower or "setup" in error_lower:
+                        error_code = "configuration_error"
+                    
+                    # Send detailed error response
                     error_data = {
                         "type": "error",
                         "error": error_message,
-                        "error_code": "llm_generation_failed",
-                        "model": llm_model
+                        "error_code": error_code,
+                        "model": llm_model,
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "suggestions": self._get_model_error_suggestions(error_code, llm_model)
                     }
                     yield f"data: {json.dumps(error_data)}\n\n"
                     return
@@ -1452,6 +1662,52 @@ class ChatController:
         except Exception as e:
             logger.error(f"Failed to cleanup old sessions: {str(e)}")
     
+    def _get_model_error_suggestions(self, error_code: str, model_id: str) -> List[str]:
+        """Get helpful suggestions based on model error type."""
+        suggestions = {
+            "model_not_registered": [
+                f"Model '{model_id}' is not registered in the system",
+                "Check if the model was properly configured in the admin panel",
+                "Contact an administrator to register this model"
+            ],
+            "authentication_failed": [
+                f"Check the API key configuration for model '{model_id}'",
+                "Verify the API key has the correct permissions",
+                "Try regenerating the API key from the provider's dashboard"
+            ],
+            "rate_limit_exceeded": [
+                f"Rate limit exceeded for model '{model_id}'",
+                "Wait for the rate limit to reset (usually within an hour)",
+                "Try using a different model or upgrade your API plan"
+            ],
+            "model_not_found": [
+                f"Model '{model_id}' was not found on the provider",
+                "Check if the model name is spelled correctly",
+                "Verify the model is available in your region"
+            ],
+            "connection_failed": [
+                f"Unable to connect to the provider for model '{model_id}'",
+                "Check your internet connection",
+                "The provider service may be temporarily unavailable"
+            ],
+            "model_unavailable": [
+                f"Model '{model_id}' is currently marked as unavailable",
+                "Try using a different model",
+                "Contact an administrator to check the model status"
+            ],
+            "configuration_error": [
+                f"Configuration issue with model '{model_id}'",
+                "Check the model settings in the admin panel",
+                "Verify all required parameters are correctly set"
+            ]
+        }
+        
+        return suggestions.get(error_code, [
+            f"Error occurred with model '{model_id}'",
+            "Try using a different model",
+            "Contact support if the issue persists"
+        ])
+
     def _get_error_suggestions(self, error_code: str) -> List[str]:
         """Get helpful suggestions based on error type."""
         suggestions = {

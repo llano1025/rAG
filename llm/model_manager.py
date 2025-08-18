@@ -130,6 +130,85 @@ class ModelManager:
             model_info['available'] = False
             return None
     
+    async def generate(
+        self,
+        prompt: str,
+        model_id: str,
+        stream: bool = False
+    ) -> Union[LLMResponse, AsyncGenerator[str, None]]:
+        """
+        Generate text using the specified model with no fallback.
+        
+        Args:
+            prompt: Input text prompt
+            model_id: Specific model to use
+            stream: Whether to stream the response
+            
+        Returns:
+            LLMResponse or AsyncGenerator depending on stream parameter
+            
+        Raises:
+            LLMError: If the specified model fails for any reason
+        """
+        logger.info(f"[MODEL_MANAGER] Starting generation - Model: {model_id}, Stream: {stream}, Prompt length: {len(prompt)}")
+        logger.debug(f"[MODEL_MANAGER] Registered models: {list(self.registered_models.keys())}")
+        
+        try:
+            # Check if model is registered
+            if model_id not in self.registered_models:
+                logger.error(f"[MODEL_MANAGER] Model {model_id} not registered")
+                raise LLMError(f"Model '{model_id}' is not registered. Available models: {list(self.registered_models.keys())}")
+            
+            # Check if model is available
+            model_info = self.registered_models[model_id]
+            if not model_info.get('available', True):
+                logger.error(f"[MODEL_MANAGER] Model {model_id} marked as unavailable")
+                raise LLMError(f"Model '{model_id}' is currently unavailable. Please try a different model.")
+            
+            logger.debug(f"[MODEL_MANAGER] Model info - Provider: {model_info['provider_name']}, Available: {model_info.get('available', True)}")
+            
+            # Get provider instance
+            provider = await self._get_provider_instance(model_id)
+            if not provider:
+                logger.error(f"[MODEL_MANAGER] Failed to get provider instance for {model_id}")
+                provider_name = model_info.get('provider_name', 'unknown')
+                raise LLMError(f"Failed to initialize {provider_name} provider for model '{model_id}'. Please check your provider configuration.")
+            
+            # Get model configuration
+            config = self.get_model_config(model_id)
+            if not config:
+                logger.error(f"[MODEL_MANAGER] No configuration found for {model_id}")
+                raise LLMError(f"Configuration not found for model '{model_id}'. Please check your model setup.")
+            
+            logger.info(f"[MODEL_MANAGER] Provider instance obtained for {model_id}, generating response")
+            
+            # Generate response
+            try:
+                result = await provider.generate(prompt, config, stream)
+                logger.info(f"[MODEL_MANAGER] Generation successful for {model_id}")
+                return result
+            except Exception as generation_error:
+                logger.error(f"[MODEL_MANAGER] Generation failed for {model_id}: {str(generation_error)}")
+                # Re-raise with more context
+                error_message = str(generation_error)
+                if "authentication" in error_message.lower() or "api key" in error_message.lower():
+                    raise LLMError(f"Authentication failed for model '{model_id}'. Please check your API key configuration.")
+                elif "rate limit" in error_message.lower() or "quota" in error_message.lower():
+                    raise LLMError(f"Rate limit exceeded for model '{model_id}'. Please try again later or use a different model.")
+                elif "not found" in error_message.lower():
+                    raise LLMError(f"Model '{model_id}' not found on the provider. Please check if the model name is correct.")
+                elif "connection" in error_message.lower() or "timeout" in error_message.lower():
+                    raise LLMError(f"Connection failed for model '{model_id}'. Please check your network connection and try again.")
+                else:
+                    raise LLMError(f"Model '{model_id}' failed: {error_message}")
+                
+        except LLMError:
+            # Re-raise LLMErrors as-is (already have good messages)
+            raise
+        except Exception as unexpected_error:
+            logger.error(f"[MODEL_MANAGER] Unexpected error for {model_id}: {str(unexpected_error)}", exc_info=True)
+            raise LLMError(f"Unexpected error with model '{model_id}': {str(unexpected_error)}")
+
     async def generate_with_fallback(
         self,
         prompt: str,

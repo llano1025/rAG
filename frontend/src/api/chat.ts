@@ -49,22 +49,30 @@ export const chatApi = {
   // Get available models
   async getAvailableModels(): Promise<AvailableModels> {
     try {
-      // Try to get models from registered models API first
-      const loadedModelsData = await modelsApi.getLoadedModels();
-      
+      // Try the simple chat models API first (this works like document upload)
+      const chatModels: any = await apiClient.get('/api/chat/models');
       return {
-        llm_models: filterLLMModels(loadedModelsData.models),
-        embedding_models: filterEmbeddingModels(loadedModelsData.models)
+        llm_models: chatModels.llm_models || [],
+        embedding_models: chatModels.embedding_models || []
       };
     } catch (error) {
-      console.warn('Failed to load registered models, falling back to legacy API:', error);
+      console.warn('Failed to load chat models, trying registered models API:', error);
       
-      // Fallback to legacy chat models API
-      const legacyModels = await apiClient.get('/api/chat/models');
-      return {
-        llm_models: legacyModels.llm_models || [],
-        embedding_models: legacyModels.embedding_models || []
-      };
+      // Fallback to complex registered models API
+      try {
+        const loadedModelsData = await modelsApi.getLoadedModels();
+        
+        return {
+          llm_models: filterLLMModels(loadedModelsData.models),
+          embedding_models: filterEmbeddingModels(loadedModelsData.models)
+        };
+      } catch (fallbackError) {
+        console.error('Both model APIs failed:', fallbackError);
+        return {
+          llm_models: [],
+          embedding_models: []
+        };
+      }
     }
   },
 

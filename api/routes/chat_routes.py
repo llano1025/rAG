@@ -77,7 +77,7 @@ async def get_available_models(
     """Get available LLM and embedding models."""
     try:
         controller = get_chat_controller(current_user.id)
-        models = await controller.get_available_models(current_user)
+        models = await controller.get_available_models(current_user, db)
         return ModelListResponse(**models)
     except Exception as e:
         raise HTTPException(
