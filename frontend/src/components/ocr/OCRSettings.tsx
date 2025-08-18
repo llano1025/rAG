@@ -179,9 +179,6 @@ export default function OCRSettings({
                         {getQualityIcon(method.quality_level)} {method.quality_level}
                       </span>
                     </h4>
-                    {method.estimated_cost && (
-                      <span className="text-sm text-gray-500">{method.estimated_cost}</span>
-                    )}
                   </div>
                   <p className="text-sm text-gray-600 mt-1">{method.description}</p>
                   
