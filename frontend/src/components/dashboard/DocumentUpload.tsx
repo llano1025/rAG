@@ -274,7 +274,7 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
             />
           </div>
           <p className="text-xs text-gray-500 mt-1">
-            Use forward slashes to create nested folders (e.g., "work/projects/2024").
+            Use forward slashes to create nested folders (e.g., &ldquo;work/projects/2024&rdquo;).
           </p>
         </div>
 
@@ -449,7 +449,6 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
           ocrMethod={ocrMethod}
           ocrLanguage={ocrLanguage}
           visionProvider={ocrMethod === 'vision_llm' ? visionProvider : undefined}
-          visionModel={ocrMethod === 'vision_llm' && selectedVisionModel ? selectedVisionModel : undefined}
           onClose={() => setPreviewFile(null)}
           onAccept={(result) => {
             // Handle OCR result if needed

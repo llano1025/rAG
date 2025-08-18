@@ -169,7 +169,7 @@ export default function TagInput({
               className="w-full px-3 py-2 text-left hover:bg-gray-50 border-t border-gray-200"
             >
               <span className="text-sm text-primary-600">
-                Create tag: "{inputValue.trim().toLowerCase()}"
+                Create tag: &ldquo;{inputValue.trim().toLowerCase()}&rdquo;
               </span>
             </button>
           )}

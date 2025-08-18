@@ -22,7 +22,7 @@ interface LayoutProps {
 }
 
 const navigation = [
-  { name: 'Dashboard', href: '/', icon: HomeIcon },
+  { name: 'Dashboard', href: '/dashboard', icon: HomeIcon },
   { name: 'Documents', href: '/documents', icon: DocumentTextIcon },
   { name: 'Search', href: '/search', icon: MagnifyingGlassIcon },
   { name: 'Chat', href: '/chat', icon: ChatBubbleLeftRightIcon },
@@ -63,6 +63,10 @@ export default function Layout({ children }: LayoutProps) {
   const isActiveRoute = (item: any) => {
     if (item.expandable) {
       return item.children?.some((child: any) => router.pathname === child.href);
+    }
+    // Handle dashboard route for both /dashboard and / (home)
+    if (item.href === '/dashboard') {
+      return router.pathname === '/dashboard' || router.pathname === '/';
     }
     return router.pathname === item.href;
   };

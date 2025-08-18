@@ -230,7 +230,7 @@ export default function TagSelector({
               >
                 <PlusIcon className="h-4 w-4 mr-2 text-primary-600" />
                 <span className="text-sm text-primary-600">
-                  Create "{inputValue.trim().toLowerCase()}"
+                  Create &ldquo;{inputValue.trim().toLowerCase()}&rdquo;
                 </span>
                 {creating && <span className="ml-2 text-xs text-gray-500">Creating...</span>}
               </button>
@@ -331,7 +331,7 @@ export default function TagSelector({
               ))
             ) : inputValue.trim() ? (
               <div className="px-3 py-2 text-gray-500 text-sm">
-                No tags found matching "{inputValue}"
+                No tags found matching &ldquo;{inputValue}&rdquo;
               </div>
             ) : (
               <div className="px-3 py-2 text-gray-500 text-sm">
@@ -349,7 +349,7 @@ export default function TagSelector({
               >
                 <PlusIcon className="h-4 w-4 mr-3 text-primary-600" />
                 <span className="text-sm text-primary-600">
-                  Create "{inputValue.trim().toLowerCase()}"
+                  Create &ldquo;{inputValue.trim().toLowerCase()}&rdquo;
                 </span>
                 {creating && <span className="ml-2 text-xs text-gray-500">Creating...</span>}
               </button>
