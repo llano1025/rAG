@@ -75,6 +75,11 @@ export interface SearchQuery {
   page?: number;
   page_size?: number;
   sort?: string;
+  // Reranker settings
+  enable_reranking?: boolean;
+  reranker_model?: string;
+  rerank_score_weight?: number;
+  min_rerank_score?: number;
 }
 
 export interface SearchResult {
@@ -83,6 +88,11 @@ export interface SearchResult {
   content_snippet: string;
   score: number;
   metadata?: Record<string, any>;
+  // Reranker result fields
+  original_score?: number;
+  rerank_score?: number;
+  combined_score?: number;
+  reranker_model?: string;
 }
 
 export interface SearchResponse {
@@ -137,4 +147,21 @@ export interface PaginatedResponse<T> {
   page: number;
   per_page: number;
   total_pages: number;
+}
+
+// Reranker types
+export interface RerankerModel {
+  alias: string;
+  full_name: string;
+  description: string;
+  performance_tier: 'fast' | 'balanced' | 'accurate';
+  provider: string;
+}
+
+export interface RerankerHealth {
+  status: 'healthy' | 'error';
+  model_name?: string;
+  response_time_ms?: number;
+  message?: string;
+  timestamp: string;
 }

@@ -1,5 +1,5 @@
 import { apiClient } from './client';
-import { SearchQuery, SearchResponse } from '@/types';
+import { SearchQuery, SearchResponse, RerankerModel, RerankerHealth } from '@/types';
 
 export interface SearchSuggestion {
   type: string;
@@ -105,5 +105,15 @@ export const searchApi = {
 
   getAvailableFilters: async (): Promise<AvailableFilters> => {
     return apiClient.get('/api/search/filters');
+  },
+
+  // Reranker API methods
+  getAvailableRerankerModels: async (): Promise<RerankerModel[]> => {
+    return apiClient.get('/api/search/reranker/models');
+  },
+
+  checkRerankerHealth: async (modelName?: string): Promise<RerankerHealth> => {
+    const params = modelName ? { model_name: modelName } : {};
+    return apiClient.get('/api/search/reranker/health', { params });
   },
 };

@@ -5,7 +5,7 @@ Provides consistent response formats for all API endpoints.
 
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Generic, TypeVar, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 import uuid
 
 T = TypeVar('T')
@@ -19,6 +19,10 @@ class ResponseMetadata(BaseModel):
     request_id: Optional[str] = Field(None, description="Original request identifier")
     api_version: str = Field(default="v1", description="API version")
     response_time_ms: Optional[float] = Field(None, description="Response processing time in milliseconds")
+    
+    @field_serializer('timestamp')
+    def serialize_timestamp(self, timestamp: datetime) -> str:
+        return timestamp.isoformat()
 
 
 class StandardResponse(BaseModel, Generic[T]):

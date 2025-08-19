@@ -3,6 +3,7 @@
 import { apiClient } from './client';
 import { modelsApi, LoadedModel } from './models';
 import { filterLLMModels, filterEmbeddingModels } from '../utils/modelFilters';
+import { RerankerModel } from '@/types';
 import Cookies from 'js-cookie';
 
 export interface ChatSettings {
@@ -13,6 +14,11 @@ export interface ChatSettings {
   use_rag: boolean;
   search_type: 'semantic' | 'hybrid' | 'basic';
   top_k_documents: number;
+  // Reranker settings
+  enable_reranking?: boolean;
+  reranker_model?: string;
+  rerank_score_weight?: number;
+  min_rerank_score?: number;
 }
 
 export interface ChatSession {
@@ -43,6 +49,7 @@ export interface DocumentSource {
 export interface AvailableModels {
   llm_models: LoadedModel[];
   embedding_models: LoadedModel[];
+  reranker_models?: RerankerModel[];
 }
 
 export const chatApi = {
@@ -182,6 +189,11 @@ export const chatApi = {
     return apiClient.get('/api/chat/models/embedding/recommendations', {
       params: { use_case: useCase, max_results: maxResults }
     });
+  },
+
+  // Get available reranker models
+  async getAvailableRerankerModels(): Promise<RerankerModel[]> {
+    return apiClient.get('/api/search/reranker/models');
   },
 
   // Admin: Clean up old sessions

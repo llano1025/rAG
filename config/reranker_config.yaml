@@ -1,0 +1,91 @@
+# Reranker Configuration for RAG System
+# This file configures the reranking functionality that improves search result relevance
+
+# Global reranker settings
+default_model: ms-marco-MiniLM-L-6-v2
+enabled: true
+
+# Cache settings
+cache_size: 3           # Maximum number of models to keep in memory
+cache_ttl_hours: 24     # Time-to-live for cached models
+
+# Default scoring settings
+default_top_k: null           # No limit by default
+default_score_weight: 0.5     # Weight for rerank score vs original score (0.0-1.0)
+min_rerank_score: null        # No minimum threshold by default
+
+# Device settings
+device: null            # null for auto-detection (GPU if available, else CPU)
+force_cpu: false        # Set to true to force CPU usage
+
+# Search type integration
+enable_for_semantic_search: true
+enable_for_hybrid_search: true
+enable_for_contextual_search: true
+enable_for_chat: true
+
+# Performance thresholds
+max_results_to_rerank: 100    # Only rerank top N initial results (performance optimization)
+min_results_for_reranking: 5  # Don't rerank if fewer than N results
+
+# Available reranker models
+models:
+  ms-marco-MiniLM-L-6-v2:
+    name: ms-marco-MiniLM-L-6-v2
+    full_name: cross-encoder/ms-marco-MiniLM-L-6-v2
+    description: Efficient MS MARCO trained cross-encoder
+    performance_tier: fast
+    max_length: 512
+    batch_size: 64
+    device: null
+    enabled: true
+    use_sentence_transformers: true
+    cache_enabled: true
+    preload: true                    # Preload this model at startup
+    default_score_weight: 0.6        # Slightly favor rerank scores for this model
+    min_rerank_score: null
+
+  bge-reranker-base:
+    name: bge-reranker-base
+    full_name: BAAI/bge-reranker-base
+    description: BGE base reranker model
+    performance_tier: balanced
+    max_length: 512
+    batch_size: 32
+    device: null
+    enabled: true
+    use_sentence_transformers: true
+    cache_enabled: true
+    preload: false
+    default_score_weight: 0.5
+    min_rerank_score: null
+
+  bge-reranker-large:
+    name: bge-reranker-large
+    full_name: BAAI/bge-reranker-large
+    description: BGE large reranker model (highest quality)
+    performance_tier: accurate
+    max_length: 512
+    batch_size: 16
+    device: null
+    enabled: true
+    use_sentence_transformers: true
+    cache_enabled: true
+    preload: false
+    default_score_weight: 0.7        # Favor rerank scores more for high-quality model
+    min_rerank_score: null
+
+  jina-reranker-v1-base-en:
+    name: jina-reranker-v1-base-en
+    full_name: jinaai/jina-reranker-v1-base-en
+    description: Jina AI English reranker
+    performance_tier: balanced
+    max_length: 512
+    batch_size: 32
+    device: null
+    enabled: true
+    use_sentence_transformers: true
+    cache_enabled: true
+    preload: false
+    default_score_weight: 0.5
+    min_rerank_score: null

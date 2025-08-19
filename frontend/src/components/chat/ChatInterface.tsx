@@ -16,6 +16,7 @@ import { apiClient } from '../../api/client';
 import { chatApi } from '../../api/chat';
 import { modelsApi, LoadedModel } from '../../api/models';
 import ModelHealthIndicator from '../models/ModelHealthIndicator';
+import RerankerModelSelector from '../models/RerankerModelSelector';
 
 interface Message {
   id: string;
@@ -43,6 +44,11 @@ interface ChatSettings {
   use_rag: boolean;
   search_type: 'semantic' | 'hybrid' | 'basic';
   top_k_documents: number;
+  // Reranker settings
+  enable_reranking?: boolean;
+  reranker_model?: string;
+  rerank_score_weight?: number;
+  min_rerank_score?: number;
 }
 
 interface ChatSessionInfo {
@@ -58,7 +64,9 @@ const DEFAULT_SETTINGS: ChatSettings = {
   max_tokens: 2048,
   use_rag: true,
   search_type: 'hybrid',
-  top_k_documents: 5
+  top_k_documents: 5,
+  enable_reranking: true,
+  rerank_score_weight: 0.5,
 };
 
 const ChatInterface: React.FC = () => {
@@ -507,6 +515,23 @@ const ChatInterface: React.FC = () => {
               </label>
             </div>
           </div>
+          
+          {/* Reranker Settings */}
+          {settings.use_rag && (
+            <div className="mt-6 pt-6 border-t border-gray-200 dark:border-gray-600">
+              <RerankerModelSelector
+                selectedModel={settings.reranker_model}
+                onModelChange={(model) => setSettings(prev => ({ ...prev, reranker_model: model }))}
+                enabled={settings.enable_reranking ?? true}
+                onEnabledChange={(enabled) => setSettings(prev => ({ ...prev, enable_reranking: enabled }))}
+                scoreWeight={settings.rerank_score_weight ?? 0.5}
+                onScoreWeightChange={(weight) => setSettings(prev => ({ ...prev, rerank_score_weight: weight }))}
+                minScore={settings.min_rerank_score}
+                onMinScoreChange={(score) => setSettings(prev => ({ ...prev, min_rerank_score: score }))}
+                compact={false}
+              />
+            </div>
+          )}
         </div>
       )}
 

@@ -13,6 +13,8 @@ from sqlalchemy import and_, or_, func
 from database.models import Document, DocumentChunk, User, SearchQuery
 from .storage_manager import VectorStorageManager, get_storage_manager
 from .context_processor import ContextProcessor
+from .reranker import get_reranker_manager, get_reranker_config, RerankResult
+from .reranker.base_reranker import SearchResult as RerankerSearchResult
 from config import get_settings
 
 # Lazy import for EmbeddingManager
@@ -48,6 +50,13 @@ class SearchFilter:
         self.language: Optional[str] = None
         self.is_public: Optional[bool] = None
         self.min_score: Optional[float] = None
+        
+        # Reranker settings
+        self.enable_reranking: bool = True
+        self.reranker_model: Optional[str] = None
+        self.rerank_score_weight: float = 0.5
+        self.min_rerank_score: Optional[float] = None
+        self.max_results_to_rerank: int = 100
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert filter to dictionary for serialization."""
@@ -60,7 +69,12 @@ class SearchFilter:
             'tags': self.tags,
             'language': self.language,
             'is_public': self.is_public,
-            'min_score': self.min_score
+            'min_score': self.min_score,
+            'enable_reranking': self.enable_reranking,
+            'reranker_model': self.reranker_model,
+            'rerank_score_weight': self.rerank_score_weight,
+            'min_rerank_score': self.min_rerank_score,
+            'max_results_to_rerank': self.max_results_to_rerank
         }
 
 class SearchResult:
@@ -117,6 +131,10 @@ class EnhancedSearchEngine:
         self.embedding_manager = embedding_manager  # Use provided or initialize lazily
         self.context_processor = ContextProcessor()
         
+        # Reranker components
+        self.reranker_manager = get_reranker_manager()
+        self.reranker_config = get_reranker_config()
+        
         # Search configuration
         self.default_limit = 10
         self.max_limit = 100
@@ -139,7 +157,12 @@ class EnhancedSearchEngine:
         user_id: int = None,
         top_k: int = None,
         db: Session = None,
-        use_cache: bool = True
+        use_cache: bool = True,
+        # Reranker parameters for chat controller compatibility
+        enable_reranking: bool = True,
+        reranker_model: Optional[str] = None,
+        rerank_score_weight: float = 0.5,
+        min_rerank_score: Optional[float] = None
     ) -> List[Dict[str, Any]]:
         """
         Perform search with context - compatibility method for chat controller.
@@ -169,12 +192,19 @@ class EnhancedSearchEngine:
             # Convert top_k to limit
             limit = top_k or self.default_limit
             
+            # Create search filter with reranker settings
+            search_filters = SearchFilter()
+            search_filters.enable_reranking = enable_reranking
+            search_filters.reranker_model = reranker_model
+            search_filters.rerank_score_weight = rerank_score_weight
+            search_filters.min_rerank_score = min_rerank_score
+            
             # Perform search using existing method
             results = await self.search(
                 query=query,
                 user=user,
                 search_type=search_type,
-                filters=None,
+                filters=search_filters,
                 limit=limit,
                 db=db,
                 use_cache=use_cache
@@ -257,6 +287,10 @@ class EnhancedSearchEngine:
                 results = await self._contextual_search(query, filters, limit, db)
             else:
                 raise ValueError(f"Unknown search type: {search_type}")
+            
+            # Apply reranking if enabled and configured
+            if filters.enable_reranking and self.reranker_config.enabled:
+                results = await self._apply_reranking(query, results, filters, search_type)
             
             # Log search query and cache results
             search_time = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
@@ -900,6 +934,135 @@ class EnhancedSearchEngine:
             
         except Exception as e:
             logger.error(f"Failed to log search query: {e}")
+    
+    async def _apply_reranking(
+        self,
+        query: str,
+        results: List[SearchResult],
+        filters: SearchFilter,
+        search_type: str
+    ) -> List[SearchResult]:
+        """
+        Apply reranking to search results.
+        
+        Args:
+            query: Search query
+            results: Initial search results
+            filters: Search filters with reranker settings
+            search_type: Type of search performed
+            
+        Returns:
+            Reranked search results
+        """
+        if not results:
+            return results
+        
+        try:
+            # Check if reranking is enabled for this search type
+            if not self._should_rerank_for_search_type(search_type):
+                logger.debug(f"Reranking disabled for search type: {search_type}")
+                return results
+            
+            # Limit results to rerank if too many
+            initial_count = len(results)
+            if initial_count > filters.max_results_to_rerank:
+                results_to_rerank = results[:filters.max_results_to_rerank]
+                remaining_results = results[filters.max_results_to_rerank:]
+            else:
+                results_to_rerank = results
+                remaining_results = []
+            
+            # Check minimum threshold
+            if len(results_to_rerank) < self.reranker_config.min_results_for_reranking:
+                logger.debug(f"Too few results ({len(results_to_rerank)}) for reranking, minimum: {self.reranker_config.min_results_for_reranking}")
+                return results
+            
+            # Convert to reranker format
+            reranker_results = self._convert_to_reranker_format(results_to_rerank)
+            
+            # Apply reranking
+            reranked = await self.reranker_manager.rerank(
+                query=query,
+                results=reranker_results,
+                model_name=filters.reranker_model,
+                top_k=None,  # Don't limit here, we'll combine with remaining results
+                score_weight=filters.rerank_score_weight,
+                min_rerank_score=filters.min_rerank_score
+            )
+            
+            # Convert back to SearchResult format
+            final_results = self._convert_from_reranker_format(reranked)
+            
+            # Add remaining results (if any) with their original scores
+            final_results.extend(remaining_results)
+            
+            logger.info(f"Reranked {len(results_to_rerank)} results using {filters.reranker_model or 'default'} model")
+            
+            return final_results
+            
+        except Exception as e:
+            logger.error(f"Reranking failed, returning original results: {e}")
+            return results
+    
+    def _should_rerank_for_search_type(self, search_type: str) -> bool:
+        """Check if reranking should be applied for the given search type."""
+        config = self.reranker_config
+        
+        if search_type == SearchType.SEMANTIC:
+            return config.enable_for_semantic_search
+        elif search_type == SearchType.HYBRID:
+            return config.enable_for_hybrid_search
+        elif search_type == SearchType.CONTEXTUAL:
+            return config.enable_for_contextual_search
+        
+        # Default: enable for keyword search too
+        return True
+    
+    def _convert_to_reranker_format(self, results: List[SearchResult]) -> List[RerankerSearchResult]:
+        """Convert SearchResult objects to reranker format."""
+        reranker_results = []
+        
+        for result in results:
+            reranker_result = RerankerSearchResult(
+                document_id=result.document_id,
+                chunk_id=result.chunk_id,
+                text=result.text,
+                score=result.score,
+                metadata=result.metadata,
+                document_metadata=result.document_metadata,
+                highlight=result.highlight
+            )
+            reranker_results.append(reranker_result)
+        
+        return reranker_results
+    
+    def _convert_from_reranker_format(self, reranked: List[RerankResult]) -> List[SearchResult]:
+        """Convert reranked results back to SearchResult format."""
+        search_results = []
+        
+        for rerank_result in reranked:
+            # Update metadata to include reranking information
+            updated_metadata = {
+                **rerank_result.metadata,
+                'original_score': rerank_result.original_score,
+                'rerank_score': rerank_result.rerank_score,
+                'combined_score': rerank_result.combined_score,
+                'reranker_model': rerank_result.reranker_model
+            }
+            
+            search_result = SearchResult(
+                chunk_id=rerank_result.chunk_id,
+                document_id=rerank_result.document_id,
+                text=rerank_result.text,
+                score=rerank_result.combined_score,  # Use combined score as the main score
+                metadata=updated_metadata,
+                document_metadata=rerank_result.document_metadata,
+                highlight=rerank_result.highlight
+            )
+            
+            search_results.append(search_result)
+        
+        return search_results
 
 
 # Global search engine instance

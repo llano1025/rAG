@@ -137,7 +137,7 @@ class ErrorHandler:
 
         return JSONResponse(
             status_code=exc.status_code,
-            content=error_response.model_dump()
+            content=error_response.model_dump(mode='json')
         )
 
     async def handle_http_exception(
@@ -176,7 +176,7 @@ class ErrorHandler:
 
         return JSONResponse(
             status_code=exc.status_code,
-            content=error_response.model_dump()
+            content=error_response.model_dump(mode='json')
         )
 
     async def handle_validation_exception(
@@ -216,7 +216,7 @@ class ErrorHandler:
 
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            content=validation_response.model_dump()
+            content=validation_response.model_dump(mode='json')
         )
 
     async def handle_pydantic_validation_error(
@@ -256,7 +256,7 @@ class ErrorHandler:
 
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            content=validation_response.model_dump()
+            content=validation_response.model_dump(mode='json')
         )
 
     async def handle_general_exception(
@@ -309,7 +309,7 @@ class ErrorHandler:
 
         return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content=error_response.model_dump()
+            content=error_response.model_dump(mode='json')
         )
 
 # Validation error formatting now handled in standard response creation

@@ -20,6 +20,21 @@ class SearchQuery(BaseModel):
         ge=0.0,
         le=1.0
     )
+    # Reranker settings
+    enable_reranking: bool = Field(True, description="Whether to enable reranking of search results")
+    reranker_model: Optional[str] = Field(None, description="Reranker model to use (e.g., 'ms-marco-MiniLM-L-6-v2')")
+    rerank_score_weight: float = Field(
+        0.5, 
+        description="Weight for rerank score vs original score (0.0-1.0)",
+        ge=0.0,
+        le=1.0
+    )
+    min_rerank_score: Optional[float] = Field(
+        None,
+        description="Minimum rerank score threshold",
+        ge=0.0,
+        le=1.0
+    )
     # Pagination fields
     page: int = Field(1, description="Page number for pagination", ge=1)
     page_size: int = Field(10, description="Number of results per page", ge=1, le=100)

@@ -51,6 +51,11 @@ class SearchController:
         content_weight: float = 0.7,
         context_weight: float = 0.3,
         min_score: float = 0.0,
+        # Reranker parameters
+        enable_reranking: bool = True,
+        reranker_model: Optional[str] = None,
+        rerank_score_weight: float = 0.5,
+        min_rerank_score: Optional[float] = None,
         ip_address: Optional[str] = None,
         user_agent: Optional[str] = None
     ) -> List[Dict]:
@@ -911,7 +916,11 @@ def _extract_content_snippet(document, query: str, processed_query=None, max_len
     return snippet
 
 async def similarity_search(query_text: str, filters=None, top_k: int = 5, 
-                          threshold: float = 0.0, user_id: int = None):
+                          threshold: float = 0.0, user_id: int = None,
+                          enable_reranking: bool = True,
+                          reranker_model: Optional[str] = None,
+                          rerank_score_weight: float = 0.5,
+                          min_rerank_score: Optional[float] = None):
     """Perform semantic similarity search using the enhanced search engine."""
     try:
         from ..schemas.search_schemas import SearchFilters
@@ -963,7 +972,23 @@ async def similarity_search(query_text: str, filters=None, top_k: int = 5,
                     pass
             
             search_filter.min_score = threshold
+            
+            # Add reranker settings
+            search_filter.enable_reranking = enable_reranking
+            search_filter.reranker_model = reranker_model
+            search_filter.rerank_score_weight = rerank_score_weight
+            search_filter.min_rerank_score = min_rerank_score
+            
             search_filters = search_filter
+        else:
+            # Create default filter with reranker settings
+            search_filters = SearchFilter()
+            search_filters.user_id = user_id
+            search_filters.min_score = threshold
+            search_filters.enable_reranking = enable_reranking
+            search_filters.reranker_model = reranker_model
+            search_filters.rerank_score_weight = rerank_score_weight
+            search_filters.min_rerank_score = min_rerank_score
         
         # Initialize search engine components
         try:
@@ -1167,29 +1192,23 @@ async def get_available_filters(user_id: int):
         }
         
         logger.info(f"Successfully generated available filters for user {user_id}: {len(available_filters['file_types'])} file types, {len(available_filters['tags'])} tags, {len(available_filters['languages'])} languages")
-        return create_success_response(
-            data=available_filters,
-            message="Available search filters retrieved successfully"
-        )
+        return available_filters
         
     except Exception as e:
         logger.error(f"Failed to get available filters for user {user_id}: {str(e)}", exc_info=True)
-        return create_success_response(
-            data={
-                "file_types": [],
-                "tags": [],
-                "languages": [],
-                "folders": [],
-                "date_range": {"min_date": None, "max_date": None},
-                "file_size_range": {"min_size": 0, "max_size": 0, "avg_size": 0},
-                "search_types": [
-                    {"value": "hybrid", "label": "Hybrid Search (Recommended)", "description": "Combined text and semantic search for best results"},
-                    {"value": "semantic", "label": "Semantic Search", "description": "AI-powered context understanding"},
-                    {"value": "basic", "label": "Basic Text Search", "description": "Keyword-based search"}
-                ]
-            },
-            message="Default search filters returned due to error"
-        )
+        return {
+            "file_types": [],
+            "tags": [],
+            "languages": [],
+            "folders": [],
+            "date_range": {"min_date": None, "max_date": None},
+            "file_size_range": {"min_size": 0, "max_size": 0, "avg_size": 0},
+            "search_types": [
+                {"value": "hybrid", "label": "Hybrid Search (Recommended)", "description": "Combined text and semantic search for best results"},
+                {"value": "semantic", "label": "Semantic Search", "description": "AI-powered context understanding"},
+                {"value": "basic", "label": "Basic Text Search", "description": "Keyword-based search"}
+            ]
+        }
 
 def _get_file_type_label(content_type: str) -> str:
     """Get human-readable label for file type."""

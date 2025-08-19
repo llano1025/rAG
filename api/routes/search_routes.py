@@ -82,7 +82,11 @@ async def similarity_search(
             filters=request.filters,
             top_k=request.top_k,
             threshold=request.similarity_threshold or 0.0,
-            user_id=current_user.id
+            user_id=current_user.id,
+            enable_reranking=request.enable_reranking,
+            reranker_model=request.reranker_model,
+            rerank_score_weight=request.rerank_score_weight,
+            min_rerank_score=request.min_rerank_score
         )
         return results
     except Exception as e:
@@ -102,7 +106,11 @@ async def semantic_search(
             filters=request.filters,
             top_k=request.top_k,
             threshold=request.similarity_threshold or 0.0,
-            user_id=current_user.id
+            user_id=current_user.id,
+            enable_reranking=request.enable_reranking,
+            reranker_model=request.reranker_model,
+            rerank_score_weight=request.rerank_score_weight,
+            min_rerank_score=request.min_rerank_score
         )
         return results
     except Exception as e:
@@ -297,3 +305,47 @@ async def get_search_suggestions(
         user_id=current_user.id
     )
     return suggestions
+
+class RerankerModel(BaseModel):
+    alias: str = Field(..., description="Model alias/name")
+    full_name: str = Field(..., description="Full model path")
+    description: str = Field(..., description="Model description")
+    performance_tier: str = Field(..., description="Performance tier (fast/balanced/accurate)")
+    provider: str = Field(..., description="Model provider")
+
+@router.get("/reranker/models", response_model=List[RerankerModel])
+async def get_available_reranker_models(
+    current_user = Depends(get_current_active_user)
+):
+    """
+    Get list of available reranker models.
+    """
+    try:
+        from vector_db.reranker import get_reranker_manager
+        
+        reranker_manager = get_reranker_manager()
+        models = await reranker_manager.get_available_models()
+        
+        return [RerankerModel(**model) for model in models]
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get reranker models: {str(e)}")
+
+@router.get("/reranker/health")
+async def check_reranker_health(
+    model_name: Optional[str] = Query(None, description="Specific model to check"),
+    current_user = Depends(get_current_active_user)
+):
+    """
+    Check health status of reranker models.
+    """
+    try:
+        from vector_db.reranker import get_reranker_manager
+        
+        reranker_manager = get_reranker_manager()
+        health_status = await reranker_manager.health_check(model_name)
+        
+        return health_status
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Health check failed: {str(e)}")

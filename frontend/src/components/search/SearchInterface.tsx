@@ -10,6 +10,7 @@ import { searchApi, SearchSuggestion, RecentSearch, SavedSearch } from '@/api/se
 import { SearchQuery, SearchResponse, SearchFilters as SearchFiltersType } from '@/types';
 import SearchResults from './SearchResults';
 import SearchFilters from './SearchFilters';
+import RerankerModelSelector from '../models/RerankerModelSelector';
 import toast from 'react-hot-toast';
 
 interface SearchForm {
@@ -34,6 +35,12 @@ export default function SearchInterface() {
     folder_ids: [] as string[],
     languages: [] as string[],
   });
+
+  // Reranker settings
+  const [rerankerEnabled, setRerankerEnabled] = useState(true);
+  const [rerankerModel, setRerankerModel] = useState<string | undefined>(undefined);
+  const [rerankerScoreWeight, setRerankerScoreWeight] = useState(0.5);
+  const [rerankerMinScore, setRerankerMinScore] = useState<number | undefined>(undefined);
 
   const {
     register,
@@ -151,6 +158,11 @@ export default function SearchInterface() {
         similarity_threshold: 0.0,
         semantic_search: data.searchType === 'semantic',
         hybrid_search: data.searchType === 'hybrid',
+        // Reranker settings
+        enable_reranking: rerankerEnabled,
+        reranker_model: rerankerModel,
+        rerank_score_weight: rerankerScoreWeight,
+        min_rerank_score: rerankerMinScore,
       };
 
       let response: SearchResponse;
@@ -224,6 +236,11 @@ export default function SearchInterface() {
         similarity_threshold: 0.0,
         semantic_search: searchType === 'semantic',
         hybrid_search: searchType === 'hybrid',
+        // Reranker settings
+        enable_reranking: rerankerEnabled,
+        reranker_model: rerankerModel,
+        rerank_score_weight: rerankerScoreWeight,
+        min_rerank_score: rerankerMinScore,
       };
 
       await searchApi.saveSearch(searchQuery, name);
@@ -253,6 +270,15 @@ export default function SearchInterface() {
         owner: searchFilters.metadata_filters?.owner || '',
       });
     }
+
+    // Load reranker settings if available (from the saved search query)
+    if (savedSearch.filters) {
+      const query = savedSearch.filters as any;
+      setRerankerEnabled(query.enable_reranking ?? true);
+      setRerankerModel(query.reranker_model);
+      setRerankerScoreWeight(query.rerank_score_weight ?? 0.5);
+      setRerankerMinScore(query.min_rerank_score);
+    }
     
     setShowSuggestions(false);
   };
@@ -275,6 +301,13 @@ export default function SearchInterface() {
         } : null,
         owner: searchFilters.metadata_filters?.owner || '',
       });
+
+      // Load reranker settings if available (from the history item query)
+      const query = historyItem.filters as any;
+      setRerankerEnabled(query.enable_reranking ?? true);
+      setRerankerModel(query.reranker_model);
+      setRerankerScoreWeight(query.rerank_score_weight ?? 0.5);
+      setRerankerMinScore(query.min_rerank_score);
     }
     
     setShowSuggestions(false);
@@ -411,11 +444,26 @@ export default function SearchInterface() {
 
           {/* Filters Panel */}
           {showFilters && (
-            <div className="mt-6 pt-6 border-t border-gray-200">
+            <div className="mt-6 pt-6 border-t border-gray-200 space-y-6">
               <SearchFilters
                 filters={filters}
                 onFiltersChange={setFilters}
               />
+              
+              {/* Reranker Settings */}
+              <div className="border-t border-gray-200 pt-6">
+                <RerankerModelSelector
+                  selectedModel={rerankerModel}
+                  onModelChange={setRerankerModel}
+                  enabled={rerankerEnabled}
+                  onEnabledChange={setRerankerEnabled}
+                  scoreWeight={rerankerScoreWeight}
+                  onScoreWeightChange={setRerankerScoreWeight}
+                  minScore={rerankerMinScore}
+                  onMinScoreChange={setRerankerMinScore}
+                  compact={true}
+                />
+              </div>
             </div>
           )}
         </div>

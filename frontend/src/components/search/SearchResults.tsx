@@ -85,9 +85,16 @@ export default function SearchResults({ response, loading }: SearchResultsProps)
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-lg font-medium text-gray-900">Search Results</h2>
-            <p className="text-sm text-gray-500">
-              {response.total_hits} result{response.total_hits !== 1 ? 's' : ''} found in {response.processing_time ? response.processing_time.toFixed(3) : 'N/A'}s
-            </p>
+            <div className="flex items-center space-x-4">
+              <p className="text-sm text-gray-500">
+                {response.total_hits} result{response.total_hits !== 1 ? 's' : ''} found in {response.processing_time ? response.processing_time.toFixed(3) : 'N/A'}s
+              </p>
+              {response.results.some(r => r.rerank_score !== undefined) && (
+                <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                  🎯 Reranked Results
+                </span>
+              )}
+            </div>
           </div>
           <div className="text-sm text-gray-500">
             Query: <span className="font-medium">&ldquo;{response.query || 'No query'}&rdquo;</span>
@@ -118,6 +125,11 @@ export default function SearchResults({ response, loading }: SearchResultsProps)
                     <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${getScoreColor(result.score)}`}>
                       {formatScore(result.score)}% match
                     </span>
+                    {result.rerank_score !== undefined && (
+                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-800" title="Reranked score">
+                        🎯 {formatScore(result.rerank_score)}%
+                      </span>
+                    )}
                     <span className="text-xs text-gray-500">#{index + 1}</span>
                   </div>
                 </div>
@@ -195,9 +207,33 @@ export default function SearchResults({ response, loading }: SearchResultsProps)
                       <span className="ml-2 font-mono text-xs">{result.document_id}</span>
                     </div>
                     <div>
-                      <span className="text-gray-500">Relevance Score:</span>
+                      <span className="text-gray-500">Final Score:</span>
                       <span className="ml-2">{result.score.toFixed(4)}</span>
                     </div>
+                    {result.original_score !== undefined && (
+                      <div>
+                        <span className="text-gray-500">Original Score:</span>
+                        <span className="ml-2">{result.original_score.toFixed(4)}</span>
+                      </div>
+                    )}
+                    {result.rerank_score !== undefined && (
+                      <div>
+                        <span className="text-gray-500">Rerank Score:</span>
+                        <span className="ml-2">{result.rerank_score.toFixed(4)}</span>
+                      </div>
+                    )}
+                    {result.combined_score !== undefined && (
+                      <div>
+                        <span className="text-gray-500">Combined Score:</span>
+                        <span className="ml-2">{result.combined_score.toFixed(4)}</span>
+                      </div>
+                    )}
+                    {result.reranker_model && (
+                      <div>
+                        <span className="text-gray-500">Reranker Model:</span>
+                        <span className="ml-2 font-mono text-xs">{result.reranker_model}</span>
+                      </div>
+                    )}
                     {result.metadata && Object.entries(result.metadata).map(([key, value]) => (
                       <div key={key}>
                         <span className="text-gray-500 capitalize">{key.replace('_', ' ')}:</span>
