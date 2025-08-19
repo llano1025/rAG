@@ -72,16 +72,16 @@ export default function Layout({ children }: LayoutProps) {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex">
+    <div className="h-screen bg-gray-50 flex overflow-hidden">
       {/* Sidebar */}
       <div className="hidden md:flex md:w-64 md:flex-col">
-        <div className="flex flex-col flex-grow pt-5 bg-white overflow-y-auto border-r border-gray-200">
+        <div className="flex flex-col h-full pt-5 bg-white border-r border-gray-200">
           <div className="flex items-center flex-shrink-0 px-4">
             <h1 className="text-xl font-bold text-gray-900">RAG System</h1>
           </div>
           
-          <div className="mt-8 flex-grow flex flex-col">
-            <nav className="flex-1 px-2 space-y-1">
+          <div className="mt-8 flex-grow flex flex-col overflow-hidden">
+            <nav className="flex-1 px-2 space-y-1 overflow-y-auto">
               {navigation.map((item) => {
                 const isActive = router.pathname === item.href;
                 return (
@@ -222,8 +222,8 @@ export default function Layout({ children }: LayoutProps) {
       </div>
 
       {/* Main content */}
-      <div className="flex flex-col flex-1">
-        <main className="flex-1">
+      <div className="flex flex-col flex-1 overflow-hidden">
+        <main className="flex-1 overflow-y-auto">
           {children}
         </main>
       </div>
