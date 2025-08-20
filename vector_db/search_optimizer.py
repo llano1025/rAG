@@ -194,11 +194,13 @@ class SearchOptimizer:
             results = []
             for idx, distance in zip(indices[0], distances[0]):
                 if idx != -1:  # Skip invalid results
-                    # Convert distance to similarity score if needed
-                    score = (
-                        distance if self.config.metric == MetricType.COSINE
-                        else 1 / (1 + distance)  # Convert L2 distance to similarity
-                    )
+                    # Convert distance to similarity score and normalize to [0, 1] range
+                    if self.config.metric == MetricType.COSINE:
+                        # Cosine similarity is already in [-1, 1], normalize to [0, 1]
+                        score = max(0.0, distance)  # Cosine scores should be positive for good matches
+                    else:
+                        # Convert L2 distance to similarity score [0, 1]
+                        score = 1 / (1 + distance)
                     
                     if score >= min_score:
                         results.append((self.id_to_chunk[idx], float(score)))
@@ -251,10 +253,11 @@ class SearchOptimizer:
                 results = []
                 for idx, distance in zip(query_indices, query_distances):
                     if idx != -1:
-                        score = (
-                            distance if self.config.metric == MetricType.COSINE
-                            else 1 / (1 + distance)
-                        )
+                        # Normalize score consistently with single search
+                        if self.config.metric == MetricType.COSINE:
+                            score = max(0.0, distance)
+                        else:
+                            score = 1 / (1 + distance)
                         if score >= min_score:
                             results.append((self.id_to_chunk[idx], float(score)))
                 results.sort(key=lambda x: x[1], reverse=True)

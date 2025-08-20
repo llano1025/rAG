@@ -107,10 +107,10 @@ class TestSearchRoutes:
             assert "results" in data
             assert "total" in data
     
-    def test_similarity_search(self, test_client: TestClient, auth_headers: dict):
-        """Test similarity search endpoint."""
+    def test_semantic_search(self, test_client: TestClient, auth_headers: dict):
+        """Test semantic search endpoint."""
         search_data = {
-            "query_text": "test similarity query",
+            "query_text": "test semantic query",
             "top_k": 5,
             "threshold": 0.7
         }
@@ -122,7 +122,7 @@ class TestSearchRoutes:
             }
             
             response = test_client.post(
-                "/api/v1/search/similarity",
+                "/api/v1/search/semantic",
                 json=search_data,
                 headers=auth_headers
             )

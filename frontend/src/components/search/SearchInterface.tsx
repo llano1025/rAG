@@ -42,6 +42,10 @@ export default function SearchInterface() {
   const [rerankerScoreWeight, setRerankerScoreWeight] = useState(0.5);
   const [rerankerMinScore, setRerankerMinScore] = useState<number | undefined>(undefined);
 
+  // Search parameters
+  const [maxResults, setMaxResults] = useState(10);
+  const [minScore, setMinScore] = useState(0.3);
+
   const {
     register,
     handleSubmit,
@@ -153,9 +157,9 @@ export default function SearchInterface() {
         query: data.query,
         filters: Object.keys(searchFilters).length > 0 ? searchFilters : undefined,
         page: 1,
-        page_size: 20,
-        top_k: 20,
-        similarity_threshold: 0.0,
+        page_size: maxResults,
+        top_k: maxResults,
+        similarity_threshold: minScore,
         semantic_search: data.searchType === 'semantic',
         hybrid_search: data.searchType === 'hybrid',
         // Reranker settings
@@ -173,6 +177,9 @@ export default function SearchInterface() {
           break;
         case 'hybrid':
           response = await searchApi.hybridSearch(searchQuery);
+          break;
+        case 'basic':
+          response = await searchApi.textSearch(searchQuery);
           break;
         default:
           response = await searchApi.search(searchQuery);
@@ -231,9 +238,9 @@ export default function SearchInterface() {
         query: query,
         filters: Object.keys(searchFilters).length > 0 ? searchFilters : undefined,
         page: 1,
-        page_size: 20,
-        top_k: 20,
-        similarity_threshold: 0.0,
+        page_size: maxResults,
+        top_k: maxResults,
+        similarity_threshold: minScore,
         semantic_search: searchType === 'semantic',
         hybrid_search: searchType === 'hybrid',
         // Reranker settings
@@ -278,6 +285,10 @@ export default function SearchInterface() {
       setRerankerModel(query.reranker_model);
       setRerankerScoreWeight(query.rerank_score_weight ?? 0.5);
       setRerankerMinScore(query.min_rerank_score);
+      
+      // Load search parameters
+      setMaxResults(query.top_k ?? query.page_size ?? 20);
+      setMinScore(query.similarity_threshold ?? 0.0);
     }
     
     setShowSuggestions(false);
@@ -308,6 +319,10 @@ export default function SearchInterface() {
       setRerankerModel(query.reranker_model);
       setRerankerScoreWeight(query.rerank_score_weight ?? 0.5);
       setRerankerMinScore(query.min_rerank_score);
+      
+      // Load search parameters
+      setMaxResults(query.top_k ?? query.page_size ?? 20);
+      setMinScore(query.similarity_threshold ?? 0.0);
     }
     
     setShowSuggestions(false);
@@ -463,6 +478,49 @@ export default function SearchInterface() {
                   onMinScoreChange={setRerankerMinScore}
                   compact={true}
                 />
+              </div>
+              
+              {/* Search Parameters */}
+              <div className="border-t border-gray-200 pt-6">
+                <h3 className="text-sm font-medium text-gray-900 mb-4">Search Parameters</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label htmlFor="maxResults" className="block text-sm font-medium text-gray-700 mb-2">
+                      Max Results (k)
+                      <span className="ml-1 text-xs text-gray-500" title="Maximum number of results to return">ℹ️</span>
+                    </label>
+                    <input
+                      id="maxResults"
+                      type="number"
+                      min="1"
+                      max="100"
+                      value={maxResults}
+                      onChange={(e) => setMaxResults(Math.min(100, Math.max(1, parseInt(e.target.value) || 20)))}
+                      className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                      placeholder="20"
+                    />
+                    <p className="mt-1 text-xs text-gray-500">Number of results to return (1-100)</p>
+                  </div>
+                  
+                  <div>
+                    <label htmlFor="minScore" className="block text-sm font-medium text-gray-700 mb-2">
+                      Min Score
+                      <span className="ml-1 text-xs text-gray-500" title="Minimum relevance score threshold (0.0-1.0)">ℹ️</span>
+                    </label>
+                    <input
+                      id="minScore"
+                      type="number"
+                      min="0.0"
+                      max="1.0"
+                      step="0.1"
+                      value={minScore}
+                      onChange={(e) => setMinScore(Math.min(1.0, Math.max(0.0, parseFloat(e.target.value) || 0.0)))}
+                      className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
+                      placeholder="0.0"
+                    />
+                    <p className="mt-1 text-xs text-gray-500">Minimum relevance score (0.0-1.0)</p>
+                  </div>
+                </div>
               </div>
             </div>
           )}

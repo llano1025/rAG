@@ -279,7 +279,7 @@ class EnhancedSearchEngine:
             # Perform search based on type
             if search_type == SearchType.SEMANTIC:
                 results = await self._semantic_search(query, filters, limit, db)
-            elif search_type == SearchType.KEYWORD:
+            elif search_type == SearchType.KEYWORD or search_type == "basic":
                 results = await self._keyword_search(query, filters, limit, db)
             elif search_type == SearchType.HYBRID:
                 results = await self._hybrid_search(query, filters, limit, db)
@@ -627,16 +627,22 @@ class EnhancedSearchEngine:
                         'keyword_score': result.score
                     }
             
-            # Calculate hybrid scores
+            # Calculate hybrid scores and apply min_score filtering
             final_results = []
             semantic_weight = 0.7
             keyword_weight = 0.3
+            min_score_threshold = filters.min_score or 0.0
             
             for key, data in combined_results.items():
                 hybrid_score = (
                     data['semantic_score'] * semantic_weight +
                     data['keyword_score'] * keyword_weight
                 )
+                
+                # Apply min_score filtering on the final hybrid score
+                if hybrid_score < min_score_threshold:
+                    logger.debug(f"Filtered hybrid result {key} (score: {hybrid_score:.3f} < min_score: {min_score_threshold})")
+                    continue
                 
                 result = data['result']
                 result.score = hybrid_score

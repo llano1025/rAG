@@ -106,7 +106,8 @@ class SearchController:
                 content_weight,
                 context_weight,
                 user_filters,
-                user
+                user,
+                min_score
             )
             
             formatted_results = self._format_results(results[:k])
@@ -198,7 +199,8 @@ class SearchController:
                     content_weight,
                     context_weight,
                     user_filters,
-                    user
+                    user,
+                    min_score
                 )
                 batch_results.append(self._format_results(combined[:k]))
                 
@@ -245,7 +247,8 @@ class SearchController:
         content_weight: float,
         context_weight: float,
         filters: Optional[Dict],
-        user: User
+        user: User,
+        min_score: float = 0.0
     ) -> List[Tuple[Chunk, float]]:
         """Combine, filter, and rank search results with access control."""
         combined_scores = {}
@@ -276,6 +279,7 @@ class SearchController:
         results = [
             (item["chunk"], item["score"])
             for item in combined_scores.values()
+            if item["score"] >= min_score  # Apply final min_score filtering
         ]
         return sorted(results, key=lambda x: x[1], reverse=True)
 
@@ -412,7 +416,7 @@ class SearchController:
 
 # Module-level functions for compatibility with routes
 async def search_documents(query: str, filters=None, sort: Optional[str] = None, 
-                         page: int = 1, page_size: int = 10, user_id: int = None):
+                         page: int = 1, page_size: int = 10, user_id: int = None, min_score: float = 0.0):
     """Search documents with intelligent text matching and filtering."""
     from ..schemas.search_schemas import SearchFilters
     from database.connection import get_db
@@ -643,6 +647,11 @@ async def search_documents(query: str, filters=None, sort: Optional[str] = None,
             # Calculate relevance score based on processed query
             score = _calculate_relevance_score(doc, query, processed_query)
             
+            # Apply minimum score filtering with debug logging
+            if score < min_score:
+                logger.debug(f"Filtered out document {doc.id} (score: {score:.3f} < min_score: {min_score})")
+                continue
+            
             # Extract content snippet with highlighting context
             content_snippet = _extract_content_snippet(doc, query, processed_query)
             
@@ -712,11 +721,21 @@ async def search_documents(query: str, filters=None, sort: Optional[str] = None,
         )
 
 def _calculate_relevance_score(document, query: str, processed_query=None) -> float:
-    """Calculate intelligent relevance score based on processed query components."""
+    """Calculate intelligent relevance score based on processed query components.
+    
+    Returns a normalized score between 0.0 and 1.0 where:
+    - 1.0 = Perfect match (exact phrase in title)
+    - 0.8+ = Excellent match (multiple term matches in title/filename)
+    - 0.6+ = Good match (terms in title or multiple content matches)
+    - 0.4+ = Fair match (terms in filename/description or some content matches)
+    - 0.2+ = Poor match (minimal content matches)
+    - 0.0-0.2 = Very poor match
+    """
     if not query or not query.strip():
         return 0.5  # Default score for no query
     
     score = 0.0
+    max_possible_score = 1.0  # Track maximum possible score for normalization
     
     try:
         # Use processed query if available for intelligent scoring
@@ -810,8 +829,14 @@ def _calculate_relevance_score(document, query: str, processed_query=None) -> fl
         except Exception:
             pass
         
-        # Ensure score is between 0.1 and 1.0
-        score = min(1.0, max(0.1, score))
+        # Normalize score to 0-1 range without artificial minimum
+        # Remove the artificial 0.1 minimum that was causing low-quality results to pass
+        score = min(1.0, max(0.0, score))
+        
+        # Apply a more realistic minimum for documents that have any matches
+        # Only documents with absolutely no matches should get 0.0
+        if score > 0.0 and score < 0.05:
+            score = 0.05  # Very minimal score for documents with trace matches
         
     except Exception as e:
         logger.warning(f"Error calculating relevance score for document {document.id}: {e}")
@@ -940,7 +965,8 @@ async def similarity_search(query_text: str, filters=None, top_k: int = 5,
                 query=query_text,
                 filters=filters,
                 page_size=top_k,
-                user_id=user_id
+                user_id=user_id,
+                min_score=threshold
             )
         
         # Handle filters parameter
@@ -1051,7 +1077,8 @@ async def similarity_search(query_text: str, filters=None, top_k: int = 5,
                 query=query_text,
                 filters=filters,
                 page_size=top_k,
-                user_id=user_id
+                user_id=user_id,
+                min_score=threshold
             )
         
     except Exception as e:
@@ -1061,7 +1088,8 @@ async def similarity_search(query_text: str, filters=None, top_k: int = 5,
             query=query_text,
             filters=filters,
             page_size=top_k,
-            user_id=user_id
+            user_id=user_id,
+            min_score=threshold
         )
 
 def _safe_get_tag_list(doc):

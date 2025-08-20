@@ -72,6 +72,10 @@ export const searchApi = {
     return apiClient.post('/api/search', query);
   },
 
+  textSearch: async (query: SearchQuery): Promise<SearchResponse> => {
+    return apiClient.post('/api/search/text', query);
+  },
+
   semanticSearch: async (query: SearchQuery): Promise<SearchResponse> => {
     return apiClient.post('/api/search/semantic', query);
   },

@@ -41,7 +41,8 @@ async def search_documents(
                 sort=request.sort,
                 page=request.page,
                 page_size=request.page_size,
-                user_id=current_user.id
+                user_id=current_user.id,
+                min_score=request.similarity_threshold if request.similarity_threshold is not None else 0.0
             )
             return results
     except Exception as e:
@@ -62,31 +63,8 @@ async def text_search(
             sort=request.sort,
             page=request.page,
             page_size=request.page_size,
-            user_id=current_user.id
-        )
-        return results
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-@router.post("/similarity", response_model=SearchResponse)
-async def similarity_search(
-    request: SearchQuery,
-    current_user = Depends(get_current_active_user)
-):
-    """
-    Semantic similarity search using document vectors.
-    """
-    try:
-        results = await search_controller.similarity_search(
-            query_text=request.query,
-            filters=request.filters,
-            top_k=request.top_k,
-            threshold=request.similarity_threshold or 0.0,
             user_id=current_user.id,
-            enable_reranking=request.enable_reranking,
-            reranker_model=request.reranker_model,
-            rerank_score_weight=request.rerank_score_weight,
-            min_rerank_score=request.min_rerank_score
+            min_score=request.similarity_threshold if request.similarity_threshold is not None else 0.0
         )
         return results
     except Exception as e:
@@ -98,14 +76,14 @@ async def semantic_search(
     current_user = Depends(get_current_active_user)
 ):
     """
-    Semantic search using document vectors (alias for similarity search).
+    Semantic search using document vectors for intelligent similarity-based retrieval.
     """
     try:
         results = await search_controller.similarity_search(
             query_text=request.query,
             filters=request.filters,
             top_k=request.top_k,
-            threshold=request.similarity_threshold or 0.0,
+            threshold=request.similarity_threshold if request.similarity_threshold is not None else 0.0,
             user_id=current_user.id,
             enable_reranking=request.enable_reranking,
             reranker_model=request.reranker_model,
@@ -129,7 +107,7 @@ async def hybrid_search(
         from utils.search.result_fusion import fuse_search_results
         
         # Use Enhanced Search Engine's built-in hybrid search
-        from vector_db.search_engine import EnhancedSearchEngine, SearchType
+        from vector_db.search_engine import EnhancedSearchEngine, SearchType, SearchFilter
         from vector_db.storage_manager import get_storage_manager
         from vector_db.embedding_manager import EnhancedEmbeddingManager
         from database.connection import get_db
@@ -142,12 +120,40 @@ async def hybrid_search(
         embedding_manager = EnhancedEmbeddingManager.create_default_manager()
         search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
         
-        # Perform hybrid search using Enhanced Search Engine
+        # Create SearchFilter with min_score from request
+        search_filters = SearchFilter()
+        search_filters.min_score = request.similarity_threshold if request.similarity_threshold is not None else 0.0
+        
+        # Apply additional filters if provided in request
+        if hasattr(request, 'filters') and request.filters:
+            # Handle request.filters if they exist - convert from API format
+            if hasattr(request.filters, 'file_types') and request.filters.file_types:
+                search_filters.content_types = request.filters.file_types
+            if hasattr(request.filters, 'tag_ids') and request.filters.tag_ids:
+                search_filters.tags = request.filters.tag_ids
+            if hasattr(request.filters, 'date_range') and request.filters.date_range:
+                try:
+                    start_date, end_date = request.filters.date_range
+                    search_filters.date_range = (start_date, end_date)
+                except (ValueError, TypeError):
+                    pass
+        
+        # Apply reranker settings from request
+        if hasattr(request, 'enable_reranking'):
+            search_filters.enable_reranking = request.enable_reranking or True
+        if hasattr(request, 'reranker_model'):
+            search_filters.reranker_model = request.reranker_model
+        if hasattr(request, 'rerank_score_weight'):
+            search_filters.rerank_score_weight = request.rerank_score_weight or 0.5
+        if hasattr(request, 'min_rerank_score'):
+            search_filters.min_rerank_score = request.min_rerank_score
+        
+        # Perform hybrid search using Enhanced Search Engine with proper filtering
         search_results = await search_engine.search(
             query=request.query,
             user=user,
             search_type=SearchType.HYBRID,
-            filters=None,  # Convert request.filters if needed
+            filters=search_filters,
             limit=request.top_k,
             db=db
         )
