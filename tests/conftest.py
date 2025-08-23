@@ -15,7 +15,7 @@ from typing import AsyncGenerator, Generator
 from main import create_app
 from config import TestSettings
 from utils.caching.redis_manager import RedisManager
-from utils.monitoring.health_check import HealthCheck
+from utils.monitoring.health_check import HealthChecker
 from api.middleware.auth import AuthMiddleware
 
 # Test settings

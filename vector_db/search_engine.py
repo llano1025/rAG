@@ -533,7 +533,9 @@ class EnhancedSearchEngine:
         limit: int,
         db: Session
     ) -> List[SearchResult]:
-        """Perform keyword-based search using database full-text search."""
+        """
+        Perform keyword-based search using database full-text search.
+        """
         try:
             # Build database query for keyword search
             base_query = db.query(DocumentChunk, Document).join(
@@ -756,7 +758,25 @@ class EnhancedSearchEngine:
             return None
     
     def _calculate_keyword_score(self, query: str, text: str) -> float:
-        """Calculate simple keyword relevance score."""
+        """
+        Calculate simple keyword relevance score using custom algorithm (NOT BM25).
+        
+        Algorithm:
+        1. Term Coverage (70% weight): Ratio of unique query terms found in text
+        2. Frequency Score (30% weight): Term frequency relative to document length
+        
+        Formula: score = (term_coverage * 0.7) + (frequency_score * 0.3)
+        
+        Example:
+        Query: "machine learning algorithm"
+        Text: "Machine learning is a subset of AI. Learning algorithms are powerful."
+        
+        - unique_matches = 2 (machine, learning) 
+        - total_matches = 3 (machine=1, learning=2, algorithm=0)
+        - term_coverage = 2/3 = 0.67
+        - frequency_score = min(3/14, 1.0) = 0.21
+        - final_score = (0.67 * 0.7) + (0.21 * 0.3) = 0.53
+        """
         try:
             query_terms = query.lower().split()
             text_lower = text.lower()
@@ -1069,6 +1089,295 @@ class EnhancedSearchEngine:
             search_results.append(search_result)
         
         return search_results
+
+
+    async def get_search_suggestions(self, query: str, user: User, limit: int = 5, 
+                                   db: Session = None) -> List[Dict[str, Any]]:
+        """
+        Generate search suggestions based on query, user's documents, and search history.
+        """
+        suggestions = []
+        
+        try:
+            if not db:
+                from database.connection import SessionLocal
+                db = SessionLocal()
+            
+            # 1. Search history suggestions
+            recent_searches = db.query(SearchQuery).filter(
+                SearchQuery.user_id == user.id,
+                SearchQuery.query.ilike(f'%{query}%')
+            ).order_by(SearchQuery.created_at.desc()).limit(3).all()
+            
+            for search in recent_searches:
+                suggestions.append({
+                    'type': 'history',
+                    'text': search.query,
+                    'icon': 'history'
+                })
+            
+            # 2. Document title suggestions
+            documents = db.query(Document).filter(
+                Document.user_id == user.id,
+                Document.filename.ilike(f'%{query}%')
+            ).limit(3).all()
+            
+            for doc in documents:
+                suggestions.append({
+                    'type': 'document_title',
+                    'text': doc.filename.replace('.pdf', '').replace('.txt', ''),
+                    'icon': 'document'
+                })
+            
+            # 3. Tag suggestions (if tags exist)
+            # This would require tag implementation in the database
+            
+            # 4. Content-based suggestions using semantic search
+            if len(suggestions) < limit and len(query) > 2:
+                try:
+                    search_results = await self.search(
+                        query=query,
+                        user=user,
+                        search_type=SearchType.SEMANTIC,
+                        limit=2,
+                        db=db
+                    )
+                    
+                    for result in search_results:
+                        # Extract key phrases from the result text
+                        words = result.text.split()[:10]  # First 10 words
+                        suggestion_text = ' '.join(words)
+                        suggestions.append({
+                            'type': 'content',
+                            'text': suggestion_text,
+                            'icon': 'search'
+                        })
+                
+                except Exception as e:
+                    logger.debug(f"Content-based suggestions failed: {e}")
+            
+            # Remove duplicates and limit results
+            unique_suggestions = []
+            seen_texts = set()
+            for suggestion in suggestions:
+                if suggestion['text'].lower() not in seen_texts:
+                    seen_texts.add(suggestion['text'].lower())
+                    unique_suggestions.append(suggestion)
+                    if len(unique_suggestions) >= limit:
+                        break
+            
+            return unique_suggestions
+            
+        except Exception as e:
+            logger.error(f"Failed to get search suggestions: {e}")
+            return []
+
+    async def get_available_filters(self, user: User, db: Session = None) -> Dict[str, Any]:
+        """
+        Get available search filters based on user's document collection.
+        """
+        try:
+            if not db:
+                from database.connection import SessionLocal
+                db = SessionLocal()
+            
+            # Get user's documents for filter options
+            documents = db.query(Document).filter(Document.user_id == user.id).all()
+            
+            # Extract file types
+            file_types = {}
+            languages = set()
+            date_range = {'min_date': None, 'max_date': None}
+            file_sizes = []
+            
+            for doc in documents:
+                # File types
+                content_type = doc.content_type or 'unknown'
+                if content_type not in file_types:
+                    file_types[content_type] = 0
+                file_types[content_type] += 1
+                
+                # Date range
+                if doc.created_at:
+                    if not date_range['min_date'] or doc.created_at < date_range['min_date']:
+                        date_range['min_date'] = doc.created_at.isoformat()
+                    if not date_range['max_date'] or doc.created_at > date_range['max_date']:
+                        date_range['max_date'] = doc.created_at.isoformat()
+                
+                # File sizes
+                if hasattr(doc, 'file_size') and doc.file_size:
+                    file_sizes.append(doc.file_size)
+            
+            # Convert to API format
+            file_type_options = [
+                {
+                    'value': file_type,
+                    'label': file_type.split('/')[-1].upper(),
+                    'count': count,
+                    'icon': self._get_file_type_icon(file_type)
+                }
+                for file_type, count in file_types.items()
+            ]
+            
+            # File size statistics
+            file_size_range = {
+                'min_size': min(file_sizes) if file_sizes else 0,
+                'max_size': max(file_sizes) if file_sizes else 0,
+                'avg_size': sum(file_sizes) // len(file_sizes) if file_sizes else 0
+            }
+            
+            return {
+                'file_types': file_type_options,
+                'tags': [],  # TODO: Implement when tags are available
+                'languages': [],  # TODO: Implement language detection
+                'folders': [],  # TODO: Implement when folders are available
+                'date_range': date_range,
+                'file_size_range': file_size_range,
+                'search_types': [
+                    {'value': 'semantic', 'label': 'Semantic', 'description': 'AI-powered meaning-based search'},
+                    {'value': 'keyword', 'label': 'Keyword', 'description': 'Exact word matching'},
+                    {'value': 'hybrid', 'label': 'Hybrid', 'description': 'Best of both semantic and keyword'}
+                ]
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to get available filters: {e}")
+            return {
+                'file_types': [],
+                'tags': [],
+                'languages': [],
+                'folders': [],
+                'date_range': {'min_date': None, 'max_date': None},
+                'file_size_range': {'min_size': 0, 'max_size': 0, 'avg_size': 0},
+                'search_types': []
+            }
+
+    def _get_file_type_icon(self, content_type: str) -> str:
+        """Get appropriate icon for file type."""
+        if 'pdf' in content_type:
+            return 'file-pdf'
+        elif 'image' in content_type:
+            return 'file-image'
+        elif 'text' in content_type:
+            return 'file-text'
+        elif 'doc' in content_type:
+            return 'file-word'
+        else:
+            return 'file'
+
+    async def get_recent_searches(self, user: User, limit: int = 10, 
+                                db: Session = None) -> List[Dict[str, Any]]:
+        """Get user's recent search queries."""
+        try:
+            if not db:
+                from database.connection import SessionLocal
+                db = SessionLocal()
+            
+            recent_searches = db.query(SearchQuery).filter(
+                SearchQuery.user_id == user.id
+            ).order_by(SearchQuery.created_at.desc()).limit(limit).all()
+            
+            return [
+                {
+                    'id': search.id,
+                    'query': search.query,
+                    'created_at': search.created_at.isoformat(),
+                    'results_count': search.results_count or 0
+                }
+                for search in recent_searches
+            ]
+            
+        except Exception as e:
+            logger.error(f"Failed to get recent searches: {e}")
+            return []
+
+    async def save_search(self, user: User, query_data: Dict[str, Any], 
+                         name: str, db: Session = None) -> Dict[str, Any]:
+        """Save a search query for later use."""
+        try:
+            if not db:
+                from database.connection import SessionLocal
+                db = SessionLocal()
+            
+            from database.models import SavedSearch
+            
+            saved_search = SavedSearch(
+                user_id=user.id,
+                name=name,
+                search_query=query_data,
+                created_at=datetime.now(timezone.utc)
+            )
+            
+            db.add(saved_search)
+            db.commit()
+            db.refresh(saved_search)
+            
+            return {
+                'id': saved_search.id,
+                'name': saved_search.name,
+                'created_at': saved_search.created_at.isoformat()
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to save search: {e}")
+            raise
+
+    async def get_saved_searches(self, user: User, db: Session = None) -> List[Dict[str, Any]]:
+        """Get user's saved searches."""
+        try:
+            if not db:
+                from database.connection import SessionLocal
+                db = SessionLocal()
+            
+            from database.models import SavedSearch
+            
+            saved_searches = db.query(SavedSearch).filter(
+                SavedSearch.user_id == user.id
+            ).order_by(SavedSearch.created_at.desc()).all()
+            
+            return [
+                {
+                    'id': search.id,
+                    'name': search.name,
+                    'search_query': search.search_query,
+                    'created_at': search.created_at.isoformat()
+                }
+                for search in saved_searches
+            ]
+            
+        except Exception as e:
+            logger.error(f"Failed to get saved searches: {e}")
+            return []
+
+
+def detect_optimal_search_type(query: str) -> str:
+    """Intelligent search type selection based on query characteristics."""
+    query = query.strip()
+    words = query.split()
+    
+    # Very short queries → keyword search
+    if len(words) <= 1:
+        return SearchType.KEYWORD
+    
+    # Short exact phrases → keyword search
+    if len(words) <= 2 and not any(q in query.lower() for q in ['what', 'how', 'why', 'when', 'where', 'who']):
+        return SearchType.KEYWORD
+    
+    # Question-like queries → semantic search  
+    if query.lower().startswith(('what', 'how', 'why', 'when', 'where', 'who', 'which', 'can', 'should', 'would', 'could')):
+        return SearchType.SEMANTIC
+    
+    # Contains technical terms or specific phrases → hybrid search
+    technical_indicators = ['api', 'function', 'method', 'class', 'error', 'code', 'algorithm', 'implementation']
+    if any(term in query.lower() for term in technical_indicators):
+        return SearchType.HYBRID
+    
+    # Complex queries (more than 5 words) → hybrid search
+    if len(words) > 5:
+        return SearchType.HYBRID
+        
+    # Default to semantic for best results with moderate complexity
+    return SearchType.SEMANTIC
 
 
 # Global search engine instance

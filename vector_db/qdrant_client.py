@@ -192,9 +192,26 @@ class QdrantManager:
         if not vectors:
             return []
         
+        # Store original chunk IDs for payload reference
+        original_chunk_ids = ids[:] if ids else None
+        
         # Generate IDs if not provided
         if ids is None:
             ids = [str(uuid.uuid4()) for _ in vectors]
+        else:
+            # Convert string chunk IDs to UUIDs for Qdrant compatibility
+            converted_ids = []
+            for chunk_id in ids:
+                if isinstance(chunk_id, str) and not chunk_id.startswith(('0', '1', '2', '3', '4', '5', '6', '7', '8', '9')):
+                    # Convert string chunk ID to UUID5 (deterministic)
+                    # This ensures the same chunk_id always gets the same UUID
+                    namespace = uuid.UUID('12345678-1234-5678-1234-567812345678')  # Fixed namespace
+                    converted_id = str(uuid.uuid5(namespace, chunk_id))
+                    converted_ids.append(converted_id)
+                else:
+                    # Already a valid ID format
+                    converted_ids.append(str(chunk_id))
+            ids = converted_ids
         
         # Ensure payloads list has same length as vectors
         if payloads is None:
@@ -210,6 +227,11 @@ class QdrantManager:
                 payload_with_timestamp = payload.copy()
                 payload_with_timestamp["indexed_at"] = datetime.utcnow().isoformat()
                 payload_with_timestamp["point_index"] = i
+                
+                # Preserve original chunk_id if it was converted
+                if original_chunk_ids and i < len(original_chunk_ids):
+                    if "chunk_id" not in payload_with_timestamp:
+                        payload_with_timestamp["chunk_id"] = original_chunk_ids[i]
                 
                 point = PointStruct(
                     id=point_id,

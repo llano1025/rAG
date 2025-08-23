@@ -94,3 +94,124 @@ class SearchResponse(BaseModel):
     query_vector_id: Optional[str] = Field(None, description="ID of generated query vector")
     query: Optional[str] = Field(None, description="Original search query")
     processing_time: Optional[float] = Field(None, description="Processing time in seconds")
+    
+    # Additional compatibility fields
+    search_type: Optional[str] = Field(None, description="Type of search performed (semantic/keyword/hybrid)")
+    fusion_method: Optional[str] = Field(None, description="Method used for result fusion")
+    reranking_applied: bool = Field(False, description="Whether reranking was applied to results")
+    cache_hit: bool = Field(False, description="Whether results came from cache")
+    
+    class Config:
+        """Pydantic model configuration"""
+        json_schema_extra = {
+            "example": {
+                "results": [],
+                "total_hits": 0,
+                "execution_time_ms": 150.5,
+                "query": "machine learning",
+                "search_type": "semantic",
+                "reranking_applied": True,
+                "cache_hit": False
+            }
+        }
+
+
+class AvailableFilters(BaseModel):
+    """Available filter options for the user interface."""
+    file_types: List[dict] = Field(default_factory=list)
+    tags: List[dict] = Field(default_factory=list)
+    languages: List[dict] = Field(default_factory=list)
+    folders: List[dict] = Field(default_factory=list)
+    date_range: dict = Field(default_factory=dict)
+    file_size_range: dict = Field(default_factory=dict)
+    search_types: List[dict] = Field(default_factory=list)
+
+
+class SearchSuggestion(BaseModel):
+    """Search suggestion for autocomplete."""
+    type: str = Field(..., description="Type of suggestion (history/document_title/content)")
+    text: str = Field(..., description="Suggested text")
+    icon: str = Field(..., description="Icon for the suggestion")
+
+
+class SavedSearchResponse(BaseModel):
+    """Response for saved search operations."""
+    id: int
+    name: str
+    search_query: dict
+    created_at: str
+
+
+class RecentSearchResponse(BaseModel):
+    """Response for recent search queries."""
+    id: int
+    query: str
+    created_at: str
+    results_count: int = 0
+
+
+# Helper function to convert SearchResult from EnhancedSearchEngine to API format
+def convert_search_result_to_api_format(result, search_type: str = "semantic") -> SearchResult:
+    """Convert SearchEngine result to API SearchResult format."""
+    return SearchResult(
+        document_id=str(result.document_id),
+        filename=result.document_metadata.get("filename", "Unknown"),
+        content_snippet=result.text[:300] + "..." if len(result.text) > 300 else result.text,
+        score=result.score,
+        metadata={
+            **result.metadata,
+            **result.document_metadata,
+            "search_type": search_type,
+            "chunk_id": result.chunk_id,
+            "chunk_index": getattr(result, 'chunk_index', 0)
+        }
+    )
+
+
+def convert_search_response_to_api_format(results: List, query: str, 
+                                        execution_time: float = 0.0,
+                                        search_type: str = "semantic",
+                                        filters: Optional[SearchFilters] = None,
+                                        **kwargs) -> SearchResponse:
+    """Convert SearchEngine results to API SearchResponse format."""
+    return SearchResponse(
+        results=[convert_search_result_to_api_format(r, search_type) for r in results],
+        total_hits=len(results),
+        execution_time_ms=execution_time * 1000,  # Convert seconds to milliseconds
+        filters_applied=filters,
+        query=query,
+        processing_time=execution_time,
+        search_type=search_type,
+        fusion_method=kwargs.get('fusion_method', 'enhanced_search_engine'),
+        reranking_applied=kwargs.get('reranking_applied', False),
+        cache_hit=kwargs.get('cache_hit', False)
+    )
+
+
+def convert_api_filters_to_search_filter(api_filters: Optional[SearchFilters]) -> 'SearchFilter':
+    """Convert API SearchFilters to SearchEngine SearchFilter."""
+    from vector_db.search_engine import SearchFilter
+    from datetime import datetime
+    
+    search_filter = SearchFilter()
+    
+    if api_filters:
+        if api_filters.file_types:
+            search_filter.content_types = api_filters.file_types
+        
+        if api_filters.tag_ids:
+            search_filter.tags = api_filters.tag_ids
+        
+        if api_filters.date_range and len(api_filters.date_range) == 2:
+            try:
+                start_date = datetime.fromisoformat(api_filters.date_range[0])
+                end_date = datetime.fromisoformat(api_filters.date_range[1])
+                search_filter.date_range = (start_date, end_date)
+            except (ValueError, TypeError):
+                pass  # Invalid date format, ignore
+                
+        if api_filters.metadata_filters:
+            # Handle custom metadata filters if needed
+            pass
+    
+    return search_filter

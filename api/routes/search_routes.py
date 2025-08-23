@@ -8,8 +8,15 @@ from ..schemas.search_schemas import (
     SearchQuery,
     SearchResponse,
     SearchFilters,
-    SearchResult
+    SearchResult,
+    convert_search_response_to_api_format,
+    convert_api_filters_to_search_filter
 )
+from vector_db.search_engine import EnhancedSearchEngine, SearchType, SearchFilter
+from vector_db.storage_manager import get_storage_manager
+from vector_db.embedding_manager import EnhancedEmbeddingManager
+from database.connection import get_db
+import warnings
 
 router = APIRouter(prefix="/search", tags=["search"])
 
@@ -19,34 +26,78 @@ class SearchMetadata(BaseModel):
     filters_applied: List[str]
 
 @router.post("/", response_model=SearchResponse)
-async def search_documents(
+async def unified_search(
     request: SearchQuery,
     current_user = Depends(get_current_active_user)
 ):
     """
-    Hybrid search across documents (recommended) with intelligent fallback to text search.
-    Combines semantic similarity and keyword matching for best results.
+    Intelligent unified search that automatically selects the best search strategy.
+    Uses EnhancedSearchEngine with automatic mode selection based on query characteristics.
     """
     try:
-        # Use hybrid search as default, fallback to text search if needed
-        try:
-            # Try hybrid search first
-            results = await hybrid_search(request, current_user)
-            return results
-        except Exception as hybrid_error:
-            # Fallback to text search if hybrid fails
-            results = await search_controller.search_documents(
-                query=request.query,
-                filters=request.filters,
-                sort=request.sort,
-                page=request.page,
-                page_size=request.page_size,
-                user_id=current_user.id,
-                min_score=request.similarity_threshold if request.similarity_threshold is not None else 0.0
-            )
-            return results
+        # Get search engine components
+        storage_manager = get_storage_manager()
+        embedding_manager = EnhancedEmbeddingManager.create_default_manager()
+        search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
+        
+        db = next(get_db())
+        
+        # Intelligent search type detection based on query characteristics
+        def detect_optimal_search_type(query: str) -> str:
+            # Short queries → keyword search
+            if len(query.split()) <= 2:
+                return SearchType.KEYWORD
+            
+            # Question-like queries → semantic search  
+            if query.lower().startswith(('what', 'how', 'why', 'when', 'where', 'who')):
+                return SearchType.SEMANTIC
+            
+            # Complex queries → hybrid search
+            if len(query.split()) > 5:
+                return SearchType.HYBRID
+                
+            # Default to semantic for best results
+            return SearchType.SEMANTIC
+        
+        search_type = detect_optimal_search_type(request.query)
+        
+        # Convert API filters to search engine format
+        search_filters = convert_api_filters_to_search_filter(request.filters)
+        if request.similarity_threshold is not None:
+            search_filters.min_score = request.similarity_threshold
+        
+        # Apply reranking settings
+        if hasattr(request, 'enable_reranking'):
+            search_filters.enable_reranking = request.enable_reranking
+        if hasattr(request, 'reranker_model'):
+            search_filters.reranker_model = request.reranker_model
+        if hasattr(request, 'rerank_score_weight'):
+            search_filters.rerank_score_weight = request.rerank_score_weight
+        if hasattr(request, 'min_rerank_score'):
+            search_filters.min_rerank_score = request.min_rerank_score
+        
+        # Execute unified search
+        results = await search_engine.search(
+            query=request.query,
+            user=current_user,
+            search_type=search_type,
+            filters=search_filters,
+            limit=request.top_k,
+            db=db
+        )
+        
+        # Convert to API response format
+        return convert_search_response_to_api_format(
+            results=results,
+            query=request.query,
+            execution_time=0.0,  # TODO: Add timing
+            search_type=search_type.value,
+            filters=request.filters,
+            reranking_applied=getattr(search_filters, 'enable_reranking', False)
+        )
+        
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=f"Unified search failed: {str(e)}")
 
 @router.post("/text", response_model=SearchResponse)
 async def text_search(
@@ -54,21 +105,70 @@ async def text_search(
     current_user = Depends(get_current_active_user)
 ):
     """
-    Pure text-based search using keyword matching and intelligent query processing.
+    Pure text-based search using keyword matching algorithm via EnhancedSearchEngine.
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
     try:
-        results = await search_controller.search_documents(
+        logger.info(f"Text search request: query='{request.query[:50]}...', user_id={current_user.id}, top_k={request.top_k}")
+        
+        # Get search engine components
+        storage_manager = get_storage_manager()
+        embedding_manager = EnhancedEmbeddingManager.create_default_manager()
+        search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
+        logger.debug("Search engine components initialized successfully")
+        
+        # Get database session with proper error handling
+        try:
+            db = next(get_db())
+            logger.debug("Database session obtained")
+        except Exception as db_error:
+            logger.error(f"Failed to get database session: {db_error}")
+            raise HTTPException(status_code=500, detail="Database connection failed")
+        
+        # Convert API filters to search engine format with validation
+        try:
+            search_filters = convert_api_filters_to_search_filter(request.filters)
+            if request.similarity_threshold is not None:
+                search_filters.min_score = request.similarity_threshold
+            
+            logger.info(f"Search filters: min_score={getattr(search_filters, 'min_score', None)}, "
+                       f"content_types={getattr(search_filters, 'content_types', None)}, "
+                       f"tags={getattr(search_filters, 'tags', None)}")
+        except Exception as filter_error:
+            logger.error(f"Failed to convert search filters: {filter_error}")
+            raise HTTPException(status_code=400, detail=f"Invalid search filters: {str(filter_error)}")
+        
+        # Execute keyword search using SearchEngine
+        logger.info(f"Calling search() with SearchType.KEYWORD")
+        results = await search_engine.search(
             query=request.query,
-            filters=request.filters,
-            sort=request.sort,
-            page=request.page,
-            page_size=request.page_size,
-            user_id=current_user.id,
-            min_score=request.similarity_threshold if request.similarity_threshold is not None else 0.0
+            user=current_user,
+            search_type=SearchType.KEYWORD,
+            filters=search_filters,
+            limit=request.top_k,
+            db=db
         )
-        return results
+        
+        logger.info(f"Search completed successfully, returned {len(results)} results")
+        
+        # Convert to API response format
+        response = convert_search_response_to_api_format(
+            results=results,
+            query=request.query,
+            execution_time=0.0,  # TODO: Add timing
+            search_type="keyword",
+            filters=request.filters
+        )
+        
+        logger.debug("Response formatted successfully")
+        return response
+        
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        error_msg = f"Text search failed: {type(e).__name__}: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        raise HTTPException(status_code=400, detail=error_msg)
 
 @router.post("/semantic", response_model=SearchResponse)
 async def semantic_search(
@@ -76,23 +176,53 @@ async def semantic_search(
     current_user = Depends(get_current_active_user)
 ):
     """
-    Semantic search using document vectors for intelligent similarity-based retrieval.
+    Semantic search using document vectors via EnhancedSearchEngine.
     """
     try:
-        results = await search_controller.similarity_search(
-            query_text=request.query,
-            filters=request.filters,
-            top_k=request.top_k,
-            threshold=request.similarity_threshold if request.similarity_threshold is not None else 0.0,
-            user_id=current_user.id,
-            enable_reranking=request.enable_reranking,
-            reranker_model=request.reranker_model,
-            rerank_score_weight=request.rerank_score_weight,
-            min_rerank_score=request.min_rerank_score
+        # Get search engine components
+        storage_manager = get_storage_manager()
+        embedding_manager = EnhancedEmbeddingManager.create_default_manager()
+        search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
+        
+        db = next(get_db())
+        
+        # Convert API filters to search engine format
+        search_filters = convert_api_filters_to_search_filter(request.filters)
+        if request.similarity_threshold is not None:
+            search_filters.min_score = request.similarity_threshold
+        
+        # Apply reranking settings
+        if hasattr(request, 'enable_reranking'):
+            search_filters.enable_reranking = request.enable_reranking
+        if hasattr(request, 'reranker_model'):
+            search_filters.reranker_model = request.reranker_model
+        if hasattr(request, 'rerank_score_weight'):
+            search_filters.rerank_score_weight = request.rerank_score_weight
+        if hasattr(request, 'min_rerank_score'):
+            search_filters.min_rerank_score = request.min_rerank_score
+        
+        # Execute semantic search using SearchEngine
+        results = await search_engine.search(
+            query=request.query,
+            user=current_user,
+            search_type=SearchType.SEMANTIC,
+            filters=search_filters,
+            limit=request.top_k,
+            db=db
         )
-        return results
+        
+        # Convert to API response format
+        return convert_search_response_to_api_format(
+            results=results,
+            query=request.query,
+            execution_time=0.0,  # TODO: Add timing
+            search_type="semantic",
+            filters=request.filters,
+            reranking_applied=getattr(search_filters, 'enable_reranking', False)
+        )
+        
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=f"Semantic search failed: {str(e)}")
 
 @router.post("/hybrid", response_model=SearchResponse)
 async def hybrid_search(
@@ -100,96 +230,54 @@ async def hybrid_search(
     current_user = Depends(get_current_active_user)
 ):
     """
-    Professional hybrid search using Reciprocal Rank Fusion (RRF).
+    Professional hybrid search using Reciprocal Rank Fusion (RRF) via EnhancedSearchEngine.
     """
     try:
-        # Import RRF fusion module
-        from utils.search.result_fusion import fuse_search_results
-        
-        # Use Enhanced Search Engine's built-in hybrid search
-        from vector_db.search_engine import EnhancedSearchEngine, SearchType, SearchFilter
-        from vector_db.storage_manager import get_storage_manager
-        from vector_db.embedding_manager import EnhancedEmbeddingManager
-        from database.connection import get_db
-        
-        db = next(get_db())
-        user = current_user
-        
-        # Initialize search engine components
+        # Get search engine components
         storage_manager = get_storage_manager()
         embedding_manager = EnhancedEmbeddingManager.create_default_manager()
         search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
         
-        # Create SearchFilter with min_score from request
-        search_filters = SearchFilter()
-        search_filters.min_score = request.similarity_threshold if request.similarity_threshold is not None else 0.0
+        db = next(get_db())
         
-        # Apply additional filters if provided in request
-        if hasattr(request, 'filters') and request.filters:
-            # Handle request.filters if they exist - convert from API format
-            if hasattr(request.filters, 'file_types') and request.filters.file_types:
-                search_filters.content_types = request.filters.file_types
-            if hasattr(request.filters, 'tag_ids') and request.filters.tag_ids:
-                search_filters.tags = request.filters.tag_ids
-            if hasattr(request.filters, 'date_range') and request.filters.date_range:
-                try:
-                    start_date, end_date = request.filters.date_range
-                    search_filters.date_range = (start_date, end_date)
-                except (ValueError, TypeError):
-                    pass
+        # Convert API filters to search engine format
+        search_filters = convert_api_filters_to_search_filter(request.filters)
+        if request.similarity_threshold is not None:
+            search_filters.min_score = request.similarity_threshold
         
-        # Apply reranker settings from request
+        # Apply reranking settings
         if hasattr(request, 'enable_reranking'):
-            search_filters.enable_reranking = request.enable_reranking or True
+            search_filters.enable_reranking = request.enable_reranking
         if hasattr(request, 'reranker_model'):
             search_filters.reranker_model = request.reranker_model
         if hasattr(request, 'rerank_score_weight'):
-            search_filters.rerank_score_weight = request.rerank_score_weight or 0.5
+            search_filters.rerank_score_weight = request.rerank_score_weight
         if hasattr(request, 'min_rerank_score'):
             search_filters.min_rerank_score = request.min_rerank_score
         
-        # Perform hybrid search using Enhanced Search Engine with proper filtering
-        search_results = await search_engine.search(
+        # Execute hybrid search using SearchEngine
+        results = await search_engine.search(
             query=request.query,
-            user=user,
+            user=current_user,
             search_type=SearchType.HYBRID,
             filters=search_filters,
             limit=request.top_k,
             db=db
         )
         
-        # Format results to match API schema
-        fused_results = []
-        for result in search_results:
-            formatted_result = {
-                "document_id": str(result.document_id),
-                "filename": result.document_metadata.get("filename", "Unknown"),
-                "content_snippet": result.text[:300] + "..." if len(result.text) > 300 else result.text,
-                "score": result.score,
-                "metadata": {
-                    **result.metadata,
-                    **result.document_metadata,
-                    "search_type": "hybrid"
-                }
-            }
-            fused_results.append(formatted_result)
-        
-        # Build final response
-        hybrid_response = {
-            "results": fused_results,
-            "total_hits": len(fused_results),
-            "execution_time_ms": 0,  # Enhanced search engine doesn't return timing yet
-            "filters_applied": request.filters,
-            "query_vector_id": None,  # Could be enhanced to return this
-            "query": request.query,
-            "processing_time": 0.0,  # Could be enhanced to measure this
-            "fusion_method": "enhanced_search_engine_hybrid"
-        }
-        
-        return hybrid_response
+        # Convert to API response format
+        return convert_search_response_to_api_format(
+            results=results,
+            query=request.query,
+            execution_time=0.0,  # TODO: Add timing
+            search_type="hybrid",
+            filters=request.filters,
+            fusion_method="enhanced_search_engine_hybrid",
+            reranking_applied=getattr(search_filters, 'enable_reranking', False)
+        )
         
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=f"Hybrid search failed: {str(e)}")
 
 class FilterOption(BaseModel):
     value: str
@@ -206,7 +294,7 @@ class FileSizeRange(BaseModel):
     max_size: int
     avg_size: int
 
-class SearchType(BaseModel):
+class SearchTypeOption(BaseModel):
     value: str
     label: str
     description: str
@@ -218,19 +306,37 @@ class AvailableFilters(BaseModel):
     folders: List[FilterOption]
     date_range: DateRange
     file_size_range: FileSizeRange
-    search_types: List[SearchType]
+    search_types: List[SearchTypeOption]
 
 @router.get("/filters", response_model=AvailableFilters)
 async def get_available_filters(
     current_user = Depends(get_current_active_user)
 ):
     """
-    Get available search filters including folders, tags, and document types.
+    Get available search filters including folders, tags, and document types via EnhancedSearchEngine.
     """
-    filters = await search_controller.get_available_filters(
-        user_id=current_user.id
-    )
-    return filters
+    try:
+        # Get search engine components
+        storage_manager = get_storage_manager()
+        embedding_manager = EnhancedEmbeddingManager.create_default_manager()
+        search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
+        
+        db = next(get_db())
+        
+        # Get filters using unified search engine
+        filters = await search_engine.get_available_filters(
+            user=current_user,
+            db=db
+        )
+        return filters
+        
+    except Exception:
+        # Fallback to legacy controller with deprecation warning
+        warnings.warn("Falling back to legacy search controller for filters", DeprecationWarning)
+        filters = await search_controller.get_available_filters(
+            user_id=current_user.id
+        )
+        return filters
 
 class SaveSearchRequest(BaseModel):
     search_query: SearchQuery
@@ -244,6 +350,7 @@ async def save_search(
     """
     Save a search query for later use.
     """
+    # Use legacy controller for now - this functionality doesn't need SearchEngine
     saved_search = await search_controller.save_search(
         name=request.name,
         search_request=request.search_query.model_dump(),
@@ -258,6 +365,7 @@ async def get_saved_searches(
     """
     Retrieve user's saved searches.
     """
+    # Use legacy controller for now - this functionality doesn't need SearchEngine
     saved_searches = await search_controller.get_saved_searches(
         user_id=current_user.id
     )
@@ -271,6 +379,7 @@ async def get_recent_searches(
     """
     Get user's recent search queries.
     """
+    # Use legacy controller for now - this functionality doesn't need SearchEngine
     recent_searches = await search_controller.get_recent_searches(
         user_id=current_user.id,
         limit=limit
@@ -285,6 +394,7 @@ async def get_search_history(
     """
     Get user's search history.
     """
+    # Use legacy controller for now - this functionality doesn't need SearchEngine
     history = await search_controller.get_recent_searches(
         user_id=current_user.id,
         limit=limit
@@ -303,14 +413,37 @@ async def get_search_suggestions(
     current_user = Depends(get_current_active_user)
 ):
     """
-    Get search suggestions based on partial query.
+    Get search suggestions based on partial query via EnhancedSearchEngine.
     """
-    suggestions = await search_controller.get_search_suggestions(
-        query=query,
-        limit=limit,
-        user_id=current_user.id
-    )
-    return suggestions
+    try:
+        # Get search engine components
+        storage_manager = get_storage_manager()
+        embedding_manager = EnhancedEmbeddingManager.create_default_manager()
+        search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
+        
+        db = next(get_db())
+        
+        # Get suggestions using unified search engine
+        suggestions_data = await search_engine.get_search_suggestions(
+            query=query,
+            user=current_user,
+            limit=limit,
+            db=db
+        )
+        
+        # Convert to API format
+        suggestions = [SearchSuggestion(**suggestion) for suggestion in suggestions_data]
+        return suggestions
+        
+    except Exception:
+        # Fallback to legacy controller with deprecation warning
+        warnings.warn("Falling back to legacy search controller for suggestions", DeprecationWarning)
+        suggestions = await search_controller.get_search_suggestions(
+            query=query,
+            limit=limit,
+            user_id=current_user.id
+        )
+        return suggestions
 
 class RerankerModel(BaseModel):
     alias: str = Field(..., description="Model alias/name")
@@ -321,7 +454,7 @@ class RerankerModel(BaseModel):
 
 @router.get("/reranker/models", response_model=List[RerankerModel])
 async def get_available_reranker_models(
-    current_user = Depends(get_current_active_user)
+    current_user = Depends(get_current_active_user)  # Authentication required
 ):
     """
     Get list of available reranker models.
@@ -334,13 +467,13 @@ async def get_available_reranker_models(
         
         return [RerankerModel(**model) for model in models]
         
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get reranker models: {str(e)}")
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to get reranker models")
 
 @router.get("/reranker/health")
 async def check_reranker_health(
     model_name: Optional[str] = Query(None, description="Specific model to check"),
-    current_user = Depends(get_current_active_user)
+    current_user = Depends(get_current_active_user)  # Authentication required
 ):
     """
     Check health status of reranker models.
@@ -353,5 +486,5 @@ async def check_reranker_health(
         
         return health_status
         
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Health check failed: {str(e)}")
+    except Exception:
+        raise HTTPException(status_code=500, detail="Health check failed")

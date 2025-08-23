@@ -4,7 +4,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import hashlib
 import json
 import logging
+import warnings
 from datetime import datetime
+from functools import wraps
 
 from vector_db.embedding_manager import EmbeddingManager
 from vector_db.search_optimizer import SearchOptimizer, SearchError
@@ -21,6 +23,20 @@ from utils.exceptions import (
 from api.schemas.responses import StandardResponse, create_success_response
 
 logger = logging.getLogger(__name__)
+
+def deprecated(reason):
+    """Mark functions as deprecated with a reason."""
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            warnings.warn(
+                f"{func.__name__} is deprecated and will be removed in v2.0. {reason}",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            return await func(*args, **kwargs)
+        return wrapper
+    return decorator
 
 class SearchController:
     """Controller for all search operations."""
@@ -415,6 +431,7 @@ class SearchController:
             )
 
 # Module-level functions for compatibility with routes
+@deprecated("Use EnhancedSearchEngine.search() or EnhancedSearchEngine.text_search() instead")
 async def search_documents(query: str, filters=None, sort: Optional[str] = None, 
                          page: int = 1, page_size: int = 10, user_id: int = None, min_score: float = 0.0):
     """Search documents with intelligent text matching and filtering."""
@@ -940,6 +957,7 @@ def _extract_content_snippet(document, query: str, processed_query=None, max_len
     
     return snippet
 
+@deprecated("Use EnhancedSearchEngine.search() with SearchType.SEMANTIC instead")
 async def similarity_search(query_text: str, filters=None, top_k: int = 5, 
                           threshold: float = 0.0, user_id: int = None,
                           enable_reranking: bool = True,
@@ -1100,6 +1118,7 @@ def _safe_get_tag_list(doc):
         logger.warning(f"Failed to get tag list for document {doc.id}: {e}")
         return []
 
+@deprecated("Use EnhancedSearchEngine.get_available_filters() instead")
 async def get_available_filters(user_id: int):
     """Get available search filters."""
     logger.info(f"Getting available filters for user {user_id}")
@@ -1437,6 +1456,7 @@ async def get_recent_searches(user_id: int, limit: int = 10):
         logger.error(f"Failed to get recent searches for user {user_id}: {str(e)}", exc_info=True)
         return []
 
+@deprecated("Use EnhancedSearchEngine.get_search_suggestions() instead")
 async def get_search_suggestions(query: str, limit: int = 5, user_id: int = None):
     """Get search suggestions."""
     logger.debug(f"Getting search suggestions for query '{query}' (limit: {limit}, user: {user_id})")
