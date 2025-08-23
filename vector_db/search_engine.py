@@ -1106,13 +1106,13 @@ class EnhancedSearchEngine:
             # 1. Search history suggestions
             recent_searches = db.query(SearchQuery).filter(
                 SearchQuery.user_id == user.id,
-                SearchQuery.query.ilike(f'%{query}%')
+                SearchQuery.query_text.ilike(f'%{query}%')
             ).order_by(SearchQuery.created_at.desc()).limit(3).all()
             
             for search in recent_searches:
                 suggestions.append({
                     'type': 'history',
-                    'text': search.query,
+                    'text': search.query_text,
                     'icon': 'history'
                 })
             
