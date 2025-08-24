@@ -10,6 +10,7 @@ import hashlib
 from typing import List, Dict, Any, Optional, Tuple, Union
 from datetime import datetime, timezone
 from pathlib import Path
+from .qdrant_client import QdrantManager
 
 from sqlalchemy.orm import Session
 
@@ -64,7 +65,7 @@ class VectorStorageManager:
     
     def __init__(self, storage_path: str = None):
         """Initialize storage manager."""
-        self.storage_path = storage_path or "./vector_storage"
+        self.storage_path = storage_path or "runtime/vector_storage"
         self.faiss_indices: Dict[str, Any] = {}  # SearchOptimizer instances when available
         self.qdrant_manager: Optional[QdrantManager] = None
         self.vector_dependencies_available = VECTOR_DEPENDENCIES_AVAILABLE

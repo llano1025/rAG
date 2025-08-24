@@ -54,9 +54,9 @@ class AuditLogger:
 
     def _initialize_log_file(self) -> Path:
         """Initialize the log file with proper directory structure."""
-        self.config.log_path.parent.mkdir(parents=True, exist_ok=True)
+        self.config.log_path.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_file = self.config.log_path.parent / f"audit_{timestamp}.log"
+        log_file = self.config.log_path / f"audit_{timestamp}.log"
         return log_file
 
     def _rotate_log_if_needed(self) -> None:

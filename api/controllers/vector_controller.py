@@ -158,26 +158,25 @@ class VectorController:
             # Save original file to storage
             file_path = None
             try:
-                logger.info(f"🗄️ VectorController: Attempting to save original file to storage...")
+                logger.info(f"VectorController: Attempting to save original file to storage...")
                 file_path = self.file_manager.save_file(file_content, filename, file_hash)
-                logger.info(f"✅ VectorController: Original file saved to: {file_path}")
+                logger.info(f"VectorController: Original file saved to: {file_path}")
             except Exception as e:
-                logger.error(f"❌ VectorController: Failed to save original file: {e}")
+                logger.error(f"VectorController: Failed to save original file: {e}")
                 logger.error(f"File: {filename}, Size: {len(file_content)} bytes, Type: {content_type}")
                 
-                # For binary files (images, PDFs, etc.), file storage is critical
                 # Don't continue processing if we can't store the original file
                 if content_type and (content_type.startswith('image/') or 
                                    content_type == 'application/pdf' or
                                    content_type.startswith('application/vnd.') or
                                    content_type == 'application/msword'):
-                    logger.error(f"💥 VectorController: File storage is critical for binary files, aborting upload")
+                    logger.error(f"VectorController: File storage is critical for binary files, aborting upload")
                     raise HTTPException(
                         status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
                         detail=f"Failed to store original file: {str(e)}. Original file storage is required for {content_type} files."
                     )
                 else:
-                    logger.warning(f"⚠️ VectorController: Continuing without file storage for text-based file")
+                    logger.warning(f"VectorController: Continuing without file storage for text-based file")
                     file_path = None
             
             # Extract metadata

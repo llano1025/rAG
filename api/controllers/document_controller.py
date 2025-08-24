@@ -861,12 +861,12 @@ def get_audit_logger() -> AuditLogger:
     from pathlib import Path
     
     config = AuditLoggerConfig(
-        log_path=Path("data/audit_logs"),
+        log_path=Path("runtime/audit_logs"),
         rotation_size_mb=10,
         retention_days=90
     )
     # Ensure audit log directory exists
-    Path("data/audit_logs").mkdir(parents=True, exist_ok=True)
+    Path("runtime/audit_logs").mkdir(parents=True, exist_ok=True)
     return AuditLogger(config)
 
 def get_document_controller() -> DocumentController:

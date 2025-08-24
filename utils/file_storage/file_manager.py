@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class FileStorageManager:
     """Manages storage and retrieval of original document files."""
     
-    def __init__(self, storage_root: str = "storage/documents"):
+    def __init__(self, storage_root: str = "/runtime/storage/documents"):
         """
         Initialize file storage manager.
         
@@ -480,7 +480,7 @@ def get_file_manager() -> FileStorageManager:
         _file_manager = FileStorageManager()
     return _file_manager
 
-def init_file_manager(storage_root: str = "storage/documents") -> FileStorageManager:
+def init_file_manager(storage_root: str = "runtime/storage/documents") -> FileStorageManager:
     """Initialize file storage manager with custom settings."""
     global _file_manager
     _file_manager = FileStorageManager(storage_root)

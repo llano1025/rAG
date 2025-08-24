@@ -85,22 +85,22 @@ async def lifespan(app: FastAPI):
         # Initialize encryption manager
         from pathlib import Path
         encryption_config = EncryptionConfig(
-            key_path=Path("data/encryption.key"),
-            salt_path=Path("data/encryption.salt")
+            key_path=Path("runtime/data/encryption.key"),
+            salt_path=Path("runtime/data/encryption.salt")
         )
         # Ensure data directory exists
-        Path("data").mkdir(exist_ok=True)
+        Path("runtime/data").mkdir(exist_ok=True)
         encryption_manager = EncryptionManager(encryption_config)
         logger.info("Encryption manager initialized")
         
         # Initialize audit logger
         audit_config = AuditLoggerConfig(
-            log_path=Path("data/audit_logs"),
+            log_path=Path("runtime/audit_logs"),
             rotation_size_mb=10,
             retention_days=90
         )
         # Ensure audit log directory exists
-        Path("data/audit_logs").mkdir(parents=True, exist_ok=True)
+        Path("runtime/audit_logs").mkdir(parents=True, exist_ok=True)
         audit_logger = AuditLogger(audit_config)
         logger.info("Audit logger initialized")
         
@@ -259,11 +259,11 @@ def get_encryption_manager() -> EncryptionManager:
         # Create encryption config similar to startup process
         from pathlib import Path
         encryption_config = EncryptionConfig(
-            key_path=Path("data/encryption.key"),
-            salt_path=Path("data/encryption.salt")
+            key_path=Path("runtime/data/encryption.key"),
+            salt_path=Path("runtime/data/encryption.salt")
         )
         # Ensure data directory exists
-        Path("data").mkdir(exist_ok=True)
+        Path("runtime/data").mkdir(exist_ok=True)
         encryption_manager = EncryptionManager(encryption_config)
     return encryption_manager
 
@@ -273,12 +273,12 @@ def get_audit_logger() -> AuditLogger:
     if audit_logger is None:
         # Create audit logger with default configuration
         audit_config = AuditLoggerConfig(
-            log_path=Path("data/audit_logs"),
+            log_path=Path("runtime/audit_logs"),
             rotation_size_mb=10,
             retention_days=90
         )
         # Ensure audit log directory exists
-        Path("data/audit_logs").mkdir(parents=True, exist_ok=True)
+        Path("runtime/audit_logs").mkdir(parents=True, exist_ok=True)
         audit_logger = AuditLogger(audit_config)
     return audit_logger
 
