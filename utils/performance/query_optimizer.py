@@ -89,7 +89,7 @@ class QueryOptimizer:
         # Cache configuration
         self.cache_config = CacheConfig(
             strategy=CacheStrategy.SLIDING,
-            ttl_seconds=cache_ttl_seconds,
+            ttl=cache_ttl_seconds,
             max_size=max_cache_size_mb * 1024 * 1024
         )
         

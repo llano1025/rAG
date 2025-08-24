@@ -8,7 +8,7 @@ from sqlalchemy.sql import func
 from enum import Enum
 from typing import Dict
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from .base import Base, TimestampMixin, SoftDeleteMixin
 
@@ -691,7 +691,7 @@ class SearchQuery(Base, TimestampMixin):
         """Check if cached results are still valid."""
         if not self.cached_results or not self.cache_expires_at:
             return False
-        return self.cache_expires_at > datetime.utcnow()
+        return self.cache_expires_at > datetime.now(timezone.utc)
     
     def get_cached_results(self) -> list:
         """Get cached results as list."""
@@ -704,8 +704,8 @@ class SearchQuery(Base, TimestampMixin):
         """Set cached results with expiration."""
         import json
         from datetime import timedelta
-        self.cached_results = json.dumps(results)
-        self.cache_expires_at = datetime.utcnow() + timedelta(hours=cache_duration_hours)
+        self.cached_results = json.dumps(results, default=str)
+        self.cache_expires_at = datetime.now(timezone.utc) + timedelta(hours=cache_duration_hours)
     
     @classmethod
     def create_query_hash(cls, query_text: str, filters: dict = None) -> str:

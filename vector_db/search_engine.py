@@ -10,6 +10,7 @@ import re
 from collections import Counter, defaultdict
 from typing import List, Dict, Any, Optional, Tuple, Union, Set
 from datetime import datetime, timezone
+import time
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, func, text
 
@@ -18,6 +19,7 @@ from .storage_manager import VectorStorageManager, get_storage_manager
 from .context_processor import ContextProcessor
 from .reranker import get_reranker_manager, get_reranker_config, RerankResult
 from .reranker.base_reranker import SearchResult as RerankerSearchResult
+from utils.performance.query_optimizer import get_query_optimizer, QueryOptimizer, QueryType
 from config import get_settings
 
 # Lazy import for EmbeddingManager
@@ -362,6 +364,9 @@ class EnhancedSearchEngine:
         # BM25 corpus statistics manager
         self.corpus_stats_manager = CorpusStatsManager()
         
+        # Query optimizer for advanced caching and performance
+        self.query_optimizer = get_query_optimizer()
+        
         # Search configuration
         self.default_limit = 10
         self.max_limit = 100
@@ -486,22 +491,82 @@ class EnhancedSearchEngine:
         filters = filters or SearchFilter()
         
         try:
-            # Check cache first
+            # Hierarchical cache strategy - check multiple cache levels
             if use_cache:
+                # Check end-to-end Redis cache first (fastest)
+                try:
+                    cache_key = f"search_{query}_{user.id}_{hash(str(filters.to_dict()))}"
+                    cached_data = await self.query_optimizer.redis_manager.get_value(cache_key)
+                    if cached_data:
+                        # Convert back to SearchResult objects
+                        cached_results = []
+                        for result_data in cached_data:
+                            result = SearchResult(
+                                chunk_id=result_data['chunk_id'],
+                                document_id=result_data['document_id'],
+                                text=result_data['text'],
+                                score=result_data['score'],
+                                metadata=result_data['metadata'],
+                                document_metadata=result_data.get('document_metadata', {}),
+                                highlight=result_data.get('highlight')
+                            )
+                            cached_results.append(result)
+                        logger.info(f"Returning Redis cached results for query: {query[:50]}...")
+                        return cached_results
+                except Exception as e:
+                    logger.warning(f"Redis cache retrieval failed: {e}")
+                
+                # Fallback to database cache
                 cached_results = await self._get_cached_results(query, user.id, filters, db)
                 if cached_results:
-                    logger.info(f"Returning cached results for query: {query[:50]}...")
+                    logger.info(f"Returning database cached results for query: {query[:50]}...")
                     return cached_results
+                
+                # Check vector cache coverage for semantic searches
+                # This optimizes cases where vector operations are cached but final results aren't
+                if search_type == SearchType.SEMANTIC:
+                    # Get accessible documents first for coverage check
+                    filters.user_id = user.id
+                    accessible_doc_ids = await self._get_accessible_documents(user, db)
+                    filters.document_ids = accessible_doc_ids
+                    
+                    # Check if we have high vector cache coverage
+                    vector_coverage = await self._check_vector_cache_coverage(query, filters, accessible_doc_ids)
+                    
+                    if vector_coverage >= 0.8:  # 80% or more documents have cached vector results
+                        assembly_start = time.time()
+                        logger.info(f"High vector cache coverage ({vector_coverage:.1%}), assembling from cache")
+                        assembled_results = await self._assemble_from_vector_cache(query, filters, limit, accessible_doc_ids)
+                        
+                        if assembled_results:
+                            assembly_time = (time.time() - assembly_start) * 1000
+                            
+                            # Cache these assembled results for future end-to-end cache hits
+                            try:
+                                await self.query_optimizer.redis_manager.set_value(
+                                    cache_key,
+                                    [result.to_dict() for result in assembled_results],
+                                    ttl=self.cache_duration_hours * 3600
+                                )
+                                logger.info(f"✅ Vector cache optimization: assembled {len(assembled_results)} results in {assembly_time:.1f}ms (saved full search)")
+                            except Exception as e:
+                                logger.warning(f"Failed to cache assembled results: {e}")
+                            
+                            return assembled_results
+                        else:
+                            logger.info(f"Vector cache assembly returned no results, falling back to full search")
             
-            # Apply user access control to filters
-            filters.user_id = user.id
-            accessible_doc_ids = await self._get_accessible_documents(user, db)
+            # Apply user access control to filters (skip if already done for semantic cache check)
+            if not hasattr(filters, 'document_ids') or not filters.document_ids:
+                filters.user_id = user.id
+                accessible_doc_ids = await self._get_accessible_documents(user, db)
+                filters.document_ids = accessible_doc_ids
+            else:
+                accessible_doc_ids = filters.document_ids
             
             if not accessible_doc_ids:
                 logger.info(f"No accessible documents for user {user.id}")
                 return []
-            
-            filters.document_ids = accessible_doc_ids
             
             # Perform search based on type
             if search_type == SearchType.SEMANTIC:
@@ -524,7 +589,20 @@ class EnhancedSearchEngine:
             await self._log_search_query(query, user.id, search_type, filters, len(results), search_time, db)
             
             if use_cache and results:
+                # Cache results using both methods for optimal performance
+                # Database cache for analytics and persistence
                 await self._cache_results(query, user.id, filters, results, db)
+                
+                # Redis cache via query optimizer for fast retrieval
+                try:
+                    cache_key = f"search_{query}_{user.id}_{hash(str(filters.to_dict()))}"
+                    await self.query_optimizer.redis_manager.set_value(
+                        cache_key,
+                        [result.to_dict() for result in results],
+                        ttl=self.cache_duration_hours * 3600
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to cache results in Redis: {e}")
             
             logger.info(f"Search completed in {search_time:.2f}ms, returned {len(results)} results")
             return results
@@ -622,15 +700,15 @@ class EnhancedSearchEngine:
                 # Search with each embedding strategy
                 for strategy_name, query_vector, weight in embeddings_to_search:
                     try:
-                        # Search content vectors
-                        results = await self.storage_manager.search_vectors(
-                            index_name=index_name,
+                        # Use query optimizer for vector search with caching and optimization
+                        optimized_results = await self.query_optimizer.optimize_vector_search(
                             query_vector=query_vector,
-                            vector_type="content",
-                            limit=limit * 2,  # Get more results for fusion
-                            score_threshold=filters.min_score or 0.1,
-                            use_faiss=True
+                            index_name=index_name,
+                            top_k=limit * 2,  # Get more results for fusion
+                            filters={'vector_type': 'content', 'min_score': filters.min_score or 0.1},
+                            user_id=filters.user_id
                         )
+                        results = optimized_results.get('results', [])
                         
                         # Process results with weighted scoring
                         for result in results:
@@ -1340,7 +1418,6 @@ class EnhancedSearchEngine:
         
         return search_results
 
-
     async def get_search_suggestions(self, query: str, user: User, limit: int = 5, 
                                    db: Session = None) -> List[Dict[str, Any]]:
         """
@@ -1597,6 +1674,162 @@ class EnhancedSearchEngine:
             
         except Exception as e:
             logger.error(f"Failed to get saved searches: {e}")
+            return []
+
+    async def invalidate_cache_for_documents(self, document_ids: List[int]):
+        """Invalidate cache entries related to specific documents."""
+        try:
+            # Clear Redis cache entries containing these document IDs
+            for doc_id in document_ids:
+                pattern = f"*doc_{doc_id}*"
+                await self.query_optimizer.clear_cache(pattern)
+                
+            logger.info(f"Cache invalidated for documents: {document_ids}")
+        except Exception as e:
+            logger.error(f"Failed to invalidate cache: {e}")
+
+    async def clear_user_cache(self, user_id: int):
+        """Clear all cached results for a specific user."""
+        try:
+            # Clear Redis cache entries for this user
+            await self.query_optimizer.clear_cache(f"search_*_{user_id}_*")
+            logger.info(f"Cleared cache for user {user_id}")
+        except Exception as e:
+            logger.error(f"Failed to clear user cache: {e}")
+
+    async def get_cache_statistics(self) -> Dict[str, Any]:
+        """Get cache performance statistics."""
+        try:
+            # Get query optimizer statistics
+            stats = await self.query_optimizer.get_query_statistics(hours=24)
+            
+            # Add Redis health check
+            redis_healthy = await self.query_optimizer.redis_manager.health_check()
+            
+            return {
+                **stats,
+                'redis_healthy': redis_healthy,
+                'cache_enabled': True,
+                'cache_duration_hours': self.cache_duration_hours
+            }
+        except Exception as e:
+            logger.error(f"Failed to get cache statistics: {e}")
+            return {'error': str(e), 'cache_enabled': False}
+
+    async def optimize_cache_performance(self):
+        """Optimize cache performance based on usage patterns."""
+        try:
+            await self.query_optimizer.optimize_cache_usage()
+            logger.info("Cache performance optimization completed")
+        except Exception as e:
+            logger.error(f"Cache optimization failed: {e}")
+
+    async def _check_vector_cache_coverage(
+        self, 
+        query: str, 
+        filters: SearchFilter, 
+        expected_docs: List[int]
+    ) -> float:
+        """
+        Check what percentage of expected vector search results are already cached.
+        Returns coverage ratio between 0.0 and 1.0.
+        """
+        try:
+            if not expected_docs:
+                return 0.0
+                
+            # Generate embeddings for cache key generation (lightweight check)
+            embedding_manager = self._get_embedding_manager_instance()
+            embeddings = await embedding_manager.generate_embeddings([query])
+            query_vector = embeddings[0] if embeddings else []
+            
+            cached_docs = 0
+            total_docs = len(expected_docs)
+            
+            for doc_id in expected_docs:
+                # Generate the same query_id that optimize_vector_search would use
+                query_id = self.query_optimizer._generate_query_id(
+                    QueryType.VECTOR_SIMILARITY,
+                    query_vector=query_vector,
+                    index_name=f"doc_{doc_id}",
+                    top_k=50,  # Default check value
+                    filters={'vector_type': 'content'},
+                    user_id=filters.user_id
+                )
+                
+                # Check if this vector search is cached
+                cache_key = f"query_cache:{query_id}"
+                cached_result = await self.query_optimizer.redis_manager.get_value(cache_key)
+                
+                if cached_result is not None:
+                    cached_docs += 1
+            
+            coverage = cached_docs / total_docs if total_docs > 0 else 0.0
+            logger.debug(f"Vector cache coverage: {coverage:.2%} ({cached_docs}/{total_docs} docs)")
+            return coverage
+            
+        except Exception as e:
+            logger.warning(f"Failed to check vector cache coverage: {e}")
+            return 0.0
+
+    async def _assemble_from_vector_cache(
+        self,
+        query: str,
+        filters: SearchFilter,
+        limit: int,
+        expected_docs: List[int]
+    ) -> List[SearchResult]:
+        """
+        Assemble search results from cached vector search results.
+        Used when vector cache coverage is high enough to skip full search.
+        """
+        try:
+            embedding_manager = self._get_embedding_manager_instance()
+            embeddings = await embedding_manager.generate_embeddings([query])
+            query_vector = embeddings[0] if embeddings else []
+            
+            all_results = {}  # chunk_id -> SearchResult
+            
+            for doc_id in expected_docs:
+                query_id = self.query_optimizer._generate_query_id(
+                    QueryType.VECTOR_SIMILARITY,
+                    query_vector=query_vector,
+                    index_name=f"doc_{doc_id}",
+                    top_k=limit * 2,
+                    filters={'vector_type': 'content'},
+                    user_id=filters.user_id
+                )
+                
+                cache_key = f"query_cache:{query_id}"
+                cached_result = await self.query_optimizer.redis_manager.get_value(cache_key)
+                
+                if cached_result and 'results' in cached_result:
+                    for result in cached_result['results']:
+                        chunk_id = result.get('metadata', {}).get('chunk_id')
+                        if chunk_id:
+                            # Convert cached result to SearchResult object
+                            search_result = SearchResult(
+                                chunk_id=chunk_id,
+                                document_id=result.get('metadata', {}).get('document_id', doc_id),
+                                text=result.get('content', ''),
+                                score=result.get('score', 0.0),
+                                metadata=result.get('metadata', {}),
+                                document_metadata=result.get('document_metadata', {})
+                            )
+                            
+                            # Keep best score for each chunk
+                            if chunk_id not in all_results or search_result.score > all_results[chunk_id].score:
+                                all_results[chunk_id] = search_result
+            
+            # Sort by score and limit results
+            sorted_results = sorted(all_results.values(), key=lambda x: x.score, reverse=True)
+            final_results = sorted_results[:limit]
+            
+            logger.info(f"Assembled {len(final_results)} results from vector cache")
+            return final_results
+            
+        except Exception as e:
+            logger.error(f"Failed to assemble from vector cache: {e}")
             return []
 
 

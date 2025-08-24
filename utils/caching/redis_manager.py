@@ -1,8 +1,9 @@
 from typing import Any, Optional, Union
 import json
-from redis import Redis
+from redis.asyncio import Redis
 from datetime import timedelta
 import logging
+import asyncio
 from functools import wraps
 
 logger = logging.getLogger(__name__)
@@ -33,16 +34,16 @@ class RedisManager:
         self.default_ttl = default_ttl
         self._redis_client: Optional[Redis] = None
 
-    @property
-    def client(self) -> Redis:
+    async def get_client(self) -> Redis:
         """
-        Lazy initialization of Redis client with automatic reconnection.
+        Async initialization of Redis client with automatic reconnection.
         """
         if self._redis_client is None:
             try:
                 self._redis_client = Redis(**self.connection_params)
-                # Test connection
-                self._redis_client.ping()
+                # Test connection asynchronously
+                await self._redis_client.ping()
+                logger.info("Redis client initialized successfully")
             except Exception as e:
                 logger.error(f"Failed to connect to Redis: {str(e)}")
                 raise
@@ -51,8 +52,8 @@ class RedisManager:
     async def connect(self):
         """Initialize Redis connection (async interface for consistency)."""
         try:
-            # Force initialization of client via property
-            _ = self.client
+            # Force initialization of client via async method
+            await self.get_client()
             logger.info("Redis connection established successfully")
         except Exception as e:
             logger.error(f"Failed to establish Redis connection: {str(e)}")
@@ -62,13 +63,13 @@ class RedisManager:
         """Close Redis connection."""
         try:
             if self._redis_client:
-                self._redis_client.close()
+                await self._redis_client.close()
                 self._redis_client = None
                 logger.info("Redis connection closed")
         except Exception as e:
             logger.error(f"Error closing Redis connection: {str(e)}")
 
-    def set_value(
+    async def set_value(
         self,
         key: str,
         value: Any,
@@ -91,20 +92,22 @@ class RedisManager:
             if namespace:
                 key = f"{namespace}:{key}"
                 
-            serialized_value = json.dumps(value)
+            serialized_value = json.dumps(value, default=str)  # Handle non-serializable objects
             
             if isinstance(ttl, timedelta):
                 ttl = int(ttl.total_seconds())
             elif ttl is None:
                 ttl = self.default_ttl
                 
-            return self.client.set(key, serialized_value, ex=ttl)
+            client = await self.get_client()
+            result = await client.set(key, serialized_value, ex=ttl)
+            return bool(result)
             
         except Exception as e:
             logger.error(f"Error setting Redis key {key}: {str(e)}")
             return False
 
-    def get_value(
+    async def get_value(
         self,
         key: str,
         namespace: Optional[str] = None,
@@ -125,7 +128,8 @@ class RedisManager:
             if namespace:
                 key = f"{namespace}:{key}"
                 
-            value = self.client.get(key)
+            client = await self.get_client()
+            value = await client.get(key)
             if value is None:
                 return default
                 
@@ -135,23 +139,27 @@ class RedisManager:
             logger.error(f"Error getting Redis key {key}: {str(e)}")
             return default
 
-    def delete_value(self, key: str, namespace: Optional[str] = None) -> bool:
+    async def delete_value(self, key: str, namespace: Optional[str] = None) -> bool:
         """Delete a value from Redis."""
         try:
             if namespace:
                 key = f"{namespace}:{key}"
-            return bool(self.client.delete(key))
+            client = await self.get_client()
+            result = await client.delete(key)
+            return bool(result)
         except Exception as e:
             logger.error(f"Error deleting Redis key {key}: {str(e)}")
             return False
 
-    def clear_namespace(self, namespace: str) -> bool:
+    async def clear_namespace(self, namespace: str) -> bool:
         """Clear all keys in a namespace."""
         try:
             pattern = f"{namespace}:*"
-            keys = self.client.keys(pattern)
+            client = await self.get_client()
+            keys = await client.keys(pattern)
             if keys:
-                return bool(self.client.delete(*keys))
+                result = await client.delete(*keys)
+                return bool(result)
             return True
         except Exception as e:
             logger.error(f"Error clearing namespace {namespace}: {str(e)}")
@@ -173,7 +181,7 @@ class RedisManager:
         """
         def decorator(func):
             @wraps(func)
-            def wrapper(*args, **kwargs):
+            async def wrapper(*args, **kwargs):
                 # Generate cache key from function name, args, and kwargs
                 cache_key_parts = [key_prefix or func.__name__]
                 if args:
@@ -184,22 +192,27 @@ class RedisManager:
                 cache_key = ":".join(cache_key_parts)
                 
                 # Try to get cached result
-                cached_result = self.get_value(cache_key, namespace=namespace)
+                cached_result = await self.get_value(cache_key, namespace=namespace)
                 if cached_result is not None:
                     return cached_result
                     
                 # Calculate and cache result
-                result = func(*args, **kwargs)
-                self.set_value(cache_key, result, ttl=ttl, namespace=namespace)
+                if asyncio.iscoroutinefunction(func):
+                    result = await func(*args, **kwargs)
+                else:
+                    result = func(*args, **kwargs)
+                await self.set_value(cache_key, result, ttl=ttl, namespace=namespace)
                 return result
                 
             return wrapper
         return decorator
 
-    def health_check(self) -> bool:
+    async def health_check(self) -> bool:
         """Check if Redis connection is healthy."""
         try:
-            return bool(self.client.ping())
+            client = await self.get_client()
+            result = await client.ping()
+            return bool(result)
         except Exception as e:
             logger.error(f"Redis health check failed: {str(e)}")
             return False
@@ -208,6 +221,7 @@ class RedisManager:
         """Cleanup Redis connection on deletion."""
         if self._redis_client:
             try:
-                self._redis_client.close()
+                # Schedule cleanup for async client
+                asyncio.create_task(self._redis_client.close())
             except Exception:
                 pass

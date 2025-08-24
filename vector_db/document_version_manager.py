@@ -597,6 +597,14 @@ class DocumentVersionManager:
                         logger.warning(f"Failed to soft delete vector storage {index_name}: {e}")
                         # Continue with document deletion even if vector soft deletion fails
             
+            # Invalidate search cache for this document
+            try:
+                from .search_engine import get_search_engine
+                search_engine = get_search_engine()
+                await search_engine.invalidate_cache_for_documents([document_id])
+            except Exception as e:
+                logger.warning(f"Failed to invalidate search cache for document {document_id}: {e}")
+            
             db.commit()
             
             logger.info(f"Deleted document {document_id} ({'hard' if hard_delete else 'soft'} delete)")
@@ -656,6 +664,14 @@ class DocumentVersionManager:
                 except Exception as e:
                     logger.warning(f"Failed to reload vector storage {index_name}: {e}")
                     # Continue with document restoration even if vector loading fails
+            
+            # Invalidate search cache since document is now available again
+            try:
+                from .search_engine import get_search_engine
+                search_engine = get_search_engine()
+                await search_engine.invalidate_cache_for_documents([document_id])
+            except Exception as e:
+                logger.warning(f"Failed to invalidate search cache for document {document_id}: {e}")
             
             db.commit()
             
