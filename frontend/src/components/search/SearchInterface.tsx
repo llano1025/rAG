@@ -15,7 +15,7 @@ import toast from 'react-hot-toast';
 
 interface SearchForm {
   query: string;
-  searchType: 'basic' | 'semantic' | 'hybrid';
+  searchType: 'basic' | 'semantic' | 'hybrid' | 'contextual';
 }
 
 export default function SearchInterface() {
@@ -178,6 +178,9 @@ export default function SearchInterface() {
         case 'hybrid':
           response = await searchApi.hybridSearch(searchQuery);
           break;
+        case 'contextual':
+          response = await searchApi.contextualSearch(searchQuery);
+          break;
         case 'basic':
           response = await searchApi.textSearch(searchQuery);
           break;
@@ -260,7 +263,7 @@ export default function SearchInterface() {
 
   const loadSavedSearch = (savedSearch: SavedSearch) => {
     setValue('query', savedSearch.query_text);
-    setValue('searchType', savedSearch.search_type as 'basic' | 'semantic' | 'hybrid');
+    setValue('searchType', savedSearch.search_type as 'basic' | 'semantic' | 'hybrid' | 'contextual');
     
     // Load filters if available
     if (savedSearch.filters) {
@@ -296,7 +299,7 @@ export default function SearchInterface() {
 
   const loadHistorySearch = (historyItem: RecentSearch) => {
     setValue('query', historyItem.query_text);
-    setValue('searchType', historyItem.query_type as 'basic' | 'semantic' | 'hybrid');
+    setValue('searchType', historyItem.query_type as 'basic' | 'semantic' | 'hybrid' | 'contextual');
     
     // Load filters if available
     if (historyItem.filters) {
@@ -412,6 +415,7 @@ export default function SearchInterface() {
                   >
                     <option value="hybrid">Hybrid (Recommended)</option>
                     <option value="semantic">Semantic</option>
+                    <option value="contextual">Contextual</option>
                     <option value="basic">Basic</option>
                   </select>
                 </div>
@@ -454,6 +458,7 @@ export default function SearchInterface() {
               {searchType === 'basic' && 'Keyword-based search using traditional text matching'}
               {searchType === 'semantic' && 'AI-powered semantic search understanding context and meaning'}
               {searchType === 'hybrid' && '🚀 Recommended: Combined keyword and semantic search for best results'}
+              {searchType === 'contextual' && '🎯 Advanced: Context-aware search using content and surrounding text'}
             </div>
           </form>
 

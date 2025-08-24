@@ -84,6 +84,10 @@ export const searchApi = {
     return apiClient.post('/api/search/hybrid', query);
   },
 
+  contextualSearch: async (query: SearchQuery): Promise<SearchResponse> => {
+    return apiClient.post('/api/search/contextual', query);
+  },
+
   getSearchHistory: async (): Promise<RecentSearch[]> => {
     return apiClient.get('/api/search/history');
   },

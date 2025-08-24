@@ -279,6 +279,62 @@ async def hybrid_search(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Hybrid search failed: {str(e)}")
 
+@router.post("/contextual", response_model=SearchResponse)
+async def contextual_search(
+    request: SearchQuery,
+    current_user = Depends(get_current_active_user)
+):
+    """
+    Contextual search combining content and context vectors for enhanced relevance via EnhancedSearchEngine.
+    Uses weighted scoring (70% content, 30% context) for superior document understanding.
+    """
+    try:
+        # Get search engine components
+        storage_manager = get_storage_manager()
+        embedding_manager = EnhancedEmbeddingManager.create_default_manager()
+        search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
+        
+        db = next(get_db())
+        
+        # Convert API filters to search engine format
+        search_filters = convert_api_filters_to_search_filter(request.filters)
+        if request.similarity_threshold is not None:
+            search_filters.min_score = request.similarity_threshold
+        
+        # Apply reranking settings
+        if hasattr(request, 'enable_reranking'):
+            search_filters.enable_reranking = request.enable_reranking
+        if hasattr(request, 'reranker_model'):
+            search_filters.reranker_model = request.reranker_model
+        if hasattr(request, 'rerank_score_weight'):
+            search_filters.rerank_score_weight = request.rerank_score_weight
+        if hasattr(request, 'min_rerank_score'):
+            search_filters.min_rerank_score = request.min_rerank_score
+        
+        # Execute contextual search using SearchEngine
+        results = await search_engine.search(
+            query=request.query,
+            user=current_user,
+            search_type=SearchType.CONTEXTUAL,
+            filters=search_filters,
+            limit=request.top_k,
+            db=db
+        )
+        
+        # Convert to API response format
+        return convert_search_response_to_api_format(
+            results=results,
+            query=request.query,
+            execution_time=0.0,  # TODO: Add timing
+            search_type="contextual",
+            filters=request.filters,
+            fusion_method="contextual_content_context_vectors",
+            reranking_applied=getattr(search_filters, 'enable_reranking', False)
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Contextual search failed: {str(e)}")
+
 class FilterOption(BaseModel):
     value: str
     label: str

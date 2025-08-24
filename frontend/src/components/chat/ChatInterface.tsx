@@ -42,7 +42,7 @@ interface ChatSettings {
   temperature: number;
   max_tokens: number;
   use_rag: boolean;
-  search_type: 'semantic' | 'hybrid' | 'basic';
+  search_type: 'semantic' | 'hybrid' | 'basic' | 'contextual';
   top_k_documents: number;
   // Reranker settings
   enable_reranking?: boolean;
@@ -497,6 +497,7 @@ const ChatInterface: React.FC = () => {
               >
                 <option value="hybrid">Hybrid (Recommended)</option>
                 <option value="semantic">Semantic</option>
+                <option value="contextual">Contextual</option>
                 <option value="basic">Basic</option>
               </select>
             </div>
