@@ -7,6 +7,8 @@ import logging
 import asyncio
 import math
 import re
+import hashlib
+import json
 from collections import Counter, defaultdict
 from typing import List, Dict, Any, Optional, Tuple, Union, Set
 from datetime import datetime, timezone
@@ -461,6 +463,55 @@ class EnhancedSearchEngine:
             logger.error(f"search_with_context failed: {str(e)}")
             return []
 
+    def _generate_stable_cache_key(self, query: str, user_id: int, filters: 'SearchFilter') -> str:
+        """Generate a stable, deterministic cache key for search operations."""
+        try:
+            # Create normalized filter dictionary with only essential stable fields
+            normalized_filter = {
+                'user_id': filters.user_id,
+                'document_ids': sorted(filters.document_ids) if filters.document_ids else None,
+                'content_types': sorted(filters.content_types) if filters.content_types else None,
+                'date_range': [dt.isoformat() for dt in filters.date_range] if filters.date_range else None,
+                'file_size_range': filters.file_size_range,
+                'tags': sorted(filters.tags) if filters.tags else None,
+                'language': filters.language,
+                'is_public': filters.is_public,
+                'min_score': filters.min_score,
+                # Reranker settings that affect results
+                'enable_reranking': filters.enable_reranking,
+                'reranker_model': filters.reranker_model,
+                'rerank_score_weight': filters.rerank_score_weight,
+                'min_rerank_score': filters.min_rerank_score,
+            }
+            
+            # Remove None values and normalize the structure
+            stable_filter = {k: v for k, v in normalized_filter.items() if v is not None}
+            
+            # Sort keys for consistent ordering
+            filter_str = json.dumps(stable_filter, sort_keys=True, ensure_ascii=True)
+            
+            # Create stable hash
+            hash_input = f"{query.strip()}_{user_id}_{filter_str}"
+            cache_hash = hashlib.md5(hash_input.encode('utf-8')).hexdigest()
+            cache_key = f"search_{cache_hash}"
+            
+            # Debug logging to identify instability sources  
+            logger.info(f"   Cache key generation:")
+            logger.info(f"   Query: '{query[:50]}...'")
+            logger.info(f"   User ID: {user_id}")
+            logger.info(f"   Normalized filter: {stable_filter}")
+            logger.info(f"   Filter string: {filter_str}")
+            logger.info(f"   Hash input length: {len(hash_input)} chars")
+            logger.info(f"   Final key: {cache_key}")
+            
+            return cache_key
+        except Exception as e:
+            logger.warning(f"Cache key generation failed, using fallback: {e}")
+            # Fallback to simple key without filter hash
+            fallback_key = f"search_simple_{hashlib.md5(f'{query.strip()}_{user_id}'.encode()).hexdigest()}"
+            logger.debug(f"   Fallback key: {fallback_key}")
+            return fallback_key
+
     async def search(
         self,
         query: str,
@@ -495,9 +546,12 @@ class EnhancedSearchEngine:
             if use_cache:
                 # Check end-to-end Redis cache first (fastest)
                 try:
-                    cache_key = f"search_{query}_{user.id}_{hash(str(filters.to_dict()))}"
+                    cache_key = self._generate_stable_cache_key(query, user.id, filters)
+                    logger.info(f"🔍 Checking Redis cache for key: {cache_key}")
+                    logger.info(f"🔍 Query: '{query[:50]}...', User: {user.id}, Filters: {len(filters.to_dict())} properties")
                     cached_data = await self.query_optimizer.redis_manager.get_value(cache_key)
                     if cached_data:
+                        logger.info(f"CACHE HIT! Found {len(cached_data)} cached results for query: {query[:50]}...")
                         # Convert back to SearchResult objects
                         cached_results = []
                         for result_data in cached_data:
@@ -511,8 +565,10 @@ class EnhancedSearchEngine:
                                 highlight=result_data.get('highlight')
                             )
                             cached_results.append(result)
-                        logger.info(f"Returning Redis cached results for query: {query[:50]}...")
+                        logger.info(f"Returning {len(cached_results)} Redis cached results")
                         return cached_results
+                    else:
+                        logger.info(f"CACHE MISS - No Redis cached results found")
                 except Exception as e:
                     logger.warning(f"Redis cache retrieval failed: {e}")
                 
@@ -543,12 +599,18 @@ class EnhancedSearchEngine:
                             
                             # Cache these assembled results for future end-to-end cache hits
                             try:
-                                await self.query_optimizer.redis_manager.set_value(
+                                logger.info(f"Caching {len(assembled_results)} assembled results for key: {cache_key}")
+                                serialized_results = [result.to_dict() for result in assembled_results]
+                                success = await self.query_optimizer.redis_manager.set_value(
                                     cache_key,
-                                    [result.to_dict() for result in assembled_results],
+                                    serialized_results,
                                     ttl=self.cache_duration_hours * 3600
                                 )
-                                logger.info(f"✅ Vector cache optimization: assembled {len(assembled_results)} results in {assembly_time:.1f}ms (saved full search)")
+                                if success:
+                                    logger.info(f"Successfully cached assembled results")
+                                else:
+                                    logger.warning(f"Failed to cache assembled results")
+                                logger.info(f"Vector cache optimization: assembled {len(assembled_results)} results in {assembly_time:.1f}ms (saved full search)")
                             except Exception as e:
                                 logger.warning(f"Failed to cache assembled results: {e}")
                             
@@ -595,12 +657,18 @@ class EnhancedSearchEngine:
                 
                 # Redis cache via query optimizer for fast retrieval
                 try:
-                    cache_key = f"search_{query}_{user.id}_{hash(str(filters.to_dict()))}"
-                    await self.query_optimizer.redis_manager.set_value(
+                    cache_key = self._generate_stable_cache_key(query, user.id, filters)
+                    logger.info(f"💾 Caching {len(results)} search results for key: {cache_key}")
+                    serialized_results = [result.to_dict() for result in results]
+                    success = await self.query_optimizer.redis_manager.set_value(
                         cache_key,
-                        [result.to_dict() for result in results],
+                        serialized_results,
                         ttl=self.cache_duration_hours * 3600
                     )
+                    if success:
+                        logger.info(f"Successfully cached {len(results)} search results")
+                    else:
+                        logger.warning(f"Failed to cache search results")
                 except Exception as e:
                     logger.warning(f"Failed to cache results in Redis: {e}")
             
