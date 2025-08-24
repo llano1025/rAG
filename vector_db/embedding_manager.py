@@ -55,7 +55,7 @@ class HuggingFaceEmbeddingProvider(BaseEmbeddingProvider):
     
     def __init__(
         self,
-        model_name: str = "sentence-transformers/all-mpnet-base-v2",
+        model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
         device: str = None,
         batch_size: int = 32
     ):
@@ -390,7 +390,7 @@ class EnhancedEmbeddingManager:
     @classmethod
     def create_huggingface_manager(
         cls,
-        model_name: str = "sentence-transformers/all-mpnet-base-v2",
+        model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
         device: str = None,
         batch_size: int = 32
     ):
@@ -435,7 +435,7 @@ class EnhancedEmbeddingManager:
     @classmethod
     def create_default_manager(
         cls,
-        model_name: str = "sentence-transformers/all-mpnet-base-v2",
+        model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
         device: str = None,
         batch_size: int = 32
     ):
@@ -675,7 +675,7 @@ class EnhancedEmbeddingManager:
 class EmbeddingManager:
     """Backward-compatible wrapper for EnhancedEmbeddingManager."""
     
-    def __init__(self, model_name: str = "sentence-transformers/all-mpnet-base-v2", 
+    def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2", 
                  device: str = None, batch_size: int = 32):
         """Initialize with default HuggingFace provider for backward compatibility."""
         try:

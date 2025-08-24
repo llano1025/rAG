@@ -319,6 +319,14 @@ class VectorStorageManager:
                 ids=chunk_ids
             )
             
+            # Save FAISS indices to disk after adding vectors
+            try:
+                await self.save_index(index_name)
+                logger.info(f"Saved FAISS indices to disk for index: {index_name}")
+            except Exception as e:
+                logger.warning(f"Failed to save FAISS indices to disk: {e}")
+                # Continue execution - vectors are still accessible in memory
+            
             logger.info(f"Added {len(content_vectors)} vectors to index {index_name}")
             return chunk_ids
             

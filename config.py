@@ -68,8 +68,8 @@ class Settings(BaseSettings):
     ANTHROPIC_TOP_P: float = Field(default=1.0, env="ANTHROPIC_TOP_P")
     
     # Embedding settings
-    EMBEDDING_MODEL: str = Field(default="sentence-transformers/all-mpnet-base-v2", env="EMBEDDING_MODEL")
-    EMBEDDING_DIMENSION: int = Field(default=768, env="EMBEDDING_DIMENSION")
+    EMBEDDING_MODEL: str = Field(default="sentence-transformers/all-MiniLM-L6-v2", env="EMBEDDING_MODEL")
+    EMBEDDING_DIMENSION: int = Field(default=384, env="EMBEDDING_DIMENSION")
     BATCH_SIZE: int = Field(default=32, env="BATCH_SIZE")
     
     # Document processing settings
