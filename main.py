@@ -18,11 +18,36 @@ from utils.security.audit_logger import AuditLogger, AuditLoggerConfig
 from database.connection import create_tables
 from config import get_settings
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+# Configure logging with file handler
+def configure_logging():
+    """Configure logging to output to both console and file."""
+    log_dir = Path("runtime/logs")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create formatter
+    formatter = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+    
+    # Get root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+    
+    # Clear any existing handlers
+    root_logger.handlers.clear()
+    
+    # Console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    root_logger.addHandler(console_handler)
+    
+    # File handler for server.log
+    file_handler = logging.FileHandler(log_dir / "server.log", mode='a')
+    file_handler.setFormatter(formatter)
+    root_logger.addHandler(file_handler)
+
+# Initialize logging
+configure_logging()
 logger = logging.getLogger(__name__)
 
 # Global instances
