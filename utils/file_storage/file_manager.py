@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class FileStorageManager:
     """Manages storage and retrieval of original document files."""
     
-    def __init__(self, storage_root: str = "/runtime/storage/documents"):
+    def __init__(self, storage_root: str = "runtime/storage/documents"):
         """
         Initialize file storage manager.
         

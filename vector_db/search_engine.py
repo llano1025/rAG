@@ -541,12 +541,17 @@ class EnhancedSearchEngine:
         limit = min(limit or self.default_limit, self.max_limit)
         filters = filters or SearchFilter()
         
+        # Generate cache key ONCE at the beginning - before any filter modifications
+        cache_key = None
+        if use_cache:
+            cache_key = self._generate_stable_cache_key(query, user.id, filters)
+            logger.info(f"🔑 Generated cache key for entire method: {cache_key}")
+        
         try:
             # Hierarchical cache strategy - check multiple cache levels
-            if use_cache:
+            if use_cache and cache_key:
                 # Check end-to-end Redis cache first (fastest)
                 try:
-                    cache_key = self._generate_stable_cache_key(query, user.id, filters)
                     logger.info(f"🔍 Checking Redis cache for key: {cache_key}")
                     logger.info(f"🔍 Query: '{query[:50]}...', User: {user.id}, Filters: {len(filters.to_dict())} properties")
                     cached_data = await self.query_optimizer.redis_manager.get_value(cache_key)
@@ -650,15 +655,15 @@ class EnhancedSearchEngine:
             search_time = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
             await self._log_search_query(query, user.id, search_type, filters, len(results), search_time, db)
             
-            if use_cache and results:
+            if use_cache and cache_key and results:
                 # Cache results using both methods for optimal performance
                 # Database cache for analytics and persistence
                 await self._cache_results(query, user.id, filters, results, db)
                 
                 # Redis cache via query optimizer for fast retrieval
                 try:
-                    cache_key = self._generate_stable_cache_key(query, user.id, filters)
                     logger.info(f"💾 Caching {len(results)} search results for key: {cache_key}")
+                    logger.info(f"🔑 Confirming same cache key used for storage: {cache_key}")
                     serialized_results = [result.to_dict() for result in results]
                     success = await self.query_optimizer.redis_manager.set_value(
                         cache_key,
