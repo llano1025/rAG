@@ -14,7 +14,7 @@ from datetime import datetime, timezone, timedelta
 from enum import Enum
 import numpy as np
 
-from utils.caching.redis_manager import get_redis_manager
+from utils.caching.redis_manager import RedisManager
 from utils.caching.cache_strategy import CacheStrategy, CacheConfig
 
 logger = logging.getLogger(__name__)
@@ -94,7 +94,7 @@ class QueryOptimizer:
         )
         
         # Redis manager for caching
-        self.redis_manager = get_redis_manager()
+        self.redis_manager = RedisManager()
         
         # Query plans and statistics
         self.query_plans: Dict[str, QueryPlan] = {}
@@ -384,10 +384,10 @@ class QueryOptimizer:
         """Clear query cache with optional pattern matching."""
         if pattern:
             # Clear specific cache entries
-            await self.redis_manager.delete_pattern(f"query_cache:{pattern}*")
+            await self.redis_manager.delete_value(f"query_cache:{pattern}*")
         else:
             # Clear all query cache
-            await self.redis_manager.delete_pattern("query_cache:*")
+            await self.redis_manager.delete_value("query_cache:*")
         
         logger.info(f"Cleared query cache with pattern: {pattern or 'all'}")
     
@@ -432,7 +432,7 @@ class QueryOptimizer:
         """Get cached query result."""
         try:
             cache_key = f"query_cache:{query_id}"
-            cached_data = await self.redis_manager.get_json(cache_key)
+            cached_data = await self.redis_manager.get_value(cache_key)
             
             if cached_data:
                 self.metrics['cache_hits'] += 1
@@ -450,7 +450,7 @@ class QueryOptimizer:
         """Cache query result."""
         try:
             cache_key = f"query_cache:{query_id}"
-            await self.redis_manager.set_json(cache_key, result, ttl_seconds)
+            await self.redis_manager.set_value(cache_key, result, ttl_seconds)
         except Exception as e:
             logger.error(f"Cache storage failed: {e}")
     

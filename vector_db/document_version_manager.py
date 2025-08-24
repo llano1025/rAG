@@ -573,9 +573,29 @@ class DocumentVersionManager:
                 # Delete document
                 db.delete(document)
             else:
-                # Soft delete
+                # Soft delete document
                 document.is_deleted = True
                 document.deleted_at = datetime.now(timezone.utc)
+                
+                # Soft delete associated vector indices
+                vector_indices = db.query(VectorIndex).filter(
+                    VectorIndex.document_id == document_id
+                ).all()
+                
+                for vector_index in vector_indices:
+                    vector_index.is_active = False
+                    vector_index.build_status = "soft_deleted"
+                    vector_index.updated_at = datetime.now(timezone.utc)
+                
+                # Soft delete vector storage (remove from memory but keep files)
+                index_name = f"doc_{document.id}"
+                if self.storage_manager:
+                    try:
+                        await self.storage_manager.soft_delete_index(index_name)
+                        logger.info(f"Soft deleted vector storage for {index_name}")
+                    except Exception as e:
+                        logger.warning(f"Failed to soft delete vector storage {index_name}: {e}")
+                        # Continue with document deletion even if vector soft deletion fails
             
             db.commit()
             
@@ -611,12 +631,35 @@ class DocumentVersionManager:
             if not document:
                 raise DocumentVersionError("Document not found, access denied, or not deleted")
             
+            # Restore document
             document.is_deleted = False
             document.deleted_at = None
             
+            # Restore associated vector indices
+            vector_indices = db.query(VectorIndex).filter(
+                VectorIndex.document_id == document_id
+            ).all()
+            
+            for vector_index in vector_indices:
+                vector_index.is_active = True
+                vector_index.build_status = "ready"
+                vector_index.updated_at = datetime.now(timezone.utc)
+            
+            # Reload FAISS indices into memory if they exist on disk
+            index_name = f"doc_{document_id}"
+            if self.storage_manager:
+                try:
+                    # Try to load the index if FAISS files exist
+                    embedding_dimension = vector_indices[0].embedding_dimension if vector_indices else 768
+                    await self.storage_manager.load_index(index_name, embedding_dimension)
+                    logger.info(f"Reloaded vector storage for {index_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to reload vector storage {index_name}: {e}")
+                    # Continue with document restoration even if vector loading fails
+            
             db.commit()
             
-            logger.info(f"Restored document {document_id}")
+            logger.info(f"Restored document {document_id} with {len(vector_indices)} vector indices")
             return True
             
         except Exception as e:

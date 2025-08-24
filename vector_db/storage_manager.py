@@ -8,7 +8,7 @@ import json
 import logging
 import hashlib
 from typing import List, Dict, Any, Optional, Tuple, Union
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -266,7 +266,7 @@ class VectorStorageManager:
             
             # Generate chunk IDs if not provided
             if chunk_ids is None:
-                chunk_ids = [f"{index_name}_{i}_{datetime.utcnow().timestamp()}" 
+                chunk_ids = [f"{index_name}_{i}_{datetime.now(timezone.utc).timestamp()}" 
                            for i in range(len(content_vectors))]
             
             # Add to FAISS indices
@@ -295,7 +295,7 @@ class VectorStorageManager:
                     "chunk_id": chunk_ids[i],
                     "index_name": index_name,
                     "vector_type": "content",
-                    "added_at": datetime.utcnow().isoformat()
+                    "added_at": datetime.now(timezone.utc).isoformat()
                 })
                 enhanced_metadata.append(enhanced)
             
@@ -600,12 +600,41 @@ class VectorStorageManager:
             logger.error(f"Failed to delete index {index_name}: {e}")
             return False
     
+    async def soft_delete_index(self, index_name: str) -> bool:
+        """
+        Soft delete an index by marking it inactive without destroying data.
+        Removes from memory but keeps FAISS files and Qdrant collections for restoration.
+        """
+        try:
+            # Remove from active FAISS memory indices
+            content_key = f"{index_name}_content"
+            context_key = f"{index_name}_context"
+            
+            if content_key in self.faiss_indices:
+                del self.faiss_indices[content_key]
+                logger.info(f"Removed FAISS content index from memory: {content_key}")
+            
+            if context_key in self.faiss_indices:
+                del self.faiss_indices[context_key]
+                logger.info(f"Removed FAISS context index from memory: {context_key}")
+            
+            # Note: We deliberately do NOT delete FAISS files or Qdrant collections
+            # This allows for restoration of soft-deleted documents
+            
+            # Database status is updated by the calling method in document_version_manager
+            logger.info(f"Soft deleted vector index: {index_name}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to soft delete index {index_name}: {e}")
+            return False
+    
     async def get_index_stats(self, index_name: str) -> Dict[str, Any]:
         """Get statistics for a vector index."""
         try:
             stats = {
                 "index_name": index_name,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
             
             # FAISS stats

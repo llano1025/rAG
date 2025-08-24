@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, func, text
 
-from database.models import Document, DocumentChunk, User, SearchQuery
+from database.models import Document, DocumentChunk, User, SearchQuery, VectorIndex
 from .storage_manager import VectorStorageManager, get_storage_manager
 from .context_processor import ContextProcessor
 from .reranker import get_reranker_manager, get_reranker_config, RerankResult
@@ -536,9 +536,12 @@ class EnhancedSearchEngine:
     async def _get_accessible_documents(self, user: User, db: Session) -> List[int]:
         """Get list of document IDs accessible to the user."""
         try:
-            # Build query for accessible documents
-            query = db.query(Document.id).filter(
+            # Build query for accessible documents with active vector indices
+            query = db.query(Document.id).join(
+                VectorIndex, Document.id == VectorIndex.document_id
+            ).filter(
                 Document.is_deleted == False,
+                VectorIndex.is_active == True,  # Only documents with active vector indices
                 or_(
                     Document.user_id == user.id,  # User's own documents
                     Document.is_public == True,   # Public documents
@@ -546,12 +549,17 @@ class EnhancedSearchEngine:
                         user.is_superuser == True  # Admin access
                     )
                 )
-            )
+            ).distinct()  # Remove duplicates from join
             
             # Additional filter for admin users
             if user.has_role("admin"):
-                # Admins can access all documents
-                query = db.query(Document.id).filter(Document.is_deleted == False)
+                # Admins can access all documents with active indices
+                query = db.query(Document.id).join(
+                    VectorIndex, Document.id == VectorIndex.document_id
+                ).filter(
+                    Document.is_deleted == False,
+                    VectorIndex.is_active == True
+                ).distinct()
             
             doc_ids = [row[0] for row in query.all()]
             logger.debug(f"User {user.id} has access to {len(doc_ids)} documents")
