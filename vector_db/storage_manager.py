@@ -108,6 +108,25 @@ class VectorStorageManager:
                 logger.error("No vector dependencies available. Install numpy, faiss-cpu, and qdrant-client for full functionality")
                 return False
                 
+            # Load existing FAISS indices from disk
+            if self.vector_dependencies_available:
+                try:
+                    logger.info("🔄 Loading existing FAISS indices from disk...")
+                    loading_results = await self._load_existing_indices()
+                    
+                    if loading_results:
+                        successful_loads = sum(1 for success in loading_results.values() if success)
+                        total_indices = len(loading_results)
+                        if successful_loads > 0:
+                            logger.info(f"✅ Loaded {successful_loads}/{total_indices} existing FAISS indices")
+                        else:
+                            logger.warning(f"⚠️  Failed to load any of the {total_indices} discovered indices")
+                    else:
+                        logger.info("ℹ️  No existing FAISS indices found")
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to load existing FAISS indices: {e}. New indices will work normally.")
+                
             logger.info("Vector storage manager initialized successfully")
             return True
             
@@ -120,6 +139,37 @@ class VectorStorageManager:
         content_collection = f"{index_name}{self.content_collection_suffix}"
         context_collection = f"{index_name}{self.context_collection_suffix}"
         return content_collection, context_collection
+    
+    def _discover_existing_indices(self) -> List[str]:
+        """Discover existing FAISS index files and extract index names."""
+        try:
+            if not os.path.exists(self.storage_path):
+                logger.info(f"Storage path {self.storage_path} does not exist")
+                return []
+            
+            faiss_files = []
+            for filename in os.listdir(self.storage_path):
+                if filename.endswith('.faiss'):
+                    faiss_files.append(filename)
+            
+            # Extract unique index names from filenames
+            # Format: {index_name}_{type}.faiss (e.g., doc_29_content.faiss)
+            index_names = set()
+            for filename in faiss_files:
+                # Remove .faiss extension and split by last underscore
+                base_name = filename[:-6]  # Remove '.faiss'
+                if '_' in base_name:
+                    # Split at last underscore to separate index name from type
+                    index_name = '_'.join(base_name.split('_')[:-1])
+                    index_names.add(index_name)
+            
+            discovered = list(index_names)
+            logger.info(f"Discovered {len(discovered)} FAISS indices: {discovered}")
+            return discovered
+            
+        except Exception as e:
+            logger.error(f"Failed to discover existing indices: {e}")
+            return []
     
     def _get_faiss_paths(self, index_name: str) -> Tuple[str, str]:
         """Get FAISS index file paths for content and context vectors."""
@@ -568,6 +618,66 @@ class VectorStorageManager:
             logger.error(f"Failed to load index {index_name}: {e}")
             return False
     
+    async def _load_existing_indices(self, db: Session = None) -> Dict[str, bool]:
+        """Load all discovered FAISS indices from disk into memory."""
+        try:
+            # Discover all existing indices
+            discovered_indices = self._discover_existing_indices()
+            
+            if not discovered_indices:
+                logger.info("No existing FAISS indices found to load")
+                return {}
+            
+            loading_results = {}
+            
+            # Get database session if not provided
+            if db is None:
+                from database.connection import get_db
+                db = next(get_db())
+                should_close_db = True
+            else:
+                should_close_db = False
+            
+            try:
+                for index_name in discovered_indices:
+                    try:
+                        # Get embedding dimension from database
+                        vector_index = db.query(VectorIndex).filter(
+                            VectorIndex.index_name == index_name
+                        ).first()
+                        
+                        embedding_dimension = 384  # Default
+                        if vector_index and vector_index.embedding_dimension:
+                            embedding_dimension = vector_index.embedding_dimension
+                        
+                        # Load the index
+                        success = await self.load_index(index_name, embedding_dimension)
+                        loading_results[index_name] = success
+                        
+                        if success:
+                            logger.info(f"✅ Successfully loaded index: {index_name}")
+                        else:
+                            logger.warning(f"❌ Failed to load index: {index_name}")
+                            
+                    except Exception as e:
+                        logger.error(f"❌ Error loading index {index_name}: {e}")
+                        loading_results[index_name] = False
+                
+                # Log summary
+                successful = sum(1 for success in loading_results.values() if success)
+                total = len(loading_results)
+                logger.info(f"📊 Index loading complete: {successful}/{total} indices loaded successfully")
+                
+                return loading_results
+                
+            finally:
+                if should_close_db:
+                    db.close()
+                    
+        except Exception as e:
+            logger.error(f"Failed to load existing indices: {e}")
+            return {}
+    
     async def delete_index(self, index_name: str, db: Session = None) -> bool:
         """Delete an index from all storage backends."""
         try:
@@ -759,7 +869,15 @@ def get_storage_manager() -> VectorStorageManager:
     """Get the global vector storage manager instance."""
     global _storage_manager
     if _storage_manager is None:
-        _storage_manager = VectorStorageManager()
+        # Use configured FAISS directory from settings
+        try:
+            from config import get_settings
+            settings = get_settings()
+            storage_path = settings.FAISS_INDEX_DIRECTORY
+        except Exception as e:
+            logger.warning(f"Could not load FAISS directory from config: {e}. Using default.")
+            storage_path = None
+        _storage_manager = VectorStorageManager(storage_path=storage_path)
     return _storage_manager
 
 async def init_storage_manager() -> VectorStorageManager:
