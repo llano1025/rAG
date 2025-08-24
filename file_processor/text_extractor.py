@@ -301,13 +301,9 @@ class TextExtractor:
             logging.error(f"Failed to extract text from DOC file {file_path}: {e}")
             return f"[Error extracting text from DOC file: {str(e)}]"
 
-    def _extract_from_image(self, file_path: Union[str, Path]) -> str:
-        """Extract text from images using OCR with default settings."""
-        return self._extract_from_image_with_settings(file_path)
-
-    def _extract_from_image_with_settings(self, file_path: Union[str, Path], 
-                                        ocr_method: str = None, ocr_language: str = None, 
-                                        vision_provider: str = None) -> str:
+    def _extract_from_image(self, file_path: Union[str, Path], 
+                            ocr_method: str = None, ocr_language: str = None, 
+                            vision_provider: str = None) -> str:
         """Extract text from images using OCR with specified settings."""
         try:
             # Import OCR classes
