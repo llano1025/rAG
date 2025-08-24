@@ -15,6 +15,10 @@ router = APIRouter(prefix="/vectors", tags=["vectors"])
 class BatchVectorRequest(BaseModel):
     vectors: List[VectorUpsertRequest]
 
+class ReindexVectorsRequest(BaseModel):
+    document_ids: List[str]
+    embedding_model_name: Optional[str] = None
+
 @router.post("/upsert", response_model=VectorSearchResponse)
 async def upsert_vector(
     request: VectorUpsertRequest,
@@ -103,8 +107,7 @@ async def delete_vector(
 
 @router.post("/reindex")
 async def reindex_vectors(
-    document_ids: List[str] = Body(...),
-    model_name: Optional[str] = Body(None),
+    request: ReindexVectorsRequest,
     current_user = Depends(get_current_active_user)
 ):
     """
@@ -112,8 +115,8 @@ async def reindex_vectors(
     """
     try:
         task_id = await vector_controller.reindex_vectors(
-            document_ids=document_ids,
-            model_name=model_name,
+            document_ids=request.document_ids,
+            model_name=request.embedding_model_name,
             user_id=current_user.id
         )
         return {"message": "Reindexing started", "task_id": task_id}

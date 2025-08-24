@@ -5,10 +5,13 @@ Integrates FAISS, Qdrant, and database for comprehensive document search.
 
 import logging
 import asyncio
-from typing import List, Dict, Any, Optional, Tuple, Union
+import math
+import re
+from collections import Counter, defaultdict
+from typing import List, Dict, Any, Optional, Tuple, Union, Set
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, func
+from sqlalchemy import and_, or_, func, text
 
 from database.models import Document, DocumentChunk, User, SearchQuery
 from .storage_manager import VectorStorageManager, get_storage_manager
@@ -36,6 +39,227 @@ class SearchType:
     KEYWORD = "keyword"
     HYBRID = "hybrid"
     CONTEXTUAL = "contextual"
+
+class CorpusStatsManager:
+    """Manages corpus statistics for BM25 scoring with caching."""
+    
+    def __init__(self):
+        self.stats_cache: Dict[str, Dict] = {}
+        self.cache_expiry = 3600  # 1 hour in seconds
+        self.stopwords: Set[str] = {
+            'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 
+            'of', 'with', 'by', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+            'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 
+            'should', 'may', 'might', 'must', 'can', 'this', 'that', 'these', 'those'
+        }
+    
+    def preprocess_query(self, query: str) -> List[str]:
+        """Preprocess query: lowercase, remove stopwords, basic tokenization."""
+        # Convert to lowercase and tokenize
+        tokens = re.findall(r'\b\w+\b', query.lower())
+        
+        # Remove stopwords and short tokens
+        filtered_tokens = [token for token in tokens 
+                          if token not in self.stopwords and len(token) > 2]
+        
+        return filtered_tokens if filtered_tokens else tokens[:3]  # Fallback to first 3 tokens
+    
+    async def get_corpus_stats(self, document_ids: List[int], db: Session) -> Dict[str, Any]:
+        """Get cached or compute corpus statistics for BM25."""
+        try:
+            # Create cache key based on sorted document IDs
+            cache_key = str(hash(tuple(sorted(document_ids))))
+            
+            if cache_key in self.stats_cache:
+                stats = self.stats_cache[cache_key]
+                # Check if cache is still valid (simple time-based for now)
+                if len(self.stats_cache) < 100:  # Keep cache size reasonable
+                    return stats
+            
+            logger.info(f"Computing corpus statistics for {len(document_ids)} documents")
+            
+            # Query all chunks for the documents
+            chunks = db.query(DocumentChunk.text).filter(
+                DocumentChunk.document_id.in_(document_ids)
+            ).all()
+            
+            if not chunks:
+                return self._get_default_stats()
+            
+            # Process all document texts
+            doc_lengths = []
+            term_doc_freq = defaultdict(int)  # How many documents contain each term
+            total_docs = len(chunks)
+            
+            for chunk_row in chunks:
+                text = chunk_row.text or ""
+                tokens = self.preprocess_query(text)  # Reuse preprocessing logic
+                doc_lengths.append(len(tokens))
+                
+                # Count unique terms in this document
+                unique_terms = set(tokens)
+                for term in unique_terms:
+                    term_doc_freq[term] += 1
+            
+            # Calculate statistics
+            avg_doc_length = sum(doc_lengths) / len(doc_lengths) if doc_lengths else 0
+            
+            # Calculate IDF for each term
+            idf_values = {}
+            for term, doc_freq in term_doc_freq.items():
+                # BM25 IDF: log((N - df + 0.5) / (df + 0.5))
+                idf = math.log((total_docs - doc_freq + 0.5) / (doc_freq + 0.5))
+                idf_values[term] = max(idf, 0.01)  # Prevent negative IDF
+            
+            stats = {
+                'total_docs': total_docs,
+                'avg_doc_length': avg_doc_length,
+                'idf': idf_values,
+                'computed_at': datetime.now().timestamp()
+            }
+            
+            # Cache the results
+            self.stats_cache[cache_key] = stats
+            logger.info(f"Computed stats: {total_docs} docs, avg_len={avg_doc_length:.1f}, "
+                       f"vocabulary_size={len(idf_values)}")
+            
+            return stats
+            
+        except Exception as e:
+            logger.error(f"Failed to compute corpus statistics: {e}")
+            return self._get_default_stats()
+    
+    def _get_default_stats(self) -> Dict[str, Any]:
+        """Return default statistics when computation fails."""
+        return {
+            'total_docs': 1,
+            'avg_doc_length': 100,
+            'idf': defaultdict(lambda: 1.0),
+            'computed_at': datetime.now().timestamp()
+        }
+    
+    def calculate_bm25_score(self, query_terms: List[str], document_text: str, 
+                           corpus_stats: Dict[str, Any], k1: float = 1.5, 
+                           b: float = 0.75) -> float:
+        """Calculate BM25 score for a document given query terms."""
+        try:
+            if not query_terms or not document_text.strip():
+                return 0.0
+            
+            # Preprocess document
+            doc_tokens = self.preprocess_query(document_text)
+            doc_length = len(doc_tokens)
+            avg_doc_length = corpus_stats.get('avg_doc_length', 100)
+            idf_values = corpus_stats.get('idf', {})
+            
+            # Calculate term frequencies in document
+            term_freq = Counter(doc_tokens)
+            
+            score = 0.0
+            for term in query_terms:
+                tf = term_freq.get(term, 0)
+                if tf == 0:
+                    continue
+                
+                # Get IDF for this term (default to small value for unseen terms)
+                idf = idf_values.get(term, 0.5)
+                
+                # BM25 formula
+                numerator = tf * (k1 + 1)
+                denominator = tf + k1 * (1 - b + b * (doc_length / avg_doc_length))
+                
+                term_score = idf * (numerator / denominator)
+                score += term_score
+            
+            return max(score, 0.0)  # Ensure non-negative score
+            
+        except Exception as e:
+            logger.error(f"BM25 calculation failed: {e}")
+            # Fallback to simple term frequency scoring
+            return sum(1 for term in query_terms if term in document_text.lower()) / len(query_terms)
+    
+    def normalize_scores(self, scores: List[float], method: str = "minmax") -> List[float]:
+        """
+        Normalize scores to [0,1] range.
+        
+        Args:
+            scores: List of raw scores to normalize
+            method: Normalization method ('minmax', 'sigmoid', or 'softmax')
+            
+        Returns:
+            List of normalized scores in [0,1] range
+        """
+        if not scores:
+            return []
+        
+        if len(scores) == 1:
+            # Single score: use sigmoid normalization
+            return [self._sigmoid_normalize(scores[0])]
+        
+        try:
+            if method == "minmax":
+                return self._minmax_normalize(scores)
+            elif method == "sigmoid":
+                return [self._sigmoid_normalize(score) for score in scores]
+            elif method == "softmax":
+                return self._softmax_normalize(scores)
+            else:
+                logger.warning(f"Unknown normalization method: {method}, using minmax")
+                return self._minmax_normalize(scores)
+                
+        except Exception as e:
+            logger.error(f"Score normalization failed: {e}")
+            # Fallback: clip scores to [0,1] and warn
+            normalized = [min(max(score, 0.0), 1.0) for score in scores]
+            if any(score > 1.0 for score in scores):
+                logger.warning("Some scores were clipped to 1.0 due to normalization failure")
+            return normalized
+    
+    def _minmax_normalize(self, scores: List[float]) -> List[float]:
+        """Min-max normalization: (x - min) / (max - min)."""
+        if not scores:
+            return []
+            
+        min_score = min(scores)
+        max_score = max(scores)
+        
+        # Handle case where all scores are the same
+        if max_score == min_score:
+            # If all scores are 0, return 0; otherwise return 1 (perfect relevance)
+            return [0.0 if max_score == 0.0 else 1.0] * len(scores)
+        
+        # Normalize to [0,1] range
+        return [(score - min_score) / (max_score - min_score) for score in scores]
+    
+    def _sigmoid_normalize(self, score: float, scale: float = 2.0) -> float:
+        """Sigmoid normalization: 1 / (1 + exp(-scale * score))."""
+        try:
+            return 1.0 / (1.0 + math.exp(-scale * score))
+        except OverflowError:
+            # Handle very large negative scores
+            return 0.0 if score < 0 else 1.0
+    
+    def _softmax_normalize(self, scores: List[float]) -> List[float]:
+        """Softmax normalization for probability distribution."""
+        if not scores:
+            return []
+        
+        # Prevent overflow by subtracting max score
+        max_score = max(scores)
+        exp_scores = []
+        
+        for score in scores:
+            try:
+                exp_scores.append(math.exp(score - max_score))
+            except OverflowError:
+                exp_scores.append(1e-10)  # Very small positive number
+        
+        total = sum(exp_scores)
+        if total == 0:
+            # Fallback to uniform distribution
+            return [1.0 / len(scores)] * len(scores)
+        
+        return [exp_score / total for exp_score in exp_scores]
 
 class SearchFilter:
     """Search filter class for structured filtering."""
@@ -134,6 +358,9 @@ class EnhancedSearchEngine:
         # Reranker components
         self.reranker_manager = get_reranker_manager()
         self.reranker_config = get_reranker_config()
+        
+        # BM25 corpus statistics manager
+        self.corpus_stats_manager = CorpusStatsManager()
         
         # Search configuration
         self.default_limit = 10
@@ -534,10 +761,25 @@ class EnhancedSearchEngine:
         db: Session
     ) -> List[SearchResult]:
         """
-        Perform keyword-based search using database full-text search.
+        Enhanced keyword search using hybrid database filtering + BM25 scoring.
+        
+        Two-stage approach:
+        1. Fast database prefiltering with ILIKE queries
+        2. BM25 reranking for statistical relevance
         """
         try:
-            # Build database query for keyword search
+            logger.info(f"Enhanced keyword search: '{query}' (limit={limit})")
+            
+            # Preprocess query and fast database filtering
+            query_terms = self.corpus_stats_manager.preprocess_query(query)
+            if not query_terms:
+                logger.warning(f"No valid terms found in query: '{query}'")
+                return []
+            
+            logger.debug(f"Processed query terms: {query_terms}")
+            
+            # Build optimized database query (get more candidates for reranking)
+            candidate_limit = min(limit * 3, 100)  # 3x for reranking, max 100
             base_query = db.query(DocumentChunk, Document).join(
                 Document, DocumentChunk.document_id == Document.id
             ).filter(
@@ -545,34 +787,58 @@ class EnhancedSearchEngine:
                 Document.is_deleted == False
             )
             
-            # Add text search filter
-            search_terms = query.split()
+            # Create text search filters for each term
             text_filters = []
-            for term in search_terms:
+            for term in query_terms:
                 text_filters.append(DocumentChunk.text.ilike(f"%{term}%"))
             
             if text_filters:
                 base_query = base_query.filter(or_(*text_filters))
             
-            # Execute query
-            results = base_query.limit(limit).all()
+            # Apply minimum score filter if specified
+            if filters.min_score and filters.min_score > 0:
+                # For now, we'll apply this after BM25 scoring
+                pass
             
-            # Convert to SearchResult objects
-            search_results = []
-            for chunk, document in results:
-                # Calculate simple relevance score based on term frequency
-                score = self._calculate_keyword_score(query, chunk.text)
+            # Execute fast prefiltering query
+            candidates = base_query.limit(candidate_limit).all()
+            logger.debug(f"Database prefiltering returned {len(candidates)} candidates")
+            
+            if not candidates:
+                return []
+            
+            # Get corpus statistics for BM25
+            corpus_stats = await self.corpus_stats_manager.get_corpus_stats(
+                filters.document_ids, db
+            )
+            
+            # BM25 scoring and reranking
+            scored_results = []
+            raw_scores = []
+            
+            for chunk, document in candidates:
+                # Calculate BM25 score
+                bm25_score = self.corpus_stats_manager.calculate_bm25_score(
+                    query_terms, chunk.text or "", corpus_stats
+                )
                 
+                # Store raw scores for later normalization
+                raw_scores.append(bm25_score)
+                
+                # Create SearchResult with raw BM25 score (will be normalized later)
                 search_result = SearchResult(
                     chunk_id=chunk.chunk_id,
                     document_id=chunk.document_id,
                     text=chunk.text,
-                    score=score,
+                    score=bm25_score,  # Temporary raw score
                     metadata={
                         'chunk_index': chunk.chunk_index,
                         'text_length': chunk.text_length,
                         'start_char': chunk.start_char,
-                        'end_char': chunk.end_char
+                        'end_char': chunk.end_char,
+                        'search_algorithm': 'bm25',
+                        'query_terms': query_terms,
+                        'raw_bm25_score': bm25_score  # Store raw score for debugging
                     },
                     document_metadata={
                         'filename': document.filename,
@@ -582,14 +848,37 @@ class EnhancedSearchEngine:
                     },
                     highlight=self._generate_highlight(query, chunk.text)
                 )
-                search_results.append(search_result)
+                scored_results.append(search_result)
             
-            # Sort by score
-            search_results.sort(key=lambda x: x.score, reverse=True)
-            return search_results
+            # Normalize scores to [0,1] range
+            if scored_results and raw_scores:
+                normalized_scores = self.corpus_stats_manager.normalize_scores(
+                    raw_scores, method="minmax"
+                )
+                
+                # Update scores with normalized values and apply minimum score filter
+                filtered_results = []
+                for result, normalized_score in zip(scored_results, normalized_scores):
+                    result.score = normalized_score
+                    
+                    # Apply minimum score filter on normalized scores
+                    if filters.min_score is None or normalized_score >= filters.min_score:
+                        filtered_results.append(result)
+                
+                scored_results = filtered_results
+            
+            # Sort by normalized score and return top results
+            scored_results.sort(key=lambda x: x.score, reverse=True)
+            final_results = scored_results[:limit]
+            
+            logger.info(f"BM25 keyword search completed: {len(final_results)} results "
+                       f"(avg_score={sum(r.score for r in final_results)/len(final_results):.3f} "
+                       f"if final_results else 0)")
+            
+            return final_results
             
         except Exception as e:
-            logger.error(f"Keyword search failed: {e}")
+            logger.error(f"BM25 keyword search failed: {e}")
             return []
     
     async def _hybrid_search(
@@ -756,53 +1045,6 @@ class EnhancedSearchEngine:
         except Exception as e:
             logger.error(f"Failed to create contextual search result: {e}")
             return None
-    
-    def _calculate_keyword_score(self, query: str, text: str) -> float:
-        """
-        Calculate simple keyword relevance score using custom algorithm (NOT BM25).
-        
-        Algorithm:
-        1. Term Coverage (70% weight): Ratio of unique query terms found in text
-        2. Frequency Score (30% weight): Term frequency relative to document length
-        
-        Formula: score = (term_coverage * 0.7) + (frequency_score * 0.3)
-        
-        Example:
-        Query: "machine learning algorithm"
-        Text: "Machine learning is a subset of AI. Learning algorithms are powerful."
-        
-        - unique_matches = 2 (machine, learning) 
-        - total_matches = 3 (machine=1, learning=2, algorithm=0)
-        - term_coverage = 2/3 = 0.67
-        - frequency_score = min(3/14, 1.0) = 0.21
-        - final_score = (0.67 * 0.7) + (0.21 * 0.3) = 0.53
-        """
-        try:
-            query_terms = query.lower().split()
-            text_lower = text.lower()
-            
-            if not query_terms:
-                return 0.0
-            
-            # Count term frequencies
-            total_matches = 0
-            unique_matches = 0
-            
-            for term in query_terms:
-                count = text_lower.count(term)
-                if count > 0:
-                    total_matches += count
-                    unique_matches += 1
-            
-            # Calculate score based on term frequency and coverage
-            term_coverage = unique_matches / len(query_terms)
-            frequency_score = min(total_matches / len(text.split()), 1.0)
-            
-            return (term_coverage * 0.7) + (frequency_score * 0.3)
-            
-        except Exception as e:
-            logger.error(f"Failed to calculate keyword score: {e}")
-            return 0.0
     
     def _generate_highlight(self, query: str, text: str, max_length: int = 200) -> str:
         """Generate highlighted text snippet."""
