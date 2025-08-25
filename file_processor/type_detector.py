@@ -153,7 +153,7 @@ class FileTypeDetector:
                 for test_data, description in test_cases:
                     try:
                         test_result = self.mime.from_buffer(test_data)
-                        self.logger.info(f"TypeDetector: Magic {description}: {test_result}")
+                        self.logger.debug(f"TypeDetector: Magic {description}: {test_result}")
                     except Exception as te:
                         self.logger.warning(f"TypeDetector: Magic {description} failed: {te}")
                         magic_working = False
@@ -168,11 +168,11 @@ class FileTypeDetector:
             self.logger.warning(f"TypeDetector: python-magic not available, using filename-based detection")
             
         # Log the final status
-        self.logger.info(f"TypeDetector: Final configuration - Global MAGIC_AVAILABLE: {MAGIC_AVAILABLE}, Magic working: {magic_working}, mime instance: {self.mime is not None}")
-        self.logger.info(f"TypeDetector: Available MIME mappings: {len(self.MIME_TO_EXTENSION)} types")
-        self.logger.info(f"TypeDetector: Supported extensions: {list(self.MIME_TO_EXTENSION.values())}")
-        self.logger.info(f"TypeDetector: MIME_TO_EXTENSION contents: {self.MIME_TO_EXTENSION}")
-        self.logger.info(f"TypeDetector: 'image/jpeg' in MIME_TO_EXTENSION: {'image/jpeg' in self.MIME_TO_EXTENSION}")
+        self.logger.debug(f"TypeDetector: Final configuration - Global MAGIC_AVAILABLE: {MAGIC_AVAILABLE}, Magic working: {magic_working}, mime instance: {self.mime is not None}")
+        self.logger.debug(f"TypeDetector: Available MIME mappings: {len(self.MIME_TO_EXTENSION)} types")
+        self.logger.debug(f"TypeDetector: Supported extensions: {list(self.MIME_TO_EXTENSION.values())}")
+        self.logger.debug(f"TypeDetector: MIME_TO_EXTENSION contents: {self.MIME_TO_EXTENSION}")
+        self.logger.debug(f"TypeDetector: 'image/jpeg' in MIME_TO_EXTENSION: {'image/jpeg' in self.MIME_TO_EXTENSION}")
     
     def _normalize_mime_type(self, mime_type: str) -> str:
         """Normalize MIME type to handle common variations."""

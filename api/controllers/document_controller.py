@@ -17,7 +17,7 @@ from file_processor.type_detector import FileTypeDetector
 from file_processor.text_extractor import TextExtractor
 from file_processor.metadata_extractor import MetadataExtractor
 from utils.security.audit_logger import AuditLogger
-from api.schemas.document_schemas import DocumentUpdate, Document, DocumentCreate
+from api.schemas.document_schemas import DocumentUpdate, Document as DocumentSchema, DocumentCreate
 from utils.exceptions import (
     DocumentNotFoundException,
     DocumentProcessingException,
@@ -108,12 +108,12 @@ class DocumentController:
         ]
         
         # Log the final configuration
-        logger.info(f"DocumentController.__init__: Max file size: {self.max_file_size / (1024*1024)}MB")
-        logger.info(f"DocumentController.__init__: Allowed content types ({len(self.allowed_content_types)} total):")
+        logger.debug(f"DocumentController.__init__: Max file size: {self.max_file_size / (1024*1024)}MB")
+        logger.debug(f"DocumentController.__init__: Allowed content types ({len(self.allowed_content_types)} total):")
         for i, content_type in enumerate(self.allowed_content_types, 1):
-            logger.info(f"DocumentController.__init__:   {i:2d}. {content_type}")
-        logger.info(f"DocumentController.__init__: 'image/jpeg' in allowed types: {'image/jpeg' in self.allowed_content_types}")
-        logger.info("DocumentController.__init__: DocumentController initialization completed successfully!")
+            logger.debug(f"DocumentController.__init__:   {i:2d}. {content_type}")
+        logger.debug(f"DocumentController.__init__: 'image/jpeg' in allowed types: {'image/jpeg' in self.allowed_content_types}")
+        logger.debug("DocumentController.__init__: DocumentController initialization completed successfully!")
     
     async def process_upload(
         self,
@@ -790,18 +790,18 @@ class DocumentController:
                 raise  # Re-raise other exceptions
         
         # Debug logging for file type validation
-        logger.info(f"File upload validation - Filename: {file.filename}")
-        logger.info(f"File upload validation - Detected MIME type: {content_type}")
-        logger.info(f"File upload validation - File size: {len(file_content)} bytes")
-        logger.info(f"File upload validation - Allowed content types: {self.allowed_content_types}")
-        logger.info(f"File upload validation - Number of allowed types: {len(self.allowed_content_types)}")
-        logger.info(f"File upload validation - MIME type in allowed list: {content_type in self.allowed_content_types}")
+        logger.debug(f"File upload validation - Filename: {file.filename}")
+        logger.debug(f"File upload validation - Detected MIME type: {content_type}")
+        logger.debug(f"File upload validation - File size: {len(file_content)} bytes")
+        logger.debug(f"File upload validation - Allowed content types: {self.allowed_content_types}")
+        logger.debug(f"File upload validation - Number of allowed types: {len(self.allowed_content_types)}")
+        logger.debug(f"File upload validation - MIME type in allowed list: {content_type in self.allowed_content_types}")
         
         # Additional debugging - check each allowed type
-        logger.info("File upload validation - Checking each allowed type:")
+        logger.debug("File upload validation - Checking each allowed type:")
         for i, allowed_type in enumerate(self.allowed_content_types):
             matches = content_type == allowed_type
-            logger.info(f"  {i+1:2d}. {repr(allowed_type)} == {repr(content_type)}: {matches}")
+            logger.debug(f"  {i+1:2d}. {repr(allowed_type)} == {repr(content_type)}: {matches}")
         
         # Check if the content type is in allowed types, with fallback for image files
         is_allowed = content_type in self.allowed_content_types

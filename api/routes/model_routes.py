@@ -32,7 +32,7 @@ class ModelRegistrationRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="User-defined model name")
     display_name: Optional[str] = Field(None, max_length=200, description="Display name for the model")
     description: Optional[str] = Field(None, description="Model description")
-    llm_model_name: str = Field(..., min_length=1, max_length=200, description="Actual model name for API calls")
+    model_name: str = Field(..., min_length=1, max_length=200, description="Actual model name for API calls")  # Changed from llm_model_name
     provider: ModelProviderEnum = Field(..., description="Model provider")
     config: Dict[str, Any] = Field(..., description="Model configuration parameters")
     provider_config: Optional[Dict[str, Any]] = Field(None, description="Provider-specific configuration")
@@ -59,7 +59,7 @@ class RegisteredModelResponse(BaseModel):
     name: str
     display_name: Optional[str]
     description: Optional[str]
-    llm_model_name: str
+    model_name: str
     provider: str
     is_active: bool
     is_public: bool
@@ -212,7 +212,7 @@ async def register_model(
             name=request.name,
             display_name=request.display_name,
             description=request.description,
-            model_name=request.llm_model_name,
+            model_name=request.model_name,
             provider=request.provider,
             is_public=request.is_public,
             fallback_priority=request.fallback_priority,
@@ -236,7 +236,7 @@ async def register_model(
             name=registered_model.name,
             display_name=registered_model.display_name,
             description=registered_model.description,
-            llm_model_name=registered_model.model_name,
+            model_name=registered_model.model_name,
             provider=registered_model.provider.value,
             is_active=registered_model.is_active,
             is_public=registered_model.is_public,
@@ -294,7 +294,7 @@ async def get_registered_models(
                 name=model.name,
                 display_name=model.display_name,
                 description=model.description,
-                llm_model_name=model.model_name,
+                model_name=model.model_name,
                 provider=model.provider.value,
                 is_active=model.is_active,
                 is_public=model.is_public,
@@ -338,7 +338,7 @@ async def get_registered_model(
             "name": model.name,
             "display_name": model.display_name,
             "description": model.description,
-            "llm_model_name": model.model_name,
+            "model_name": model.model_name,
             "provider": model.provider.value,
             "config": model.get_config(),
             "provider_config": model.get_provider_config(),
@@ -436,7 +436,7 @@ async def update_registered_model(
             name=model.name,
             display_name=model.display_name,
             description=model.description,
-            llm_model_name=model.model_name,
+            model_name=model.model_name,
             provider=model.provider.value,
             is_active=model.is_active,
             is_public=model.is_public,

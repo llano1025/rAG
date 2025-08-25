@@ -87,7 +87,7 @@ class TextExtractor:
         try:
             # For image files, use specified OCR settings
             if content_type and content_type.startswith('image/'):
-                return self._extract_from_image_with_settings(temp_path, ocr_method, ocr_language, vision_provider)
+                return self._extract_from_image(temp_path, ocr_method, ocr_language, vision_provider)
             else:
                 # Use existing extract method for non-image files
                 return self.extract(temp_path, content_type)
