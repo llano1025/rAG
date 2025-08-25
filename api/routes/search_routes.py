@@ -13,7 +13,7 @@ from ..schemas.search_schemas import (
     convert_api_filters_to_search_filter
 )
 from vector_db.search_engine import EnhancedSearchEngine, SearchType, SearchFilter
-from vector_db.storage_manager import get_storage_manager
+from vector_db.storage_manager import get_storage_manager, init_storage_manager
 from vector_db.embedding_manager import EnhancedEmbeddingManager
 from database.connection import get_db
 import warnings
@@ -180,7 +180,7 @@ async def semantic_search(
     """
     try:
         # Get search engine components
-        storage_manager = get_storage_manager()
+        storage_manager = init_storage_manager()
         embedding_manager = EnhancedEmbeddingManager.create_default_manager()
         search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
         
@@ -234,7 +234,7 @@ async def hybrid_search(
     """
     try:
         # Get search engine components
-        storage_manager = get_storage_manager()
+        storage_manager = init_storage_manager()
         embedding_manager = EnhancedEmbeddingManager.create_default_manager()
         search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
         
@@ -290,7 +290,7 @@ async def contextual_search(
     """
     try:
         # Get search engine components
-        storage_manager = get_storage_manager()
+        storage_manager = init_storage_manager()
         embedding_manager = EnhancedEmbeddingManager.create_default_manager()
         search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
         

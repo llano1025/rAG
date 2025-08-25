@@ -111,18 +111,18 @@ class VectorStorageManager:
             # Load existing FAISS indices from disk
             if self.vector_dependencies_available:
                 try:
-                    logger.info("🔄 Loading existing FAISS indices from disk...")
+                    logger.info("Loading existing FAISS indices from disk...")
                     loading_results = await self._load_existing_indices()
                     
                     if loading_results:
                         successful_loads = sum(1 for success in loading_results.values() if success)
                         total_indices = len(loading_results)
                         if successful_loads > 0:
-                            logger.info(f"✅ Loaded {successful_loads}/{total_indices} existing FAISS indices")
+                            logger.info(f"Loaded {successful_loads}/{total_indices} existing FAISS indices")
                         else:
-                            logger.warning(f"⚠️  Failed to load any of the {total_indices} discovered indices")
+                            logger.warning(f"Failed to load any of the {total_indices} discovered indices")
                     else:
-                        logger.info("ℹ️  No existing FAISS indices found")
+                        logger.info("No existing FAISS indices found")
                         
                 except Exception as e:
                     logger.warning(f"Failed to load existing FAISS indices: {e}. New indices will work normally.")
@@ -587,6 +587,11 @@ class VectorStorageManager:
         """Load FAISS indices from disk."""
         try:
             content_path, context_path = self._get_faiss_paths(index_name)
+
+            # Get SearchOptimizer class
+            SearchOptimizer = _get_search_optimizer()
+            if not SearchOptimizer:
+                raise ImportError("SearchOptimizer not available")
             
             if os.path.exists(content_path):
                 from .search_optimizer import SearchConfig, IndexType, MetricType
@@ -655,18 +660,18 @@ class VectorStorageManager:
                         loading_results[index_name] = success
                         
                         if success:
-                            logger.info(f"✅ Successfully loaded index: {index_name}")
+                            logger.info(f"Successfully loaded index: {index_name}")
                         else:
-                            logger.warning(f"❌ Failed to load index: {index_name}")
+                            logger.warning(f"Failed to load index: {index_name}")
                             
                     except Exception as e:
-                        logger.error(f"❌ Error loading index {index_name}: {e}")
+                        logger.error(f"Error loading index {index_name}: {e}")
                         loading_results[index_name] = False
                 
                 # Log summary
                 successful = sum(1 for success in loading_results.values() if success)
                 total = len(loading_results)
-                logger.info(f"📊 Index loading complete: {successful}/{total} indices loaded successfully")
+                logger.info(f"Index loading complete: {successful}/{total} indices loaded successfully")
                 
                 return loading_results
                 

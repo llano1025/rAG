@@ -496,13 +496,13 @@ class EnhancedSearchEngine:
             cache_key = f"search_{cache_hash}"
             
             # Debug logging to identify instability sources  
-            logger.info(f"   Cache key generation:")
-            logger.info(f"   Query: '{query[:50]}...'")
-            logger.info(f"   User ID: {user_id}")
-            logger.info(f"   Normalized filter: {stable_filter}")
-            logger.info(f"   Filter string: {filter_str}")
-            logger.info(f"   Hash input length: {len(hash_input)} chars")
-            logger.info(f"   Final key: {cache_key}")
+            logger.info(f"Cache key generation:")
+            logger.info(f"Query: '{query[:50]}...'")
+            logger.info(f"User ID: {user_id}")
+            logger.info(f"Normalized filter: {stable_filter}")
+            logger.info(f"Filter string: {filter_str}")
+            logger.info(f"Hash input length: {len(hash_input)} chars")
+            logger.info(f"Final key: {cache_key}")
             
             return cache_key
         except Exception as e:
@@ -545,15 +545,15 @@ class EnhancedSearchEngine:
         cache_key = None
         if use_cache:
             cache_key = self._generate_stable_cache_key(query, user.id, filters)
-            logger.info(f"🔑 Generated cache key for entire method: {cache_key}")
+            logger.info(f"Generated cache key for entire method: {cache_key}")
         
         try:
             # Hierarchical cache strategy - check multiple cache levels
             if use_cache and cache_key:
                 # Check end-to-end Redis cache first (fastest)
                 try:
-                    logger.info(f"🔍 Checking Redis cache for key: {cache_key}")
-                    logger.info(f"🔍 Query: '{query[:50]}...', User: {user.id}, Filters: {len(filters.to_dict())} properties")
+                    logger.info(f"Checking Redis cache for key: {cache_key}")
+                    logger.info(f"Query: '{query[:50]}...', User: {user.id}, Filters: {len(filters.to_dict())} properties")
                     cached_data = await self.query_optimizer.redis_manager.get_value(cache_key)
                     if cached_data:
                         logger.info(f"CACHE HIT! Found {len(cached_data)} cached results for query: {query[:50]}...")
@@ -662,8 +662,8 @@ class EnhancedSearchEngine:
                 
                 # Redis cache via query optimizer for fast retrieval
                 try:
-                    logger.info(f"💾 Caching {len(results)} search results for key: {cache_key}")
-                    logger.info(f"🔑 Confirming same cache key used for storage: {cache_key}")
+                    logger.info(f"Caching {len(results)} search results for key: {cache_key}")
+                    logger.info(f"Confirming same cache key used for storage: {cache_key}")
                     serialized_results = [result.to_dict() for result in results]
                     success = await self.query_optimizer.redis_manager.set_value(
                         cache_key,
@@ -781,8 +781,9 @@ class EnhancedSearchEngine:
                             filters={'vector_type': 'content', 'min_score': filters.min_score or 0.1},
                             user_id=filters.user_id
                         )
+                        logger.info(f"Initiating search using FAISS...")
                         results = optimized_results.get('results', [])
-                        
+
                         # Process results with weighted scoring
                         for result in results:
                             chunk_id = result.get('metadata', {}).get('chunk_id')
