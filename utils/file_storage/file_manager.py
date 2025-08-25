@@ -23,53 +23,53 @@ class FileStorageManager:
         Args:
             storage_root: Root directory for file storage
         """
-        logger.info(f"🚀 FileManager: Initializing file storage manager...")
-        logger.info(f"📁 FileManager: Storage root path: {storage_root}")
+        logger.info(f"FileManager: Initializing file storage manager...")
+        logger.info(f"FileManager: Storage root path: {storage_root}")
         
         self.storage_root = Path(storage_root)
-        logger.info(f"📂 FileManager: Resolved storage root: {self.storage_root.absolute()}")
+        logger.info(f"FileManager: Resolved storage root: {self.storage_root.absolute()}")
         
         # Create storage directory if it doesn't exist
         try:
-            logger.info(f"🔨 FileManager: Creating storage directory structure...")
+            logger.info(f"FileManager: Creating storage directory structure...")
             self.storage_root.mkdir(parents=True, exist_ok=True)
-            logger.info(f"✅ FileManager: Storage directory created/verified")
+            logger.info(f"FileManager: Storage directory created/verified")
         except OSError as create_err:
-            logger.error(f"❌ FileManager: Failed to create storage directory: {create_err}")
+            logger.error(f"FileManager: Failed to create storage directory: {create_err}")
             raise IOError(f"Cannot create storage directory: {create_err}")
         
         # Validate storage directory
         self._validate_storage_directory()
         
-        logger.info(f"✅ FileManager: File storage initialized successfully at: {self.storage_root.absolute()}")
+        logger.info(f"FileManager: File storage initialized successfully at: {self.storage_root.absolute()}")
     
     def _validate_storage_directory(self):
         """Validate storage directory exists and is accessible."""
-        logger.info(f"🔍 FileManager: Validating storage directory...")
+        logger.info(f"FileManager: Validating storage directory...")
         
         # Check if directory exists
         if not self.storage_root.exists():
-            logger.error(f"❌ FileManager: Storage directory does not exist: {self.storage_root}")
+            logger.error(f"FileManager: Storage directory does not exist: {self.storage_root}")
             raise IOError(f"Storage directory does not exist: {self.storage_root}")
             
         # Check if it's actually a directory
         if not self.storage_root.is_dir():
-            logger.error(f"❌ FileManager: Storage path is not a directory: {self.storage_root}")
+            logger.error(f"FileManager: Storage path is not a directory: {self.storage_root}")
             raise IOError(f"Storage path is not a directory: {self.storage_root}")
             
         # Check read permissions
         if not os.access(self.storage_root, os.R_OK):
-            logger.error(f"🔒 FileManager: Storage directory is not readable: {self.storage_root}")
+            logger.error(f"FileManager: Storage directory is not readable: {self.storage_root}")
             raise IOError(f"Storage directory is not readable: {self.storage_root}")
             
         # Check write permissions
         if not os.access(self.storage_root, os.W_OK):
-            logger.error(f"🔒 FileManager: Storage directory is not writable: {self.storage_root}")
+            logger.error(f"FileManager: Storage directory is not writable: {self.storage_root}")
             raise IOError(f"Storage directory is not writable: {self.storage_root}")
             
         # Check execute permissions (needed to access subdirectories)
         if not os.access(self.storage_root, os.X_OK):
-            logger.error(f"🔒 FileManager: Storage directory is not executable: {self.storage_root}")
+            logger.error(f"FileManager: Storage directory is not executable: {self.storage_root}")
             raise IOError(f"Storage directory is not executable: {self.storage_root}")
             
         # Test write capability with a temporary file
@@ -78,9 +78,9 @@ class FileStorageManager:
             with open(test_file, 'w') as f:
                 f.write("test")
             test_file.unlink()  # Delete test file
-            logger.info(f"✅ FileManager: Write test passed")
+            logger.info(f"FileManager: Write test passed")
         except OSError as test_err:
-            logger.error(f"❌ FileManager: Write test failed: {test_err}")
+            logger.error(f"FileManager: Write test failed: {test_err}")
             raise IOError(f"Cannot write to storage directory: {test_err}")
             
         logger.info(f"✅ FileManager: Storage directory validation passed")
@@ -121,101 +121,101 @@ class FileStorageManager:
         Raises:
             IOError: If file cannot be saved
         """
-        logger.info(f"💾 FileManager: Starting file save - Filename: {original_filename}")
-        logger.info(f"📊 FileManager: File size: {len(file_content)} bytes")
+        logger.info(f"FileManager: Starting file save - Filename: {original_filename}")
+        logger.info(f"FileManager: File size: {len(file_content)} bytes")
         
         try:
             # Calculate hash if not provided
             if not file_hash:
-                logger.info(f"🔐 FileManager: Calculating SHA-256 hash...")
+                logger.info(f"FileManager: Calculating SHA-256 hash...")
                 file_hash = hashlib.sha256(file_content).hexdigest()
-                logger.info(f"🔐 FileManager: Hash calculated: {file_hash[:16]}...")
+                logger.info(f"FileManager: Hash calculated: {file_hash[:16]}...")
             
             # Generate storage path
-            logger.info(f"📁 FileManager: Generating storage path...")
+            logger.info(f"FileManager: Generating storage path...")
             file_path = self._generate_file_path(file_hash, original_filename)
-            logger.info(f"📂 FileManager: Generated path: {file_path}")
-            logger.info(f"🗂️ FileManager: Storage root: {self.storage_root}")
+            logger.info(f"FileManager: Generated path: {file_path}")
+            logger.info(f"FileManager: Storage root: {self.storage_root}")
             
             # Check storage root exists and is writable
             if not self.storage_root.exists():
-                logger.error(f"❌ FileManager: Storage root does not exist: {self.storage_root}")
+                logger.error(f"FileManager: Storage root does not exist: {self.storage_root}")
                 raise IOError(f"Storage root directory does not exist: {self.storage_root}")
             
             if not os.access(self.storage_root, os.W_OK):
-                logger.error(f"🔒 FileManager: Storage root is not writable: {self.storage_root}")
+                logger.error(f"FileManager: Storage root is not writable: {self.storage_root}")
                 raise IOError(f"Storage root directory is not writable: {self.storage_root}")
             
             # Create directory structure
-            logger.info(f"📁 FileManager: Creating directory structure...")
+            logger.info(f"FileManager: Creating directory structure...")
             try:
                 file_path.parent.mkdir(parents=True, exist_ok=True)
-                logger.info(f"✅ FileManager: Directory structure created: {file_path.parent}")
+                logger.info(f"FileManager: Directory structure created: {file_path.parent}")
             except OSError as dir_err:
-                logger.error(f"❌ FileManager: Failed to create directory structure: {dir_err}")
+                logger.error(f"FileManager: Failed to create directory structure: {dir_err}")
                 raise IOError(f"Cannot create directory structure: {dir_err}")
             
             # Check if file already exists (deduplication)
             if file_path.exists():
-                logger.info(f"🔄 FileManager: File already exists, verifying integrity...")
+                logger.info(f"FileManager: File already exists, verifying integrity...")
                 try:
                     existing_size = file_path.stat().st_size
                     if existing_size == len(file_content):
-                        logger.info(f"✅ FileManager: Existing file verified (size: {existing_size}), skipping save")
+                        logger.info(f"FileManager: Existing file verified (size: {existing_size}), skipping save")
                         return str(file_path.relative_to(self.storage_root))
                     else:
-                        logger.warning(f"⚠️ FileManager: Size mismatch - existing: {existing_size}, new: {len(file_content)}")
+                        logger.warning(f"FileManager: Size mismatch - existing: {existing_size}, new: {len(file_content)}")
                 except OSError as stat_err:
-                    logger.warning(f"⚠️ FileManager: Cannot stat existing file: {stat_err}, overwriting...")
+                    logger.warning(f"FileManager: Cannot stat existing file: {stat_err}, overwriting...")
             
             # Check available disk space (rough estimate)
             try:
                 stat_result = os.statvfs(file_path.parent)
                 available_space = stat_result.f_bavail * stat_result.f_frsize
-                logger.info(f"💽 FileManager: Available disk space: {available_space / (1024*1024):.1f} MB")
+                logger.info(f"FileManager: Available disk space: {available_space / (1024*1024):.1f} MB")
                 
                 if available_space < len(file_content) * 2:  # Need at least 2x file size as buffer
-                    logger.error(f"❌ FileManager: Insufficient disk space")
+                    logger.error(f"FileManager: Insufficient disk space")
                     raise IOError(f"Insufficient disk space: need {len(file_content)}, available {available_space}")
                     
             except (OSError, AttributeError) as space_err:
-                logger.warning(f"⚠️ FileManager: Cannot check disk space: {space_err}")
+                logger.warning(f"FileManager: Cannot check disk space: {space_err}")
             
             # Save file
-            logger.info(f"💾 FileManager: Writing file to disk...")
+            logger.info(f"FileManager: Writing file to disk...")
             try:
                 with open(file_path, 'wb') as f:
                     bytes_written = f.write(file_content)
-                    logger.info(f"✏️ FileManager: Bytes written: {bytes_written}")
+                    logger.info(f"FileManager: Bytes written: {bytes_written}")
                     
                     if bytes_written != len(file_content):
                         raise IOError(f"Incomplete write: {bytes_written} != {len(file_content)}")
                         
             except OSError as write_err:
-                logger.error(f"❌ FileManager: File write failed: {write_err}")
+                logger.error(f"FileManager: File write failed: {write_err}")
                 raise IOError(f"Cannot write file: {write_err}")
             
             # Verify file was saved correctly
-            logger.info(f"🔍 FileManager: Verifying saved file...")
+            logger.info(f"FileManager: Verifying saved file...")
             try:
                 if not file_path.exists():
-                    logger.error(f"❌ FileManager: File does not exist after save")
+                    logger.error(f"FileManager: File does not exist after save")
                     raise IOError(f"File verification failed: file does not exist after save")
                 
                 saved_size = file_path.stat().st_size
-                logger.info(f"📏 FileManager: Saved file size: {saved_size} bytes")
+                logger.info(f"FileManager: Saved file size: {saved_size} bytes")
                 
                 if saved_size != len(file_content):
-                    logger.error(f"❌ FileManager: Size mismatch - expected: {len(file_content)}, actual: {saved_size}")
+                    logger.error(f"FileManager: Size mismatch - expected: {len(file_content)}, actual: {saved_size}")
                     raise IOError(f"File verification failed: size mismatch ({saved_size} != {len(file_content)})")
                     
             except OSError as verify_err:
-                logger.error(f"❌ FileManager: File verification error: {verify_err}")
+                logger.error(f"FileManager: File verification error: {verify_err}")
                 raise IOError(f"File verification failed: {verify_err}")
             
             relative_path = str(file_path.relative_to(self.storage_root))
-            logger.info(f"✅ FileManager: File saved successfully!")
-            logger.info(f"📋 FileManager: Relative path: {relative_path}")
+            logger.info(f"FileManager: File saved successfully!")
+            logger.info(f"FileManager: Relative path: {relative_path}")
             return relative_path
             
         except Exception as e:
@@ -264,47 +264,47 @@ class FileStorageManager:
         Returns:
             File stream or None if not found
         """
-        logger.info(f"🔓 FileManager: Opening file stream for: {file_path}")
+        logger.info(f"FileManager: Opening file stream for: {file_path}")
         
         try:
             full_path = self.storage_root / file_path
-            logger.info(f"📂 FileManager: Full path resolved to: {full_path}")
-            logger.info(f"🗂️ FileManager: Storage root: {self.storage_root}")
+            logger.info(f"FileManager: Full path resolved to: {full_path}")
+            logger.info(f"FileManager: Storage root: {self.storage_root}")
             
             # Check if file exists
             exists = full_path.exists()
-            logger.info(f"🔍 FileManager: File exists check: {exists}")
+            logger.info(f"FileManager: File exists check: {exists}")
             
             if not exists:
-                logger.warning(f"❌ FileManager: File not found at: {full_path}")
+                logger.warning(f"FileManager: File not found at: {full_path}")
                 return None
             
             # Check file size
             try:
                 file_size = full_path.stat().st_size
-                logger.info(f"📏 FileManager: File size: {file_size} bytes")
+                logger.info(f"FileManager: File size: {file_size} bytes")
             except Exception as size_err:
-                logger.warning(f"⚠️ FileManager: Could not get file size: {size_err}")
+                logger.warning(f"FileManager: Could not get file size: {size_err}")
             
             # Security check
             if not self._is_safe_path(full_path):
-                logger.error(f"🚨 FileManager: Unsafe file path access attempt: {full_path}")
+                logger.error(f"FileManager: Unsafe file path access attempt: {full_path}")
                 return None
             
-            logger.info(f"🔓 FileManager: Opening file in binary read mode: {full_path}")
+            logger.info(f"FileManager: Opening file in binary read mode: {full_path}")
             file_stream = open(full_path, 'rb')
-            logger.info(f"✅ FileManager: File stream opened successfully")
+            logger.info(f"FileManager: File stream opened successfully")
             
             return file_stream
             
         except PermissionError as pe:
-            logger.error(f"🔒 FileManager: Permission denied accessing file {file_path}: {pe}")
+            logger.error(f"FileManager: Permission denied accessing file {file_path}: {pe}")
             return None
         except FileNotFoundError as fnf:
-            logger.error(f"❌ FileManager: File not found {file_path}: {fnf}")
+            logger.error(f"FileManager: File not found {file_path}: {fnf}")
             return None
         except Exception as e:
-            logger.error(f"💥 FileManager: Unexpected error opening file stream {file_path}")
+            logger.error(f"FileManager: Unexpected error opening file stream {file_path}")
             logger.error(f"Error type: {type(e).__name__}")
             logger.error(f"Error message: {str(e)}")
             logger.exception("Full exception traceback:")
@@ -324,34 +324,34 @@ class FileStorageManager:
         
         try:
             full_path = self.storage_root / file_path
-            logger.info(f"📂 FileManager: Full path for existence check: {full_path}")
+            logger.info(f"FileManager: Full path for existence check: {full_path}")
             
             exists = full_path.exists()
-            logger.info(f"📋 FileManager: File existence result: {exists}")
+            logger.info(f"FileManager: File existence result: {exists}")
             
             if exists:
                 # Additional checks for file readability
                 if full_path.is_file():
-                    logger.info(f"✅ FileManager: Confirmed as regular file")
+                    logger.info(f"FileManager: Confirmed as regular file")
                     try:
                         size = full_path.stat().st_size
-                        logger.info(f"📏 FileManager: File size: {size} bytes")
+                        logger.info(f"FileManager: File size: {size} bytes")
                     except Exception as stat_err:
-                        logger.warning(f"⚠️ FileManager: Could not stat file: {stat_err}")
+                        logger.warning(f"FileManager: Could not stat file: {stat_err}")
                 else:
-                    logger.warning(f"⚠️ FileManager: Path exists but is not a regular file")
+                    logger.warning(f"FileManager: Path exists but is not a regular file")
                     return False
                 
                 # Check if path is safe
                 is_safe = self._is_safe_path(full_path)
-                logger.info(f"🔐 FileManager: Path safety check: {is_safe}")
+                logger.info(f"FileManager: Path safety check: {is_safe}")
                 
                 return is_safe
             
             return False
             
         except Exception as e:
-            logger.error(f"💥 FileManager: Error checking file existence {file_path}")
+            logger.error(f"FileManager: Error checking file existence {file_path}")
             logger.error(f"Error type: {type(e).__name__}")
             logger.error(f"Error message: {str(e)}")
             return False
