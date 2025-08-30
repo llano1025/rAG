@@ -600,10 +600,10 @@ class VectorIndex(Base, TimestampMixin):
     embedding_dimension = Column(Integer, nullable=False)
     similarity_metric = Column(String(20), default="cosine", nullable=False)
     
-    # FAISS configuration
-    faiss_index_type = Column(String(50), nullable=False)  # 'FLAT', 'HNSW', 'IVF', etc.
-    faiss_index_path = Column(String(500), nullable=True)  # Path to saved FAISS index
-    faiss_index_params = Column(Text, nullable=True)  # JSON for FAISS parameters
+    # FAISS configuration (DEPRECATED - kept for backward compatibility)
+    faiss_index_type = Column(String(50), nullable=True)  # DEPRECATED: No longer used
+    faiss_index_path = Column(String(500), nullable=True)  # DEPRECATED: No longer used
+    faiss_index_params = Column(Text, nullable=True)  # DEPRECATED: No longer used
     
     # Qdrant configuration
     qdrant_collection_name = Column(String(100), nullable=False)
@@ -627,14 +627,14 @@ class VectorIndex(Base, TimestampMixin):
         return f"<VectorIndex(id={self.id}, name='{self.index_name}', type='{self.index_type}')>"
     
     def get_faiss_params(self) -> dict:
-        """Get FAISS parameters as dictionary."""
+        """Get FAISS parameters as dictionary. DEPRECATED: No longer used."""
         if self.faiss_index_params:
             import json
             return json.loads(self.faiss_index_params)
         return {}
     
     def set_faiss_params(self, params: dict):
-        """Set FAISS parameters from dictionary."""
+        """Set FAISS parameters from dictionary. DEPRECATED: No longer used."""
         import json
         self.faiss_index_params = json.dumps(params)
     

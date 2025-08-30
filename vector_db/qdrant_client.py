@@ -6,8 +6,13 @@ Provides high-level interface for managing vector collections and operations.
 import asyncio
 import logging
 import uuid
+import json
+import os
+import tempfile
+import shutil
 from typing import List, Dict, Any, Optional, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
+from pathlib import Path
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
@@ -225,7 +230,7 @@ class QdrantManager:
             for i, (vector, payload, point_id) in enumerate(zip(vectors, payloads, ids)):
                 # Add timestamp to payload
                 payload_with_timestamp = payload.copy()
-                payload_with_timestamp["indexed_at"] = datetime.utcnow().isoformat()
+                payload_with_timestamp["indexed_at"] = datetime.now(timezone.utc).isoformat()
                 payload_with_timestamp["point_index"] = i
                 
                 # Preserve original chunk_id if it was converted
@@ -311,6 +316,8 @@ class QdrantManager:
                 with_payload=True,
                 with_vectors=False  # Don't return vectors to save bandwidth
             )
+
+            logger.info(f"{search_result}")
             
             # Format results
             results = []
@@ -417,7 +424,7 @@ class QdrantManager:
                 "port": self.port,
                 "collections_count": len(collections.collections),
                 "collections": [col.name for col in collections.collections],
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
             
             # Get detailed info for each collection
@@ -438,22 +445,375 @@ class QdrantManager:
                 "status": "unhealthy",
                 "connected": False,
                 "error": str(e),
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
     
-    async def backup_collection(self, collection_name: str, backup_path: str) -> bool:
-        """Create a backup snapshot of a collection."""
-        # Note: This would require Qdrant snapshot API
-        # For now, this is a placeholder for future implementation
-        logger.warning("Collection backup not yet implemented")
-        return False
+    async def backup_collection(self, collection_name: str, backup_path: str, include_vectors: bool = True) -> Dict[str, Any]:
+        """
+        Create a comprehensive backup of a collection.
+        
+        Args:
+            collection_name: Name of the collection to backup
+            backup_path: Path where backup will be stored
+            include_vectors: Whether to include vector data (set False for metadata-only backup)
+            
+        Returns:
+            Backup metadata dictionary with success status and details
+        """
+        start_time = datetime.now(timezone.utc)
+        
+        try:
+            if not self.client:
+                await self.connect()
+            
+            # Ensure backup directory exists
+            backup_dir = Path(backup_path)
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Generate backup filename with timestamp
+            timestamp = start_time.strftime("%Y%m%d_%H%M%S")
+            backup_filename = f"{collection_name}_backup_{timestamp}"
+            backup_file_path = backup_dir / f"{backup_filename}.json"
+            
+            logger.info(f"Starting backup of collection '{collection_name}' to {backup_file_path}")
+            
+            # Get collection info
+            collection_info = self.client.get_collection(collection_name)
+            if not collection_info:
+                raise ValueError(f"Collection '{collection_name}' not found")
+            
+            # Initialize backup data structure
+            backup_data = {
+                "metadata": {
+                    "collection_name": collection_name,
+                    "backup_timestamp": start_time.isoformat(),
+                    "backup_version": "1.0",
+                    "qdrant_client_version": "1.6.0+",  # Current version
+                    "include_vectors": include_vectors,
+                    "total_points": collection_info.points_count,
+                    "vectors_count": collection_info.vectors_count
+                },
+                "collection_config": {
+                    "vectors": {
+                        "size": collection_info.config.params.vectors.size,
+                        "distance": str(collection_info.config.params.vectors.distance),
+                        "hnsw_config": collection_info.config.params.vectors.hnsw_config,
+                        "quantization_config": collection_info.config.params.vectors.quantization_config
+                    },
+                    "optimizer_config": collection_info.config.optimizer_config,
+                    "wal_config": collection_info.config.wal_config
+                },
+                "points": []
+            }
+            
+            # Retrieve all points with pagination
+            points_exported = 0
+            offset = None
+            batch_size = 1000
+            
+            while True:
+                try:
+                    # Scroll through points
+                    points_batch, next_offset = self.client.scroll(
+                        collection_name=collection_name,
+                        limit=batch_size,
+                        offset=offset,
+                        with_payload=True,
+                        with_vectors=include_vectors
+                    )
+                    
+                    if not points_batch:
+                        break
+                    
+                    # Process batch
+                    for point in points_batch:
+                        point_data = {
+                            "id": str(point.id),
+                            "payload": point.payload if point.payload else {}
+                        }
+                        
+                        # Include vector data if requested
+                        if include_vectors and point.vector:
+                            if isinstance(point.vector, dict):
+                                # Named vectors
+                                point_data["vector"] = {name: vec for name, vec in point.vector.items()}
+                            else:
+                                # Single vector
+                                point_data["vector"] = point.vector
+                        
+                        backup_data["points"].append(point_data)
+                    
+                    points_exported += len(points_batch)
+                    offset = next_offset
+                    
+                    # Log progress
+                    if points_exported % 10000 == 0:
+                        logger.info(f"Exported {points_exported} points...")
+                    
+                    # Break if no more points
+                    if next_offset is None:
+                        break
+                        
+                except Exception as e:
+                    logger.error(f"Error during point export batch: {e}")
+                    break
+            
+            # Update final metadata
+            backup_data["metadata"]["exported_points"] = points_exported
+            backup_data["metadata"]["backup_completed_at"] = datetime.now(timezone.utc).isoformat()
+            backup_data["metadata"]["backup_duration_seconds"] = (datetime.now(timezone.utc) - start_time).total_seconds()
+            
+            # Write backup to file
+            with open(backup_file_path, 'w', encoding='utf-8') as f:
+                json.dump(backup_data, f, indent=2, ensure_ascii=False)
+            
+            # Verify backup file
+            backup_size_mb = backup_file_path.stat().st_size / (1024 * 1024)
+            
+            logger.info(f"Backup completed: {points_exported} points exported to {backup_file_path}")
+            logger.info(f"Backup file size: {backup_size_mb:.2f} MB")
+            
+            return {
+                "success": True,
+                "backup_file": str(backup_file_path),
+                "collection_name": collection_name,
+                "points_exported": points_exported,
+                "backup_size_mb": backup_size_mb,
+                "duration_seconds": backup_data["metadata"]["backup_duration_seconds"],
+                "include_vectors": include_vectors,
+                "timestamp": start_time.isoformat()
+            }
+            
+        except Exception as e:
+            error_msg = f"Backup failed for collection '{collection_name}': {e}"
+            logger.error(error_msg)
+            
+            return {
+                "success": False,
+                "error": str(e),
+                "collection_name": collection_name,
+                "timestamp": start_time.isoformat(),
+                "duration_seconds": (datetime.now(timezone.utc) - start_time).total_seconds()
+            }
     
-    async def restore_collection(self, collection_name: str, backup_path: str) -> bool:
-        """Restore a collection from backup."""
-        # Note: This would require Qdrant snapshot API
-        # For now, this is a placeholder for future implementation
-        logger.warning("Collection restore not yet implemented")
-        return False
+    async def restore_collection(self, backup_file_path: str, target_collection_name: Optional[str] = None, 
+                                recreate_collection: bool = False) -> Dict[str, Any]:
+        """
+        Restore a collection from backup.
+        
+        Args:
+            backup_file_path: Path to the backup file
+            target_collection_name: Target collection name (defaults to original name)
+            recreate_collection: Whether to recreate the collection if it exists
+            
+        Returns:
+            Restore operation results
+        """
+        start_time = datetime.now(timezone.utc)
+        
+        try:
+            if not self.client:
+                await self.connect()
+            
+            # Load backup data
+            backup_path = Path(backup_file_path)
+            if not backup_path.exists():
+                raise FileNotFoundError(f"Backup file not found: {backup_file_path}")
+            
+            logger.info(f"Starting restore from backup: {backup_file_path}")
+            
+            with open(backup_path, 'r', encoding='utf-8') as f:
+                backup_data = json.load(f)
+            
+            # Validate backup format
+            if "metadata" not in backup_data or "collection_config" not in backup_data:
+                raise ValueError("Invalid backup format: missing required sections")
+            
+            # Determine collection name
+            original_name = backup_data["metadata"]["collection_name"]
+            collection_name = target_collection_name or original_name
+            
+            logger.info(f"Restoring to collection '{collection_name}' from backup of '{original_name}'")
+            
+            # Check if collection exists
+            try:
+                existing_info = self.client.get_collection(collection_name)
+                if existing_info and not recreate_collection:
+                    raise ValueError(f"Collection '{collection_name}' already exists. Use recreate_collection=True to overwrite.")
+                
+                if recreate_collection:
+                    logger.info(f"Deleting existing collection '{collection_name}'")
+                    self.client.delete_collection(collection_name)
+                    
+            except Exception as e:
+                # Collection doesn't exist or couldn't check - proceed with creation
+                logger.debug(f"Collection check result: {e}")
+            
+            # Create collection with backed-up configuration
+            vector_config = backup_data["collection_config"]["vectors"]
+            
+            # Map distance string back to enum
+            distance_map = {
+                "Distance.COSINE": Distance.COSINE,
+                "Distance.EUCLID": Distance.EUCLID,
+                "Distance.DOT": Distance.DOT
+            }
+            distance = distance_map.get(vector_config["distance"], Distance.COSINE)
+            
+            vectors_config = VectorParams(
+                size=vector_config["size"],
+                distance=distance,
+                hnsw_config=vector_config.get("hnsw_config"),
+                quantization_config=vector_config.get("quantization_config")
+            )
+            
+            logger.info(f"Creating collection '{collection_name}' with vector dimension {vector_config['size']}")
+            
+            self.client.create_collection(
+                collection_name=collection_name,
+                vectors_config=vectors_config
+            )
+            
+            # Restore points in batches
+            points_data = backup_data.get("points", [])
+            total_points = len(points_data)
+            batch_size = 1000
+            restored_points = 0
+            
+            logger.info(f"Restoring {total_points} points in batches of {batch_size}")
+            
+            for i in range(0, total_points, batch_size):
+                batch = points_data[i:i + batch_size]
+                
+                # Convert to PointStruct objects
+                points_to_upsert = []
+                for point_data in batch:
+                    point = PointStruct(
+                        id=point_data["id"],
+                        vector=point_data.get("vector"),
+                        payload=point_data.get("payload", {})
+                    )
+                    points_to_upsert.append(point)
+                
+                # Upsert batch
+                self.client.upsert(
+                    collection_name=collection_name,
+                    points=points_to_upsert
+                )
+                
+                restored_points += len(batch)
+                
+                # Log progress
+                if restored_points % 10000 == 0 or restored_points == total_points:
+                    logger.info(f"Restored {restored_points}/{total_points} points...")
+            
+            # Verify restoration
+            final_info = self.client.get_collection(collection_name)
+            
+            duration_seconds = (datetime.now(timezone.utc) - start_time).total_seconds()
+            
+            logger.info(f"Restore completed: {restored_points} points restored to '{collection_name}'")
+            logger.info(f"Final collection stats: {final_info.points_count} points, {final_info.vectors_count} vectors")
+            
+            return {
+                "success": True,
+                "collection_name": collection_name,
+                "original_collection": original_name,
+                "points_restored": restored_points,
+                "backup_timestamp": backup_data["metadata"]["backup_timestamp"],
+                "restore_timestamp": datetime.now(timezone.utc).isoformat(),
+                "duration_seconds": duration_seconds,
+                "final_points_count": final_info.points_count,
+                "final_vectors_count": final_info.vectors_count
+            }
+            
+        except Exception as e:
+            error_msg = f"Restore failed from '{backup_file_path}': {e}"
+            logger.error(error_msg)
+            
+            return {
+                "success": False,
+                "error": str(e),
+                "backup_file": backup_file_path,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "duration_seconds": (datetime.now(timezone.utc) - start_time).total_seconds()
+            }
+    
+    async def list_backups(self, backup_directory: str) -> List[Dict[str, Any]]:
+        """
+        List available backup files in a directory.
+        
+        Args:
+            backup_directory: Directory to scan for backups
+            
+        Returns:
+            List of backup file information
+        """
+        try:
+            backup_dir = Path(backup_directory)
+            if not backup_dir.exists():
+                return []
+            
+            backups = []
+            for backup_file in backup_dir.glob("*_backup_*.json"):
+                try:
+                    # Get file stats
+                    file_stats = backup_file.stat()
+                    
+                    # Try to read backup metadata
+                    with open(backup_file, 'r') as f:
+                        backup_data = json.load(f)
+                    
+                    metadata = backup_data.get("metadata", {})
+                    
+                    backups.append({
+                        "filename": backup_file.name,
+                        "full_path": str(backup_file),
+                        "collection_name": metadata.get("collection_name", "unknown"),
+                        "backup_timestamp": metadata.get("backup_timestamp", "unknown"),
+                        "total_points": metadata.get("total_points", 0),
+                        "exported_points": metadata.get("exported_points", 0),
+                        "include_vectors": metadata.get("include_vectors", True),
+                        "file_size_mb": file_stats.st_size / (1024 * 1024),
+                        "backup_version": metadata.get("backup_version", "unknown")
+                    })
+                    
+                except Exception as e:
+                    logger.warning(f"Could not read backup metadata from {backup_file}: {e}")
+                    # Add basic file info even if metadata can't be read
+                    backups.append({
+                        "filename": backup_file.name,
+                        "full_path": str(backup_file),
+                        "collection_name": "unknown",
+                        "backup_timestamp": datetime.fromtimestamp(file_stats.st_mtime).isoformat(),
+                        "file_size_mb": file_stats.st_size / (1024 * 1024),
+                        "error": f"Metadata read failed: {e}"
+                    })
+            
+            # Sort by backup timestamp (newest first)
+            backups.sort(key=lambda x: x.get("backup_timestamp", ""), reverse=True)
+            
+            return backups
+            
+        except Exception as e:
+            logger.error(f"Failed to list backups in {backup_directory}: {e}")
+            return []
+
+    async def list_collections(self) -> List[str]:
+        """List all collections in Qdrant."""
+        try:
+            if not self.client:
+                logger.error("Qdrant client not connected")
+                return []
+            
+            collections_response = self.client.get_collections()
+            collections = [col.name for col in collections_response.collections]
+            logger.debug(f"Found {len(collections)} collections in Qdrant: {collections}")
+            return collections
+            
+        except Exception as e:
+            logger.error(f"Failed to list collections: {e}")
+            return []
 
 
 # Global Qdrant manager instance

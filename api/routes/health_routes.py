@@ -290,7 +290,6 @@ async def get_health_metrics(
         storage_manager = get_storage_manager()
         
         performance_stats = await storage_manager.get_performance_stats()
-        faiss_stats = await storage_manager.get_faiss_stats()
         
         # Get database statistics
         from database.models import Document, DocumentChunk, VectorIndex, User as UserModel
@@ -313,7 +312,6 @@ async def get_health_metrics(
                 ).count()
             },
             "vector_metrics": {
-                "faiss_stats": faiss_stats,
                 "storage_stats": performance_stats
             },
             "health_summary": {

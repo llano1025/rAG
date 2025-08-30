@@ -1,53 +1,16 @@
 """
-Unified storage manager for coordinating FAISS and Qdrant vector storage.
-Provides high-level interface for vector operations with automatic synchronization.
+Simplified Qdrant-only vector storage manager.
+Replaces the previous dual FAISS/Qdrant architecture with a single, robust Qdrant implementation.
 """
 
-import os
-import json
 import logging
-import hashlib
-from typing import List, Dict, Any, Optional, Tuple, Union
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timezone
-from pathlib import Path
-from .qdrant_client import QdrantManager
-
 from sqlalchemy.orm import Session
 
-try:
-    import numpy as np
-    NUMPY_AVAILABLE = True
-except ImportError as e:
-    logging.warning(f"NumPy not available: {e}")
-    np = None
-    NUMPY_AVAILABLE = False
-
-def _get_search_optimizer():
-    """Lazy import of SearchOptimizer."""
-    try:
-        from .search_optimizer import SearchOptimizer
-        return SearchOptimizer
-    except ImportError as e:
-        logging.warning(f"SearchOptimizer not available: {e}. Install required dependencies: numpy, faiss-cpu")
-        return None
-    except Exception as e:
-        logging.error(f"Failed to import SearchOptimizer: {e}")
-        return None
-
-def _get_qdrant_manager():
-    """Lazy import of QdrantManager."""
-    try:
-        from .qdrant_client import QdrantManager, get_qdrant_manager
-        return QdrantManager, get_qdrant_manager
-    except ImportError as e:
-        logging.warning(f"QdrantClient not available: {e}. Install required dependency: qdrant-client")
-        return None, None
-    except Exception as e:
-        logging.error(f"Failed to import QdrantManager: {e}")
-        return None, None
-
-VECTOR_DEPENDENCIES_AVAILABLE = NUMPY_AVAILABLE
-from database.models import VectorIndex, Document, DocumentChunk
+from .qdrant_client import QdrantManager, get_qdrant_manager
+from .search_optimizer import QdrantSearchOptimizer, SearchConfig, MetricType
+from database.models import VectorIndex, DocumentChunk
 from config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -55,78 +18,36 @@ settings = get_settings()
 
 class VectorStorageManager:
     """
-    Unified storage manager that coordinates FAISS and Qdrant operations.
+    Simplified Qdrant-only vector storage manager.
     
     Architecture:
-    - FAISS: High-performance similarity search with local indices
-    - Qdrant: Persistent vector storage with metadata and filtering
-    - PostgreSQL: Metadata and relationships
+    - Qdrant: Primary vector storage with integrated metadata and filtering
+    - PostgreSQL: Index metadata and relationships
+    
+    This eliminates the complexity of the dual FAISS/Qdrant system while
+    maintaining all functionality through Qdrant's comprehensive feature set.
     """
     
-    def __init__(self, storage_path: str = None):
-        """Initialize storage manager."""
-        self.storage_path = storage_path or "runtime/vector_storage"
-        self.faiss_indices: Dict[str, Any] = {}  # SearchOptimizer instances when available
+    def __init__(self):
+        """Initialize Qdrant-only storage manager."""
         self.qdrant_manager: Optional[QdrantManager] = None
-        self.vector_dependencies_available = VECTOR_DEPENDENCIES_AVAILABLE
-        
-        # Ensure storage directory exists
-        Path(self.storage_path).mkdir(parents=True, exist_ok=True)
+        self.search_optimizers: Dict[str, QdrantSearchOptimizer] = {}
         
         # Collection naming convention
         self.content_collection_suffix = "_content"
         self.context_collection_suffix = "_context"
     
-    def _check_vector_dependencies(self):
-        """Check if vector dependencies are available."""
-        if not self.vector_dependencies_available:
-            raise ImportError(
-                "Vector dependencies (numpy, faiss) are not available. "
-                "Please install them to use vector operations: "
-                "pip install numpy faiss-cpu"
-            )
-    
     async def initialize(self) -> bool:
-        """Initialize all storage backends."""
+        """Initialize Qdrant connection and discover existing collections."""
         try:
             # Initialize Qdrant connection
-            QdrantManager, get_qdrant_manager_func = _get_qdrant_manager()
-            if get_qdrant_manager_func:
-                try:
-                    self.qdrant_manager = get_qdrant_manager_func()
-                    await self.qdrant_manager.connect()
-                    logger.info("Qdrant connection established successfully")
-                except Exception as e:
-                    logger.warning(f"Failed to connect to Qdrant: {e}. Vector operations will be limited to FAISS only")
-                    self.qdrant_manager = None
-            else:
-                logger.warning("Qdrant client not available, vector operations will be limited to FAISS only")
-                self.qdrant_manager = None
+            self.qdrant_manager = get_qdrant_manager()
+            await self.qdrant_manager.connect()
+            logger.info("Qdrant connection established successfully")
             
-            # Check if we have any vector capabilities
-            if not self.vector_dependencies_available and not self.qdrant_manager:
-                logger.error("No vector dependencies available. Install numpy, faiss-cpu, and qdrant-client for full functionality")
-                return False
-                
-            # Load existing FAISS indices from disk
-            if self.vector_dependencies_available:
-                try:
-                    logger.info("Loading existing FAISS indices from disk...")
-                    loading_results = await self._load_existing_indices()
-                    
-                    if loading_results:
-                        successful_loads = sum(1 for success in loading_results.values() if success)
-                        total_indices = len(loading_results)
-                        if successful_loads > 0:
-                            logger.info(f"Loaded {successful_loads}/{total_indices} existing FAISS indices")
-                        else:
-                            logger.warning(f"Failed to load any of the {total_indices} discovered indices")
-                    else:
-                        logger.info("No existing FAISS indices found")
-                        
-                except Exception as e:
-                    logger.warning(f"Failed to load existing FAISS indices: {e}. New indices will work normally.")
-                
+            # Initialize search optimizers for existing collections
+            await self._discover_and_init_collections()
+            
             logger.info("Vector storage manager initialized successfully")
             return True
             
@@ -134,65 +55,114 @@ class VectorStorageManager:
             logger.error(f"Failed to initialize vector storage manager: {e}")
             return False
     
+    async def _discover_and_init_collections(self):
+        """Discover existing Qdrant collections and initialize search optimizers."""
+        try:
+            if not self.qdrant_manager:
+                return
+            
+            collections = await self.qdrant_manager.list_collections()
+            logger.info(f"Discovered {len(collections)} Qdrant collections: {collections}")
+            logger.info(f"Looking for collections with suffixes: '{self.content_collection_suffix}' and '{self.context_collection_suffix}'")
+            
+            # Group collections by index name
+            index_collections = {}
+            for collection_name in collections:
+                logger.debug(f"Processing collection: {collection_name}")
+                if collection_name.endswith(self.content_collection_suffix):
+                    index_name = collection_name[:-len(self.content_collection_suffix)]
+                    logger.debug(f"Found content collection for index '{index_name}': {collection_name}")
+                    if index_name not in index_collections:
+                        index_collections[index_name] = {}
+                    index_collections[index_name]['content'] = collection_name
+                elif collection_name.endswith(self.context_collection_suffix):
+                    index_name = collection_name[:-len(self.context_collection_suffix)]
+                    logger.debug(f"Found context collection for index '{index_name}': {collection_name}")
+                    if index_name not in index_collections:
+                        index_collections[index_name] = {}
+                    index_collections[index_name]['context'] = collection_name
+                else:
+                    logger.debug(f"Collection '{collection_name}' doesn't match expected suffixes, skipping")
+            
+            # logger.info(f"Grouped collections into {len(index_collections)} indices: {list(index_collections.keys())}")
+            
+            # Initialize search optimizers for discovered indices
+            for index_name, collections_dict in index_collections.items():
+                try:
+                    # logger.info(f"Initializing search optimizer for index '{index_name}' with collections: {collections_dict}")
+                    await self._init_search_optimizer_for_index(index_name, collections_dict)
+                    # logger.info(f"Successfully initialized search optimizer for index: {index_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to initialize search optimizer for {index_name}: {e}")
+            
+            # logger.info(f"Search optimizer initialization complete. Active optimizers: {len(self.search_optimizers)}")
+            # logger.info(f"Available optimizer keys: {list(self.search_optimizers.keys())}")
+                    
+        except Exception as e:
+            logger.error(f"Failed to discover collections: {e}")
+    
+    async def _init_search_optimizer_for_index(self, index_name: str, collections_dict: Dict[str, str]):
+        """Initialize search optimizers for a specific index."""
+        try:
+            # Get collection info to determine vector dimension
+            content_collection = collections_dict.get('content')
+            if not content_collection:
+                return
+            
+            collection_info = await self.qdrant_manager.get_collection_info(content_collection)
+            if not collection_info:
+                return
+            
+            vector_size = collection_info.get('config', {}).get('vector_size', 384)
+            
+            # Create search optimizers for content and context
+            if 'content' in collections_dict:
+                content_config = SearchConfig(
+                    dimension=vector_size,
+                    metric=MetricType.COSINE,
+                    collection_name=collections_dict['content']
+                )
+                content_optimizer = QdrantSearchOptimizer(
+                    config=content_config,
+                    qdrant_client=self.qdrant_manager.client
+                )
+                self.search_optimizers[f"{index_name}_content"] = content_optimizer
+            
+            if 'context' in collections_dict:
+                context_config = SearchConfig(
+                    dimension=vector_size,
+                    metric=MetricType.COSINE,
+                    collection_name=collections_dict['context']
+                )
+                context_optimizer = QdrantSearchOptimizer(
+                    config=context_config,
+                    qdrant_client=self.qdrant_manager.client
+                )
+                self.search_optimizers[f"{index_name}_context"] = context_optimizer
+                
+        except Exception as e:
+            logger.error(f"Failed to initialize search optimizer for {index_name}: {e}")
+    
     def _get_collection_names(self, index_name: str) -> Tuple[str, str]:
         """Get Qdrant collection names for content and context vectors."""
         content_collection = f"{index_name}{self.content_collection_suffix}"
         context_collection = f"{index_name}{self.context_collection_suffix}"
         return content_collection, context_collection
     
-    def _discover_existing_indices(self) -> List[str]:
-        """Discover existing FAISS index files and extract index names."""
-        try:
-            if not os.path.exists(self.storage_path):
-                logger.info(f"Storage path {self.storage_path} does not exist")
-                return []
-            
-            faiss_files = []
-            for filename in os.listdir(self.storage_path):
-                if filename.endswith('.faiss'):
-                    faiss_files.append(filename)
-            
-            # Extract unique index names from filenames
-            # Format: {index_name}_{type}.faiss (e.g., doc_29_content.faiss)
-            index_names = set()
-            for filename in faiss_files:
-                # Remove .faiss extension and split by last underscore
-                base_name = filename[:-6]  # Remove '.faiss'
-                if '_' in base_name:
-                    # Split at last underscore to separate index name from type
-                    index_name = '_'.join(base_name.split('_')[:-1])
-                    index_names.add(index_name)
-            
-            discovered = list(index_names)
-            logger.info(f"Discovered {len(discovered)} FAISS indices: {discovered}")
-            return discovered
-            
-        except Exception as e:
-            logger.error(f"Failed to discover existing indices: {e}")
-            return []
-    
-    def _get_faiss_paths(self, index_name: str) -> Tuple[str, str]:
-        """Get FAISS index file paths for content and context vectors."""
-        content_path = os.path.join(self.storage_path, f"{index_name}_content.faiss")
-        context_path = os.path.join(self.storage_path, f"{index_name}_context.faiss")
-        return content_path, context_path
-    
     async def create_index(
         self,
         index_name: str,
         embedding_dimension: int = 384,
-        faiss_index_type: str = "HNSW",
         user_id: int = None,
         document_id: int = None,
         db: Session = None
     ) -> bool:
         """
-        Create a new vector index with both FAISS and Qdrant backends.
+        Create a new vector index with Qdrant collections.
         
         Args:
             index_name: Unique name for the index
             embedding_dimension: Dimension of the embedding vectors
-            faiss_index_type: Type of FAISS index (FLAT, HNSW, IVF, etc.)
             user_id: ID of the user creating the index
             document_id: Optional document ID for document-specific indices
             db: Database session for metadata storage
@@ -201,52 +171,12 @@ class VectorStorageManager:
             True if index was created successfully
         """
         try:
-            # Lazy initialization - ensure qdrant_manager is initialized
-            if self.qdrant_manager is None:
+            if not self.qdrant_manager:
                 await self.initialize()
-                
-            # Check dependencies
-            self._check_vector_dependencies()
             
-            # Get SearchOptimizer class
-            SearchOptimizer = _get_search_optimizer()
-            if not SearchOptimizer:
-                raise ImportError("SearchOptimizer not available")
-            
-            # Create FAISS search optimizers with proper SearchConfig
-            from .search_optimizer import SearchConfig, IndexType, MetricType
-            
-            # Map string index type to enum
-            index_type_enum = IndexType.FLAT
-            if faiss_index_type.upper() == "HNSW":
-                index_type_enum = IndexType.HNSW
-            elif faiss_index_type.upper() == "IVF":
-                index_type_enum = IndexType.IVF
-            elif faiss_index_type.upper() == "IVF_PQ":
-                index_type_enum = IndexType.IVF_PQ
-            
-            content_config = SearchConfig(
-                dimension=embedding_dimension,
-                index_type=index_type_enum,
-                metric=MetricType.COSINE
-            )
-            
-            context_config = SearchConfig(
-                dimension=embedding_dimension,
-                index_type=index_type_enum,
-                metric=MetricType.COSINE
-            )
-            
-            content_optimizer = SearchOptimizer(content_config)
-            context_optimizer = SearchOptimizer(context_config)
-            
-            # Store FAISS optimizers
-            self.faiss_indices[f"{index_name}_content"] = content_optimizer
-            self.faiss_indices[f"{index_name}_context"] = context_optimizer
-            
-            # Create Qdrant collections
             content_collection, context_collection = self._get_collection_names(index_name)
             
+            # Create Qdrant collections
             await self.qdrant_manager.create_collection(
                 collection_name=content_collection,
                 vector_size=embedding_dimension
@@ -257,16 +187,38 @@ class VectorStorageManager:
                 vector_size=embedding_dimension
             )
             
+            # Create search optimizers
+            content_config = SearchConfig(
+                dimension=embedding_dimension,
+                metric=MetricType.COSINE,
+                collection_name=content_collection
+            )
+            content_optimizer = QdrantSearchOptimizer(
+                config=content_config,
+                qdrant_client=self.qdrant_manager.client
+            )
+            self.search_optimizers[f"{index_name}_content"] = content_optimizer
+            
+            context_config = SearchConfig(
+                dimension=embedding_dimension,
+                metric=MetricType.COSINE,
+                collection_name=context_collection
+            )
+            context_optimizer = QdrantSearchOptimizer(
+                config=context_config,
+                qdrant_client=self.qdrant_manager.client
+            )
+            self.search_optimizers[f"{index_name}_context"] = context_optimizer
+            
             # Save metadata to database if provided
             if db and user_id:
                 vector_index = VectorIndex(
                     index_name=index_name,
-                    index_type="combined",
+                    index_type="qdrant",
                     user_id=user_id,
                     document_id=document_id,
                     embedding_model="sentence-transformers/all-MiniLM-L6-v2",  # Default
                     embedding_dimension=embedding_dimension,
-                    faiss_index_type=faiss_index_type,
                     qdrant_collection_name=content_collection,
                     build_status="ready"
                 )
@@ -276,7 +228,7 @@ class VectorStorageManager:
                 
                 logger.info(f"Created vector index metadata in database: {index_name}")
             
-            logger.info(f"Created vector index: {index_name}")
+            logger.info(f"Created Qdrant-only vector index: {index_name}")
             return True
             
         except Exception as e:
@@ -292,7 +244,7 @@ class VectorStorageManager:
         chunk_ids: List[str] = None
     ) -> List[str]:
         """
-        Add vectors to both FAISS and Qdrant storage.
+        Add vectors to Qdrant collections.
         
         Args:
             index_name: Name of the target index
@@ -305,77 +257,53 @@ class VectorStorageManager:
             List of point IDs that were added
         """
         try:
-            # Lazy initialization - ensure qdrant_manager is initialized
-            if self.qdrant_manager is None:
+            if not self.qdrant_manager:
                 await self.initialize()
-                
-            # Check dependencies
-            self._check_vector_dependencies()
             
             if len(content_vectors) != len(context_vectors) or len(content_vectors) != len(metadata_list):
                 raise ValueError("All input lists must have the same length")
             
             # Generate chunk IDs if not provided
             if chunk_ids is None:
-                chunk_ids = [f"{index_name}_{i}_{datetime.now(timezone.utc).timestamp()}" 
-                           for i in range(len(content_vectors))]
+                import uuid
+                chunk_ids = [str(uuid.uuid4()) for _ in range(len(content_vectors))]
             
-            # Add to FAISS indices
-            content_optimizer = self.faiss_indices.get(f"{index_name}_content")
-            context_optimizer = self.faiss_indices.get(f"{index_name}_context")
+            # Get search optimizers
+            content_optimizer = self.search_optimizers.get(f"{index_name}_content")
+            context_optimizer = self.search_optimizers.get(f"{index_name}_context")
             
             if not content_optimizer or not context_optimizer:
                 raise ValueError(f"Index {index_name} not found. Create index first.")
             
-            # Convert to numpy arrays
-            content_vectors_np = np.array(content_vectors, dtype=np.float32)
-            context_vectors_np = np.array(context_vectors, dtype=np.float32)
+            # Add content vectors
+            content_metadata = []
+            for metadata in metadata_list:
+                enhanced_metadata = metadata.copy()
+                enhanced_metadata['vector_type'] = 'content'
+                enhanced_metadata['index_name'] = index_name
+                enhanced_metadata['added_at'] = datetime.now(timezone.utc).isoformat()
+                content_metadata.append(enhanced_metadata)
             
-            # Add to FAISS
-            content_optimizer.add_vectors(content_vectors_np, metadata_list)
-            context_optimizer.add_vectors(context_vectors_np, metadata_list)
-            
-            # Add to Qdrant collections
-            content_collection, context_collection = self._get_collection_names(index_name)
-            
-            # Add enhanced metadata for Qdrant
-            enhanced_metadata = []
-            for i, metadata in enumerate(metadata_list):
-                enhanced = metadata.copy()
-                enhanced.update({
-                    "chunk_id": chunk_ids[i],
-                    "index_name": index_name,
-                    "vector_type": "content",
-                    "added_at": datetime.now(timezone.utc).isoformat()
-                })
-                enhanced_metadata.append(enhanced)
-            
-            # Upsert to Qdrant
-            content_ids = await self.qdrant_manager.upsert_vectors(
-                collection_name=content_collection,
+            await content_optimizer.add_vectors(
                 vectors=content_vectors,
-                payloads=enhanced_metadata,
-                ids=chunk_ids
+                metadata_list=content_metadata,
+                chunk_ids=chunk_ids
             )
             
-            # Update metadata for context vectors
-            for metadata in enhanced_metadata:
-                metadata["vector_type"] = "context"
+            # Add context vectors
+            context_metadata = []
+            for metadata in metadata_list:
+                enhanced_metadata = metadata.copy()
+                enhanced_metadata['vector_type'] = 'context'
+                enhanced_metadata['index_name'] = index_name
+                enhanced_metadata['added_at'] = datetime.now(timezone.utc).isoformat()
+                context_metadata.append(enhanced_metadata)
             
-            context_ids = await self.qdrant_manager.upsert_vectors(
-                collection_name=context_collection,
+            await context_optimizer.add_vectors(
                 vectors=context_vectors,
-                payloads=enhanced_metadata,
-                ids=chunk_ids
+                metadata_list=context_metadata,
+                chunk_ids=chunk_ids
             )
-            
-            # Save FAISS indices to disk after adding vectors
-            try:
-                await self.save_index(index_name)
-                logger.info(f"Saved FAISS indices to disk for index: {index_name}")
-            except Exception as e:
-                logger.warning(f"Failed to save FAISS indices to disk: {e}")
-                # Continue execution - vectors are still accessible in memory
             
             logger.info(f"Added {len(content_vectors)} vectors to index {index_name}")
             return chunk_ids
@@ -392,10 +320,10 @@ class VectorStorageManager:
         limit: int = 10,
         score_threshold: float = None,
         metadata_filters: Dict[str, Any] = None,
-        use_faiss: bool = True
+        use_faiss: bool = None  # Ignored - kept for backward compatibility
     ) -> List[Dict[str, Any]]:
         """
-        Search for similar vectors using FAISS or Qdrant.
+        Search for similar vectors using Qdrant.
         
         Args:
             index_name: Name of the index to search
@@ -404,63 +332,81 @@ class VectorStorageManager:
             limit: Maximum number of results
             score_threshold: Minimum similarity score threshold
             metadata_filters: Filters to apply to metadata
-            use_faiss: Whether to use FAISS (faster) or Qdrant (with filters)
+            use_faiss: Ignored (backward compatibility)
             
         Returns:
             List of search results with scores and metadata
         """
         try:
-            if use_faiss and not metadata_filters:
-                # Use FAISS for fast search without filters
-                optimizer_key = f"{index_name}_{vector_type}"
-                optimizer = self.faiss_indices.get(optimizer_key)
+            optimizer_key = f"{index_name}_{vector_type}"
+            optimizer = self.search_optimizers.get(optimizer_key)
+            
+            if not optimizer:
+                available = list(self.search_optimizers.keys())
+                raise ValueError(f"Search optimizer '{optimizer_key}' not found. Available: {available}")
+            
+            # Use Qdrant search
+            results = await optimizer.search(
+                query_vector=query_vector,
+                limit=limit,
+                min_score=score_threshold or 0.0,
+                filters=metadata_filters
+            )
+            
+            # Format results for backward compatibility
+            formatted_results = []
+            for chunk, score in results:
+                # Get content from chunk
+                content = chunk.text if hasattr(chunk, 'text') and chunk.text else ""
                 
-                if not optimizer:
-                    raise ValueError(f"FAISS index {optimizer_key} not found")
+                # If no content in chunk, try to fetch from database
+                if not content and hasattr(chunk, 'chunk_id') and chunk.chunk_id:
+                    content = await self._get_chunk_content(chunk.chunk_id)
                 
-                query_vector_np = np.array([query_vector], dtype=np.float32)
-                results = optimizer.search(
-                    query_vectors=query_vector_np,
-                    k=limit,
-                    score_threshold=score_threshold
-                )
+                # Create metadata dict
+                metadata = {
+                    "chunk_id": getattr(chunk, 'chunk_id', 'unknown'),
+                    "document_id": getattr(chunk, 'document_id', None),
+                    "start_char": getattr(chunk, 'start_idx', None),
+                    "end_char": getattr(chunk, 'end_idx', None)
+                }
                 
-                # Format results
-                formatted_results = []
-                if results and len(results) > 0:
-                    for i, (distance, metadata) in enumerate(zip(results[0]["distances"], results[0]["metadata"])):
-                        formatted_results.append({
-                            "score": 1.0 - distance,  # Convert distance to similarity
-                            "metadata": metadata,
-                            "source": "faiss"
-                        })
+                # Add chunk metadata if available
+                if hasattr(chunk, 'metadata') and chunk.metadata:
+                    metadata.update(chunk.metadata)
                 
-                return formatted_results
-                
-            else:
-                # Use Qdrant for search with filters
-                collection_name = (f"{index_name}{self.content_collection_suffix}" 
-                                 if vector_type == "content" 
-                                 else f"{index_name}{self.context_collection_suffix}")
-                
-                results = await self.qdrant_manager.search_vectors(
-                    collection_name=collection_name,
-                    query_vector=query_vector,
-                    limit=limit,
-                    score_threshold=score_threshold,
-                    filters=metadata_filters
-                )
-                
-                # Format results
-                for result in results:
-                    result["source"] = "qdrant"
-                    result["metadata"] = result.get("payload", {})
-                
-                return results
-                
+                formatted_results.append({
+                    "score": float(score),
+                    "content": content,
+                    "metadata": metadata,
+                    "source": "qdrant"
+                })
+            
+            return formatted_results
+            
         except Exception as e:
             logger.error(f"Failed to search vectors in index {index_name}: {e}")
             return []
+    
+    async def _get_chunk_content(self, chunk_id: str) -> str:
+        """Get chunk text content from database by chunk_id."""
+        try:
+            from database.connection import get_db
+            db = next(get_db())
+            
+            try:
+                chunk = db.query(DocumentChunk).filter(DocumentChunk.chunk_id == chunk_id).first()
+                if chunk and chunk.text:
+                    return chunk.text
+                else:
+                    logger.warning(f"No text content found for chunk_id: {chunk_id}")
+                    return f"[Content not available for chunk {chunk_id}]"
+            finally:
+                db.close()
+                
+        except Exception as e:
+            logger.error(f"Failed to fetch content for chunk_id {chunk_id}: {e}")
+            return f"[Error fetching content for chunk {chunk_id}]"
     
     async def contextual_search(
         self,
@@ -494,8 +440,7 @@ class VectorStorageManager:
                 query_vector=query_vector,
                 vector_type="content",
                 limit=limit * 2,  # Get more results for better combination
-                metadata_filters=metadata_filters,
-                use_faiss=not metadata_filters  # Use FAISS if no filters
+                metadata_filters=metadata_filters
             )
             
             context_results = await self.search_vectors(
@@ -503,8 +448,7 @@ class VectorStorageManager:
                 query_vector=query_vector,
                 vector_type="context",
                 limit=limit * 2,
-                metadata_filters=metadata_filters,
-                use_faiss=not metadata_filters
+                metadata_filters=metadata_filters
             )
             
             # Combine results by chunk_id
@@ -517,8 +461,7 @@ class VectorStorageManager:
                     combined_scores[chunk_id] = {
                         "content_score": result["score"],
                         "context_score": 0.0,
-                        "metadata": result["metadata"],
-                        "source": result.get("source", "unknown")
+                        "result": result
                     }
             
             # Process context results
@@ -531,8 +474,7 @@ class VectorStorageManager:
                         combined_scores[chunk_id] = {
                             "content_score": 0.0,
                             "context_score": result["score"],
-                            "metadata": result["metadata"],
-                            "source": result.get("source", "unknown")
+                            "result": result
                         }
             
             # Calculate combined scores
@@ -544,14 +486,11 @@ class VectorStorageManager:
                 )
                 
                 if score_threshold is None or combined_score >= score_threshold:
-                    final_results.append({
-                        "chunk_id": chunk_id,
-                        "score": combined_score,
-                        "content_score": scores["content_score"],
-                        "context_score": scores["context_score"],
-                        "metadata": scores["metadata"],
-                        "source": scores["source"]
-                    })
+                    result = scores["result"].copy()
+                    result["score"] = combined_score
+                    result["content_score"] = scores["content_score"]
+                    result["context_score"] = scores["context_score"]
+                    final_results.append(result)
             
             # Sort by combined score and return top results
             final_results.sort(key=lambda x: x["score"], reverse=True)
@@ -561,147 +500,18 @@ class VectorStorageManager:
             logger.error(f"Failed to perform contextual search in index {index_name}: {e}")
             return []
     
-    async def save_index(self, index_name: str) -> bool:
-        """Save FAISS indices to disk."""
-        try:
-            content_path, context_path = self._get_faiss_paths(index_name)
-            
-            content_optimizer = self.faiss_indices.get(f"{index_name}_content")
-            context_optimizer = self.faiss_indices.get(f"{index_name}_context")
-            
-            if content_optimizer:
-                content_optimizer.save_index(content_path)
-                logger.info(f"Saved content index to {content_path}")
-            
-            if context_optimizer:
-                context_optimizer.save_index(context_path)
-                logger.info(f"Saved context index to {context_path}")
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to save index {index_name}: {e}")
-            return False
-    
-    async def load_index(self, index_name: str, embedding_dimension: int = 384) -> bool:
-        """Load FAISS indices from disk."""
-        try:
-            content_path, context_path = self._get_faiss_paths(index_name)
-
-            # Get SearchOptimizer class
-            SearchOptimizer = _get_search_optimizer()
-            if not SearchOptimizer:
-                raise ImportError("SearchOptimizer not available")
-            
-            if os.path.exists(content_path):
-                from .search_optimizer import SearchConfig, IndexType, MetricType
-                content_config = SearchConfig(
-                    dimension=embedding_dimension,
-                    index_type=IndexType.FLAT,  # Default to FLAT for loading
-                    metric=MetricType.COSINE
-                )
-                content_optimizer = SearchOptimizer(content_config)
-                content_optimizer.load_index(content_path)
-                self.faiss_indices[f"{index_name}_content"] = content_optimizer
-                logger.info(f"Loaded content index from {content_path}")
-            
-            if os.path.exists(context_path):
-                from .search_optimizer import SearchConfig, IndexType, MetricType
-                context_config = SearchConfig(
-                    dimension=embedding_dimension,
-                    index_type=IndexType.FLAT,  # Default to FLAT for loading
-                    metric=MetricType.COSINE
-                )
-                context_optimizer = SearchOptimizer(context_config)
-                context_optimizer.load_index(context_path)
-                self.faiss_indices[f"{index_name}_context"] = context_optimizer
-                logger.info(f"Loaded context index from {context_path}")
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to load index {index_name}: {e}")
-            return False
-    
-    async def _load_existing_indices(self, db: Session = None) -> Dict[str, bool]:
-        """Load all discovered FAISS indices from disk into memory."""
-        try:
-            # Discover all existing indices
-            discovered_indices = self._discover_existing_indices()
-            
-            if not discovered_indices:
-                logger.info("No existing FAISS indices found to load")
-                return {}
-            
-            loading_results = {}
-            
-            # Get database session if not provided
-            if db is None:
-                from database.connection import get_db
-                db = next(get_db())
-                should_close_db = True
-            else:
-                should_close_db = False
-            
-            try:
-                for index_name in discovered_indices:
-                    try:
-                        # Get embedding dimension from database
-                        vector_index = db.query(VectorIndex).filter(
-                            VectorIndex.index_name == index_name
-                        ).first()
-                        
-                        embedding_dimension = 384  # Default
-                        if vector_index and vector_index.embedding_dimension:
-                            embedding_dimension = vector_index.embedding_dimension
-                        
-                        # Load the index
-                        success = await self.load_index(index_name, embedding_dimension)
-                        loading_results[index_name] = success
-                        
-                        if success:
-                            logger.info(f"Successfully loaded index: {index_name}")
-                        else:
-                            logger.warning(f"Failed to load index: {index_name}")
-                            
-                    except Exception as e:
-                        logger.error(f"Error loading index {index_name}: {e}")
-                        loading_results[index_name] = False
-                
-                # Log summary
-                successful = sum(1 for success in loading_results.values() if success)
-                total = len(loading_results)
-                logger.info(f"Index loading complete: {successful}/{total} indices loaded successfully")
-                
-                return loading_results
-                
-            finally:
-                if should_close_db:
-                    db.close()
-                    
-        except Exception as e:
-            logger.error(f"Failed to load existing indices: {e}")
-            return {}
-    
     async def delete_index(self, index_name: str, db: Session = None) -> bool:
-        """Delete an index from all storage backends."""
+        """Delete an index from Qdrant and database."""
         try:
-            # Remove from FAISS
+            # Remove from search optimizers
             content_key = f"{index_name}_content"
             context_key = f"{index_name}_context"
             
-            if content_key in self.faiss_indices:
-                del self.faiss_indices[content_key]
+            if content_key in self.search_optimizers:
+                del self.search_optimizers[content_key]
             
-            if context_key in self.faiss_indices:
-                del self.faiss_indices[context_key]
-            
-            # Delete FAISS files
-            content_path, context_path = self._get_faiss_paths(index_name)
-            for path in [content_path, context_path]:
-                if os.path.exists(path):
-                    os.remove(path)
-                    logger.info(f"Deleted FAISS index file: {path}")
+            if context_key in self.search_optimizers:
+                del self.search_optimizers[context_key]
             
             # Delete Qdrant collections
             content_collection, context_collection = self._get_collection_names(index_name)
@@ -724,61 +534,24 @@ class VectorStorageManager:
             logger.error(f"Failed to delete index {index_name}: {e}")
             return False
     
-    async def soft_delete_index(self, index_name: str) -> bool:
-        """
-        Soft delete an index by marking it inactive without destroying data.
-        Removes from memory but keeps FAISS files and Qdrant collections for restoration.
-        """
-        try:
-            # Remove from active FAISS memory indices
-            content_key = f"{index_name}_content"
-            context_key = f"{index_name}_context"
-            
-            if content_key in self.faiss_indices:
-                del self.faiss_indices[content_key]
-                logger.info(f"Removed FAISS content index from memory: {content_key}")
-            
-            if context_key in self.faiss_indices:
-                del self.faiss_indices[context_key]
-                logger.info(f"Removed FAISS context index from memory: {context_key}")
-            
-            # Note: We deliberately do NOT delete FAISS files or Qdrant collections
-            # This allows for restoration of soft-deleted documents
-            
-            # Database status is updated by the calling method in document_version_manager
-            logger.info(f"Soft deleted vector index: {index_name}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to soft delete index {index_name}: {e}")
-            return False
-    
     async def get_index_stats(self, index_name: str) -> Dict[str, Any]:
         """Get statistics for a vector index."""
         try:
             stats = {
                 "index_name": index_name,
-                "timestamp": datetime.now(timezone.utc).isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "type": "qdrant_only"
             }
             
-            # FAISS stats
-            content_optimizer = self.faiss_indices.get(f"{index_name}_content")
-            context_optimizer = self.faiss_indices.get(f"{index_name}_context")
-            
-            stats["faiss"] = {
-                "content_vectors": content_optimizer.get_index_size() if content_optimizer else 0,
-                "context_vectors": context_optimizer.get_index_size() if context_optimizer else 0
-            }
-            
-            # Qdrant stats
+            # Get Qdrant collection stats
             content_collection, context_collection = self._get_collection_names(index_name)
             
             content_info = await self.qdrant_manager.get_collection_info(content_collection)
             context_info = await self.qdrant_manager.get_collection_info(context_collection)
             
-            stats["qdrant"] = {
-                "content_collection": content_info,
-                "context_collection": context_info
+            stats["collections"] = {
+                "content": content_info,
+                "context": context_info
             }
             
             return stats
@@ -787,50 +560,12 @@ class VectorStorageManager:
             logger.error(f"Failed to get stats for index {index_name}: {e}")
             return {"error": str(e)}
     
-    async def get_faiss_stats(self) -> Dict[str, Any]:
-        """Get FAISS indices statistics for health monitoring."""
-        try:
-            total_indices = len(self.faiss_indices)
-            active_indices = 0
-            index_details = {}
-            
-            for index_name, optimizer in self.faiss_indices.items():
-                try:
-                    if hasattr(optimizer, 'index') and optimizer.index is not None:
-                        active_indices += 1
-                        index_details[index_name] = {
-                            'vectors_count': optimizer.index.ntotal if hasattr(optimizer.index, 'ntotal') else 0,
-                            'dimension': optimizer.config.dimension if hasattr(optimizer, 'config') else 'unknown',
-                            'is_trained': optimizer.index.is_trained if hasattr(optimizer.index, 'is_trained') else True
-                        }
-                    else:
-                        index_details[index_name] = {'status': 'inactive'}
-                except Exception as e:
-                    index_details[index_name] = {'error': str(e)}
-            
-            return {
-                'total_indices': total_indices,
-                'active_indices': active_indices,
-                'health_ratio': active_indices / total_indices if total_indices > 0 else 1.0,
-                'indices': index_details
-            }
-            
-        except Exception as e:
-            logger.error(f"Failed to get FAISS stats: {e}")
-            return {
-                'total_indices': 0,
-                'active_indices': 0,
-                'health_ratio': 0.0,
-                'error': str(e)
-            }
-    
     async def get_performance_stats(self) -> Dict[str, Any]:
         """Get performance statistics for health monitoring."""
         try:
             stats = {
-                'faiss_indices_count': len(self.faiss_indices),
-                'storage_path': self.storage_path,
-                'storage_path_exists': Path(self.storage_path).exists()
+                'storage_type': 'qdrant_only',
+                'search_optimizers_count': len(self.search_optimizers),
             }
             
             # Add Qdrant connection status
@@ -840,17 +575,6 @@ class VectorStorageManager:
             else:
                 stats['qdrant_connected'] = False
                 stats['qdrant_collections'] = 0
-            
-            # Check storage directory size
-            try:
-                storage_size = sum(
-                    f.stat().st_size for f in Path(self.storage_path).rglob('*') if f.is_file()
-                )
-                stats['storage_size_bytes'] = storage_size
-                stats['storage_size_mb'] = round(storage_size / (1024 * 1024), 2)
-            except Exception:
-                stats['storage_size_bytes'] = 0
-                stats['storage_size_mb'] = 0
             
             return stats
             
@@ -863,7 +587,7 @@ class VectorStorageManager:
         if self.qdrant_manager:
             await self.qdrant_manager.disconnect()
         
-        self.faiss_indices.clear()
+        self.search_optimizers.clear()
         logger.info("Vector storage manager cleaned up")
 
 
@@ -874,15 +598,8 @@ def get_storage_manager() -> VectorStorageManager:
     """Get the global vector storage manager instance."""
     global _storage_manager
     if _storage_manager is None:
-        # Use configured FAISS directory from settings
-        try:
-            from config import get_settings
-            settings = get_settings()
-            storage_path = settings.FAISS_INDEX_DIRECTORY
-        except Exception as e:
-            logger.warning(f"Could not load FAISS directory from config: {e}. Using default.")
-            storage_path = None
-        _storage_manager = VectorStorageManager(storage_path=storage_path)
+        _storage_manager = VectorStorageManager()
+        # Note: Initialization must be done async, caller should call initialize() if needed
     return _storage_manager
 
 async def init_storage_manager() -> VectorStorageManager:

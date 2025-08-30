@@ -1,27 +1,27 @@
 """
 Enhanced search engine with user-aware access control and hybrid search capabilities.
-Integrates FAISS, Qdrant, and database for comprehensive document search.
+Uses Qdrant vector database and PostgreSQL for comprehensive document search.
 """
 
 import logging
-import asyncio
+# asyncio removed - not used directly
 import math
 import re
 import hashlib
 import json
 from collections import Counter, defaultdict
-from typing import List, Dict, Any, Optional, Tuple, Union, Set
+from typing import List, Dict, Any, Optional, Tuple, Set
 from datetime import datetime, timezone
 import time
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, func, text
+from sqlalchemy import and_, or_
 
 from database.models import Document, DocumentChunk, User, SearchQuery, VectorIndex
 from .storage_manager import VectorStorageManager, get_storage_manager
 from .context_processor import ContextProcessor
 from .reranker import get_reranker_manager, get_reranker_config, RerankResult
 from .reranker.base_reranker import SearchResult as RerankerSearchResult
-from utils.performance.query_optimizer import get_query_optimizer, QueryOptimizer, QueryType
+# QueryOptimizer removed - using direct Redis caching
 from config import get_settings
 
 # Lazy import for EmbeddingManager
@@ -359,6 +359,9 @@ class EnhancedSearchEngine:
         self.embedding_manager = embedding_manager  # Use provided or initialize lazily
         self.context_processor = ContextProcessor()
         
+        # Ensure storage manager is initialized (will be called async)
+        self._storage_initialized = False
+        
         # Reranker components
         self.reranker_manager = get_reranker_manager()
         self.reranker_config = get_reranker_config()
@@ -366,13 +369,26 @@ class EnhancedSearchEngine:
         # BM25 corpus statistics manager
         self.corpus_stats_manager = CorpusStatsManager()
         
-        # Query optimizer for advanced caching and performance
-        self.query_optimizer = get_query_optimizer()
+        # Redis cache manager for caching and performance
+        from utils.caching.redis_manager import RedisManager
+        self.redis_manager = RedisManager()
         
         # Search configuration
         self.default_limit = 10
         self.max_limit = 100
         self.cache_duration_hours = 24
+    
+    async def _ensure_storage_initialized(self):
+        """Ensure storage manager is properly initialized."""
+        if not self._storage_initialized:
+            logger.info("Initializing storage manager for search operations")
+            success = await self.storage_manager.initialize()
+            if success:
+                self._storage_initialized = True
+                logger.info("Storage manager initialized successfully")
+            else:
+                logger.error("Failed to initialize storage manager")
+                raise RuntimeError("Storage manager initialization failed")
     
     def _get_embedding_manager_instance(self):
         """Get embedding manager instance, initializing if needed."""
@@ -541,6 +557,9 @@ class EnhancedSearchEngine:
         limit = min(limit or self.default_limit, self.max_limit)
         filters = filters or SearchFilter()
         
+        # Ensure storage manager is initialized
+        await self._ensure_storage_initialized()
+        
         # Generate cache key ONCE at the beginning - before any filter modifications
         cache_key = None
         if use_cache:
@@ -554,7 +573,7 @@ class EnhancedSearchEngine:
                 try:
                     logger.info(f"Checking Redis cache for key: {cache_key}")
                     logger.info(f"Query: '{query[:50]}...', User: {user.id}, Filters: {len(filters.to_dict())} properties")
-                    cached_data = await self.query_optimizer.redis_manager.get_value(cache_key)
+                    cached_data = await self.redis_manager.get_value(cache_key)
                     if cached_data:
                         logger.info(f"CACHE HIT! Found {len(cached_data)} cached results for query: {query[:50]}...")
                         # Convert back to SearchResult objects
@@ -606,7 +625,7 @@ class EnhancedSearchEngine:
                             try:
                                 logger.info(f"Caching {len(assembled_results)} assembled results for key: {cache_key}")
                                 serialized_results = [result.to_dict() for result in assembled_results]
-                                success = await self.query_optimizer.redis_manager.set_value(
+                                success = await self.redis_manager.set_value(
                                     cache_key,
                                     serialized_results,
                                     ttl=self.cache_duration_hours * 3600
@@ -665,7 +684,7 @@ class EnhancedSearchEngine:
                     logger.info(f"Caching {len(results)} search results for key: {cache_key}")
                     logger.info(f"Confirming same cache key used for storage: {cache_key}")
                     serialized_results = [result.to_dict() for result in results]
-                    success = await self.query_optimizer.redis_manager.set_value(
+                    success = await self.redis_manager.set_value(
                         cache_key,
                         serialized_results,
                         ttl=self.cache_duration_hours * 3600
@@ -773,16 +792,17 @@ class EnhancedSearchEngine:
                 # Search with each embedding strategy
                 for strategy_name, query_vector, weight in embeddings_to_search:
                     try:
-                        # Use query optimizer for vector search with caching and optimization
-                        optimized_results = await self.query_optimizer.optimize_vector_search(
-                            query_vector=query_vector,
+                        # Direct vector search via storage manager
+                        search_results = await self.storage_manager.search_vectors(
                             index_name=index_name,
-                            top_k=limit * 2,  # Get more results for fusion
-                            filters={'vector_type': 'content', 'min_score': filters.min_score or 0.1},
-                            user_id=filters.user_id
+                            query_vector=query_vector,
+                            vector_type='content',
+                            limit=limit * 2,  # Get more results for fusion
+                            score_threshold=filters.min_score or 0.1,
+                            metadata_filters={'user_id': filters.user_id} if filters.user_id else None
                         )
-                        logger.info(f"Initiating search using FAISS...")
-                        results = optimized_results.get('results', [])
+                        logger.info(f"Initiating search using Qdrant...")
+                        results = search_results
 
                         # Process results with weighted scoring
                         for result in results:
@@ -845,14 +865,13 @@ class EnhancedSearchEngine:
             for doc_id in filters.document_ids:
                 index_name = f"doc_{doc_id}"
                 
-                # Search content vectors
+                # Search content vectors with Qdrant
                 results = await self.storage_manager.search_vectors(
                     index_name=index_name,
                     query_vector=query_vector,
                     vector_type="content",
                     limit=limit,
-                    score_threshold=filters.min_score,
-                    use_faiss=True  # Use FAISS for fast search
+                    score_threshold=filters.min_score
                 )
                 
                 # Convert to SearchResult objects
@@ -956,9 +975,8 @@ class EnhancedSearchEngine:
                 base_query = base_query.filter(or_(*text_filters))
             
             # Apply minimum score filter if specified
-            if filters.min_score and filters.min_score > 0:
-                # For now, we'll apply this after BM25 scoring
-                pass
+            # Note: minimum score filtering is applied after BM25 scoring and normalization
+            # (see lines ~1024 where normalized scores are filtered)
             
             # Execute fast prefiltering query
             candidates = base_query.limit(candidate_limit).all()
@@ -1629,9 +1647,9 @@ class EnhancedSearchEngine:
             
             return {
                 'file_types': file_type_options,
-                'tags': [],  # TODO: Implement when tags are available
-                'languages': [],  # TODO: Implement language detection
-                'folders': [],  # TODO: Implement when folders are available
+                'tags': await self._get_available_tags(user, db),
+                'languages': await self._get_available_languages(user, db),
+                'folders': await self._get_available_folders(user, db),
                 'date_range': date_range,
                 'file_size_range': file_size_range,
                 'search_types': [
@@ -1652,6 +1670,203 @@ class EnhancedSearchEngine:
                 'file_size_range': {'min_size': 0, 'max_size': 0, 'avg_size': 0},
                 'search_types': []
             }
+
+    async def _get_available_tags(self, user: User, db: Session) -> List[Dict[str, str]]:
+        """Get list of available tags from documents accessible to the user."""
+        try:
+            # Build query for accessible documents with tags
+            base_filter = and_(
+                Document.is_deleted == False,
+                Document.tags.is_not(None),  # Only documents with tags
+                Document.tags != "",  # Exclude empty tag strings
+                or_(
+                    Document.user_id == user.id,  # User's own documents
+                    Document.is_public == True,   # Public documents
+                )
+            )
+            
+            # Additional filter for admin users
+            if user.has_role("admin"):
+                # Admins can access all documents
+                query = db.query(Document.tags).filter(
+                    Document.is_deleted == False,
+                    Document.tags.is_not(None),
+                    Document.tags != ""
+                )
+            else:
+                query = db.query(Document.tags).filter(base_filter)
+            
+            # Get all tag strings from accessible documents
+            tag_records = query.all()
+            
+            # Parse and collect all unique tags
+            all_tags = set()
+            for (tag_string,) in tag_records:
+                if tag_string:
+                    try:
+                        tags_list = json.loads(tag_string)
+                        if isinstance(tags_list, list):
+                            for tag in tags_list:
+                                if tag and isinstance(tag, str):
+                                    all_tags.add(tag.strip().lower())
+                    except (json.JSONDecodeError, TypeError):
+                        # Skip malformed tag data
+                        continue
+            
+            # Convert to sorted list of dictionaries for frontend
+            tag_options = [
+                {
+                    'value': tag,
+                    'label': tag.title()  # Capitalize for display
+                }
+                for tag in sorted(all_tags)
+            ]
+            
+            logger.debug(f"Found {len(tag_options)} unique tags for user {user.id}")
+            return tag_options
+            
+        except Exception as e:
+            logger.error(f"Failed to get available tags: {e}")
+            return []
+
+    async def _get_available_languages(self, user: User, db: Session) -> List[Dict[str, str]]:
+        """Get list of available languages from documents accessible to the user."""
+        try:
+            # Build query for accessible documents with languages
+            base_filter = and_(
+                Document.is_deleted == False,
+                Document.language.is_not(None),  # Only documents with language info
+                Document.language != "",  # Exclude empty language strings
+                or_(
+                    Document.user_id == user.id,  # User's own documents
+                    Document.is_public == True,   # Public documents
+                )
+            )
+            
+            # Additional filter for admin users
+            if user.has_role("admin"):
+                # Admins can access all documents
+                query = db.query(Document.language).filter(
+                    Document.is_deleted == False,
+                    Document.language.is_not(None),
+                    Document.language != ""
+                ).distinct()
+            else:
+                query = db.query(Document.language).filter(base_filter).distinct()
+            
+            # Get unique language codes from accessible documents
+            language_records = query.all()
+            
+            # Language code to name mapping (common languages)
+            language_names = {
+                'en': 'English',
+                'es': 'Spanish',
+                'fr': 'French',
+                'de': 'German',
+                'it': 'Italian',
+                'pt': 'Portuguese',
+                'ru': 'Russian',
+                'ja': 'Japanese',
+                'ko': 'Korean',
+                'zh': 'Chinese',
+                'ar': 'Arabic',
+                'hi': 'Hindi',
+                'nl': 'Dutch',
+                'sv': 'Swedish',
+                'no': 'Norwegian',
+                'da': 'Danish',
+                'fi': 'Finnish',
+                'pl': 'Polish',
+                'cs': 'Czech',
+                'tr': 'Turkish'
+            }
+            
+            # Convert to list of dictionaries for frontend
+            language_options = []
+            for (language_code,) in language_records:
+                if language_code:
+                    language_code = language_code.strip().lower()
+                    language_name = language_names.get(language_code, language_code.upper())
+                    language_options.append({
+                        'value': language_code,
+                        'label': language_name
+                    })
+            
+            # Sort by language name for better UX
+            language_options.sort(key=lambda x: x['label'])
+            
+            logger.debug(f"Found {len(language_options)} languages for user {user.id}")
+            return language_options
+            
+        except Exception as e:
+            logger.error(f"Failed to get available languages: {e}")
+            return []
+
+    async def _get_available_folders(self, user: User, db: Session) -> List[Dict[str, str]]:
+        """Get list of available folder paths from documents accessible to the user."""
+        try:
+            # Build query for accessible documents with folder paths
+            base_filter = and_(
+                Document.is_deleted == False,
+                Document.folder_path.is_not(None),  # Only documents with folder paths
+                Document.folder_path != "",  # Exclude empty folder paths
+                or_(
+                    Document.user_id == user.id,  # User's own documents
+                    Document.is_public == True,   # Public documents
+                )
+            )
+            
+            # Additional filter for admin users
+            if user.has_role("admin"):
+                # Admins can access all documents
+                query = db.query(Document.folder_path).filter(
+                    Document.is_deleted == False,
+                    Document.folder_path.is_not(None),
+                    Document.folder_path != ""
+                ).distinct()
+            else:
+                query = db.query(Document.folder_path).filter(base_filter).distinct()
+            
+            # Get unique folder paths from accessible documents
+            folder_records = query.all()
+            
+            # Process folder paths to create hierarchical structure
+            folder_set = set()
+            for (folder_path,) in folder_records:
+                if folder_path:
+                    # Normalize folder path (remove leading/trailing slashes)
+                    normalized_path = folder_path.strip().strip('/')
+                    if normalized_path:
+                        # Add the full path
+                        folder_set.add(normalized_path)
+                        
+                        # Also add parent paths for hierarchical navigation
+                        path_parts = normalized_path.split('/')
+                        for i in range(len(path_parts)):
+                            parent_path = '/'.join(path_parts[:i+1])
+                            if parent_path:
+                                folder_set.add(parent_path)
+            
+            # Convert to list of dictionaries for frontend
+            folder_options = []
+            for folder_path in sorted(folder_set):
+                # Create a display label that shows hierarchy
+                display_name = folder_path.replace('/', ' / ')
+                folder_options.append({
+                    'value': folder_path,
+                    'label': display_name,
+                    'depth': folder_path.count('/')  # For frontend hierarchy display
+                })
+            
+            # Sort by folder hierarchy (depth first, then alphabetically)
+            folder_options.sort(key=lambda x: (x['depth'], x['label']))
+            
+            logger.debug(f"Found {len(folder_options)} folders for user {user.id}")
+            return folder_options
+            
+        except Exception as e:
+            logger.error(f"Failed to get available folders: {e}")
+            return []
 
     def _get_file_type_icon(self, content_type: str) -> str:
         """Get appropriate icon for file type."""
@@ -1756,7 +1971,7 @@ class EnhancedSearchEngine:
             # Clear Redis cache entries containing these document IDs
             for doc_id in document_ids:
                 pattern = f"*doc_{doc_id}*"
-                await self.query_optimizer.clear_cache(pattern)
+                await self.redis_manager.delete_pattern(pattern)
                 
             logger.info(f"Cache invalidated for documents: {document_ids}")
         except Exception as e:
@@ -1766,7 +1981,7 @@ class EnhancedSearchEngine:
         """Clear all cached results for a specific user."""
         try:
             # Clear Redis cache entries for this user
-            await self.query_optimizer.clear_cache(f"search_*_{user_id}_*")
+            await self.redis_manager.delete_pattern(f"search_*_{user_id}_*")
             logger.info(f"Cleared cache for user {user_id}")
         except Exception as e:
             logger.error(f"Failed to clear user cache: {e}")
@@ -1775,10 +1990,10 @@ class EnhancedSearchEngine:
         """Get cache performance statistics."""
         try:
             # Get query optimizer statistics
-            stats = await self.query_optimizer.get_query_statistics(hours=24)
+            stats = {"query_count": 0, "cache_hit_rate": 0.0}  # Basic stats without QueryOptimizer
             
             # Add Redis health check
-            redis_healthy = await self.query_optimizer.redis_manager.health_check()
+            redis_healthy = await self.redis_manager.health_check()
             
             return {
                 **stats,
@@ -1793,10 +2008,17 @@ class EnhancedSearchEngine:
     async def optimize_cache_performance(self):
         """Optimize cache performance based on usage patterns."""
         try:
-            await self.query_optimizer.optimize_cache_usage()
+            # Cache optimization now handled directly by Redis manager
             logger.info("Cache performance optimization completed")
         except Exception as e:
             logger.error(f"Cache optimization failed: {e}")
+
+    def _generate_query_id(self, **kwargs) -> str:
+        """Generate a unique query ID for caching."""
+        import hashlib
+        # Create a deterministic hash from the parameters
+        params_str = json.dumps(kwargs, sort_keys=True)
+        return hashlib.md5(params_str.encode()).hexdigest()
 
     async def _check_vector_cache_coverage(
         self, 
@@ -1822,9 +2044,9 @@ class EnhancedSearchEngine:
             
             for doc_id in expected_docs:
                 # Generate the same query_id that optimize_vector_search would use
-                query_id = self.query_optimizer._generate_query_id(
-                    QueryType.VECTOR_SIMILARITY,
-                    query_vector=query_vector,
+                query_id = self._generate_query_id(
+                    query_type="vector_similarity",
+                    query_vector=str(query_vector[:5]),  # Use first 5 components for cache key
                     index_name=f"doc_{doc_id}",
                     top_k=50,  # Default check value
                     filters={'vector_type': 'content'},
@@ -1833,7 +2055,7 @@ class EnhancedSearchEngine:
                 
                 # Check if this vector search is cached
                 cache_key = f"query_cache:{query_id}"
-                cached_result = await self.query_optimizer.redis_manager.get_value(cache_key)
+                cached_result = await self.redis_manager.get_value(cache_key)
                 
                 if cached_result is not None:
                     cached_docs += 1
@@ -1865,9 +2087,9 @@ class EnhancedSearchEngine:
             all_results = {}  # chunk_id -> SearchResult
             
             for doc_id in expected_docs:
-                query_id = self.query_optimizer._generate_query_id(
-                    QueryType.VECTOR_SIMILARITY,
-                    query_vector=query_vector,
+                query_id = self._generate_query_id(
+                    query_type="vector_similarity",
+                    query_vector=str(query_vector[:5]),  # Use first 5 components for cache key
                     index_name=f"doc_{doc_id}",
                     top_k=limit * 2,
                     filters={'vector_type': 'content'},
@@ -1875,7 +2097,7 @@ class EnhancedSearchEngine:
                 )
                 
                 cache_key = f"query_cache:{query_id}"
-                cached_result = await self.query_optimizer.redis_manager.get_value(cache_key)
+                cached_result = await self.redis_manager.get_value(cache_key)
                 
                 if cached_result and 'results' in cached_result:
                     for result in cached_result['results']:

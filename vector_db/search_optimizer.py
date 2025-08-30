@@ -1,216 +1,308 @@
-from typing import List, Tuple, Optional, Dict
+"""
+Qdrant-based vector search optimizer with advanced search capabilities.
+Replaces the previous dual FAISS/Qdrant architecture with Qdrant-only implementation.
+"""
+
+from typing import List, Tuple, Optional, Dict, Any
 import logging
 from dataclasses import dataclass
 from enum import Enum
 import time
+import json
 
+# Qdrant client imports
 try:
-    import numpy as np
-    import faiss
-    SEARCH_AVAILABLE = True
+    from qdrant_client import QdrantClient
+    from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, SearchParams, Range, MatchValue
+    QDRANT_AVAILABLE = True
 except ImportError as e:
-    logging.warning(f"Search optimization dependencies not available: {e}. Install required dependencies: numpy, faiss-cpu")
-    np = None
-    faiss = None
-    SEARCH_AVAILABLE = False
+    logging.warning(f"Qdrant client not available: {e}. Install required dependency: qdrant-client")
+    QdrantClient = None
+    Distance = None
+    VectorParams = None
+    PointStruct = None
+    Filter = None
+    FieldCondition = None
+    SearchParams = None
+    Range = None
+    MatchValue = None
+    QDRANT_AVAILABLE = False
 
 from .chunking import Chunk
 
 class MetricType(Enum):
     COSINE = "cosine"
-    L2 = "l2"
-    INNER_PRODUCT = "inner_product"
+    EUCLIDEAN = "euclidean"
+    DOT_PRODUCT = "dot"
 
 class IndexType(Enum):
-    FLAT = "flat"
-    IVF = "ivf"
-    HNSW = "hnsw"
-    IVF_PQ = "ivf_pq"
+    """Index types for backward compatibility (Qdrant handles optimization internally)"""
+    HNSW = "hnsw"  # Qdrant's default
+    FLAT = "flat"  # For exact search if needed
 
 @dataclass
 class SearchConfig:
+    """Configuration for Qdrant-based search operations."""
     dimension: int
-    index_type: IndexType
-    metric: MetricType
-    n_clusters: int = 100
-    n_probes: int = 8  # Number of clusters to search
-    ef_search: int = 64  # HNSW search depth
-    ef_construction: int = 200  # HNSW construction depth
-    pq_m: int = 8  # Number of PQ sub-vectors
-    nlist: Optional[int] = None  # Number of IVF clusters, computed automatically if None
+    metric: MetricType = MetricType.COSINE
+    collection_name: str = "default"
+    # Qdrant-specific parameters
+    hnsw_config: Dict[str, Any] = None
+    quantization_config: Dict[str, Any] = None
+    
+    def __post_init__(self):
+        # Set default HNSW config if not provided
+        if self.hnsw_config is None:
+            self.hnsw_config = {
+                "m": 16,  # Number of edges per node
+                "ef_construct": 100,  # Size of the dynamic candidate list
+                "full_scan_threshold": 10000,  # Switch to exact search for small collections
+                "max_indexing_threads": 0,  # Use all available cores
+                "on_disk": False  # Keep in memory for better performance
+            }
 
 class SearchError(Exception):
     """Raised when search operation fails."""
     pass
 
-class SearchOptimizer:
-    """Enhanced vector similarity search with multiple index types and optimizations."""
+class QdrantSearchOptimizer:
+    """
+    Qdrant-based vector search optimizer with advanced filtering and scoring capabilities.
     
-    def __init__(self, config: SearchConfig):
-        if not SEARCH_AVAILABLE:
+    This replaces the previous dual FAISS/Qdrant architecture with a single, robust
+    Qdrant-only implementation that eliminates metadata synchronization issues.
+    """
+    
+    def __init__(self, config: SearchConfig, qdrant_client: QdrantClient = None):
+        if not QDRANT_AVAILABLE:
             raise ImportError(
-                "numpy and faiss are required for search optimization functionality. "
-                "Install them with: pip install numpy faiss-cpu"
+                "qdrant-client is required for search optimization functionality. "
+                "Install it with: pip install qdrant-client"
             )
         
         self.config = config
-        self.index = None
-        self.chunks = []
-        self.id_to_chunk: Dict[int, Chunk] = {}
+        self.client = qdrant_client
+        self.collection_name = config.collection_name
         self.logger = logging.getLogger(__name__)
         self._setup_logging()
         
     def _setup_logging(self):
-        """Configure logging with performance metrics."""
-        handler = logging.StreamHandler()
-        formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        )
-        handler.setFormatter(formatter)
-        self.logger.addHandler(handler)
-        self.logger.setLevel(logging.INFO)
-
-    def _normalize_vectors(self, vectors: np.ndarray) -> np.ndarray:
-        """Normalize vectors for cosine similarity."""
-        return vectors / np.linalg.norm(vectors, axis=1)[:, np.newaxis]
-
-    def _create_index(self) -> faiss.Index:
-        """Create an optimized FAISS index based on configuration."""
-        d = self.config.dimension
-        
-        if self.config.metric == MetricType.COSINE:
-            metric = faiss.METRIC_INNER_PRODUCT
-        else:
-            metric = faiss.METRIC_L2
-
-        if self.config.index_type == IndexType.FLAT:
-            return faiss.IndexFlatIP(d) if metric == faiss.METRIC_INNER_PRODUCT else faiss.IndexFlatL2(d)
-            
-        elif self.config.index_type == IndexType.HNSW:
-            index = faiss.IndexHNSWFlat(d, self.config.ef_construction, metric)
-            index.hnsw.efSearch = self.config.ef_search
-            return index
-            
-        elif self.config.index_type == IndexType.IVF:
-            # Compute optimal number of clusters if not specified
-            if not self.config.nlist:
-                self.config.nlist = int(np.sqrt(len(self.chunks)))
-            
-            quantizer = faiss.IndexFlatL2(d)
-            index = faiss.IndexIVFFlat(quantizer, d, self.config.nlist, metric)
-            index.nprobe = self.config.n_probes
-            return index
-            
-        elif self.config.index_type == IndexType.IVF_PQ:
-            quantizer = faiss.IndexFlatL2(d)
-            index = faiss.IndexIVFPQ(
-                quantizer, d, self.config.nlist or int(np.sqrt(len(self.chunks))),
-                self.config.pq_m, 8  # 8 bits per component
+        """Configure logging for search operations."""
+        if not self.logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter(
+                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
             )
-            index.nprobe = self.config.n_probes
-            return index
-            
-        raise ValueError(f"Unsupported index type: {self.config.index_type}")
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+            self.logger.setLevel(logging.INFO)
 
-    def build_index(self, chunks: List[Chunk]):
-        """Build optimized search index from chunks."""
+    def _get_qdrant_distance(self) -> Distance:
+        """Convert MetricType to Qdrant Distance."""
+        if self.config.metric == MetricType.COSINE:
+            return Distance.COSINE
+        elif self.config.metric == MetricType.EUCLIDEAN:
+            return Distance.EUCLID
+        elif self.config.metric == MetricType.DOT_PRODUCT:
+            return Distance.DOT
+        else:
+            return Distance.COSINE  # Default fallback
+
+    async def create_collection(self) -> bool:
+        """Create Qdrant collection with optimized settings."""
         try:
-            start_time = time.time()
-            self.chunks = chunks
+            if not self.client:
+                raise ValueError("Qdrant client not initialized")
             
-            # Create ID mapping
-            self.id_to_chunk = {i: chunk for i, chunk in enumerate(chunks)}
+            # Check if collection already exists
+            collections = self.client.get_collections()
+            existing_names = [col.name for col in collections.collections]
             
-            # Stack embeddings
-            embeddings = np.vstack([chunk.embedding for chunk in chunks])
+            if self.collection_name in existing_names:
+                self.logger.info(f"Collection {self.collection_name} already exists")
+                return True
             
-            # Normalize if using cosine similarity
-            if self.config.metric == MetricType.COSINE:
-                embeddings = self._normalize_vectors(embeddings)
+            # Create collection with vector configuration
+            vector_config = VectorParams(
+                size=self.config.dimension,
+                distance=self._get_qdrant_distance(),
+                hnsw_config=self.config.hnsw_config,
+                quantization_config=self.config.quantization_config
+            )
             
-            # Create and train index
-            self.index = self._create_index()
+            self.client.create_collection(
+                collection_name=self.collection_name,
+                vectors_config=vector_config
+            )
             
-            if not self.index.is_trained:
-                self.logger.info("Training index...")
-                self.index.train(embeddings)
-            
-            self.logger.info("Adding vectors to index...")
-            self.index.add(embeddings)
-            
-            build_time = time.time() - start_time
-            self.logger.info(f"Index built in {build_time:.2f} seconds")
-            
-            # Log index statistics
-            self._log_index_stats()
+            self.logger.info(f"Created Qdrant collection: {self.collection_name}")
+            return True
             
         except Exception as e:
-            self.logger.error(f"Failed to build search index: {str(e)}")
-            raise SearchError(f"Index building failed: {str(e)}")
+            self.logger.error(f"Failed to create collection {self.collection_name}: {e}")
+            raise SearchError(f"Collection creation failed: {e}")
 
-    def _log_index_stats(self):
-        """Log important index statistics."""
-        self.logger.info(f"Index type: {self.config.index_type}")
-        self.logger.info(f"Number of vectors: {len(self.chunks)}")
-        self.logger.info(f"Vector dimension: {self.config.dimension}")
-        
-        if hasattr(self.index, 'nprobe'):
-            self.logger.info(f"Number of probes: {self.index.nprobe}")
-        if hasattr(self.index, 'hnsw'):
-            self.logger.info(f"HNSW ef_search: {self.index.hnsw.efSearch}")
-
-    def search(
+    async def add_vectors(
         self,
-        query_embedding: np.ndarray,
-        k: int = 5,
-        min_score: float = -1.0
-    ) -> List[Tuple[Chunk, float]]:
+        vectors: List[List[float]],
+        metadata_list: List[Dict[str, Any]],
+        chunk_ids: List[str] = None
+    ) -> List[str]:
         """
-        Enhanced search for most similar chunks to query embedding.
+        Add vectors to Qdrant collection with metadata as payloads.
         
         Args:
-            query_embedding: Query vector
-            k: Number of results to return
-            min_score: Minimum similarity score threshold
+            vectors: List of embedding vectors
+            metadata_list: List of metadata dictionaries
+            chunk_ids: Optional list of chunk IDs (will generate if not provided)
             
         Returns:
-            List of (chunk, score) tuples sorted by similarity
+            List of point IDs that were added
+        """
+        try:
+            if not self.client:
+                raise ValueError("Qdrant client not initialized")
+            
+            if len(vectors) != len(metadata_list):
+                raise ValueError("Vectors and metadata lists must have the same length")
+            
+            # Generate chunk IDs if not provided
+            if chunk_ids is None:
+                import uuid
+                chunk_ids = [str(uuid.uuid4()) for _ in range(len(vectors))]
+            
+            # Create points for Qdrant
+            points = []
+            for i, (vector, metadata, chunk_id) in enumerate(zip(vectors, metadata_list, chunk_ids)):
+                # Ensure metadata includes chunk_id
+                enhanced_metadata = metadata.copy()
+                enhanced_metadata['chunk_id'] = chunk_id
+                enhanced_metadata['added_at'] = time.time()
+                
+                point = PointStruct(
+                    id=chunk_id,  # Use chunk_id as the point ID
+                    vector=vector,
+                    payload=enhanced_metadata
+                )
+                points.append(point)
+            
+            # Upsert points to collection
+            self.client.upsert(
+                collection_name=self.collection_name,
+                points=points
+            )
+            
+            self.logger.info(f"Added {len(points)} vectors to collection {self.collection_name}")
+            return chunk_ids
+            
+        except Exception as e:
+            self.logger.error(f"Failed to add vectors: {e}")
+            raise SearchError(f"Adding vectors failed: {e}")
+
+    async def search(
+        self,
+        query_vector: List[float],
+        limit: int = 10,
+        min_score: float = 0.0,
+        filters: Dict[str, Any] = None,
+        search_params: Dict[str, Any] = None
+    ) -> List[Tuple[Chunk, float]]:
+        """
+        Search for similar vectors in Qdrant collection.
+        
+        Args:
+            query_vector: Query embedding vector
+            limit: Maximum number of results to return
+            min_score: Minimum similarity score threshold
+            filters: Metadata filters to apply
+            search_params: Additional search parameters for Qdrant
+            
+        Returns:
+            List of (Chunk, score) tuples sorted by similarity
         """
         try:
             start_time = time.time()
             
-            # Normalize query if using cosine similarity
-            if self.config.metric == MetricType.COSINE:
-                query_embedding = self._normalize_vectors(
-                    query_embedding.reshape(1, -1)
-                )
+            if not self.client:
+                raise ValueError("Qdrant client not initialized")
             
-            # Perform search
-            distances, indices = self.index.search(
-                query_embedding.reshape(1, -1), k
+            # Build filter conditions
+            qdrant_filter = None
+            if filters:
+                conditions = []
+                for key, value in filters.items():
+                    if isinstance(value, list):
+                        # Handle list values (IN operator)
+                        for v in value:
+                            conditions.append(FieldCondition(key=key, match=MatchValue(value=v)))
+                    elif isinstance(value, dict) and 'range' in value:
+                        # Handle range filters
+                        range_config = value['range']
+                        conditions.append(
+                            FieldCondition(
+                                key=key,
+                                range=Range(
+                                    gte=range_config.get('gte'),
+                                    lte=range_config.get('lte'),
+                                    gt=range_config.get('gt'),
+                                    lt=range_config.get('lt')
+                                )
+                            )
+                        )
+                    else:
+                        # Handle exact match
+                        conditions.append(FieldCondition(key=key, match=MatchValue(value=value)))
+                
+                if conditions:
+                    qdrant_filter = Filter(must=conditions)
+            
+            # Configure search parameters
+            if search_params is None:
+                search_params = {}
+            
+            qdrant_search_params = SearchParams(
+                hnsw_ef=search_params.get('hnsw_ef', 128),  # Size of the dynamic candidate list
+                exact=search_params.get('exact', False)     # Use exact search if needed
             )
             
-            # Process results
-            results = []
-            for idx, distance in zip(indices[0], distances[0]):
-                if idx != -1:  # Skip invalid results
-                    # Convert distance to similarity score and normalize to [0, 1] range
-                    if self.config.metric == MetricType.COSINE:
-                        # Cosine similarity is already in [-1, 1], normalize to [0, 1]
-                        score = max(0.0, distance)  # Cosine scores should be positive for good matches
-                    else:
-                        # Convert L2 distance to similarity score [0, 1]
-                        score = 1 / (1 + distance)
-                    
-                    if score >= min_score:
-                        results.append((self.id_to_chunk[idx], float(score)))
+            # Perform search
+            search_results = self.client.search(
+                collection_name=self.collection_name,
+                query_vector=query_vector,
+                query_filter=qdrant_filter,
+                limit=limit,
+                score_threshold=min_score,
+                search_params=qdrant_search_params,
+                with_payload=True,
+                with_vectors=False  # We don't need vectors in results
+            )
             
-            # Sort by score in descending order
-            results.sort(key=lambda x: x[1], reverse=True)
+            # Convert results to Chunk objects
+            results = []
+            for result in search_results:
+                try:
+                    payload = result.payload or {}
+                    
+                    # Create Chunk object from payload
+                    chunk = Chunk(
+                        document_id=payload.get('document_id', 0),
+                        chunk_id=payload.get('chunk_id', str(result.id)),
+                        start_idx=payload.get('start_char', 0),
+                        end_idx=payload.get('end_char', 0),
+                        text=payload.get('text', ''),
+                        metadata=payload,
+                        embedding=None  # Don't include embedding vector in memory
+                    )
+                    
+                    results.append((chunk, float(result.score)))
+                    
+                except Exception as e:
+                    self.logger.warning(f"Failed to process search result {result.id}: {e}")
+                    continue
             
             search_time = time.time() - start_time
             self.logger.debug(
-                f"Search completed in {search_time:.4f} seconds, "
+                f"Qdrant search completed in {search_time:.4f} seconds, "
                 f"found {len(results)} results"
             )
             
@@ -220,19 +312,23 @@ class SearchOptimizer:
             self.logger.error(f"Search operation failed: {str(e)}")
             raise SearchError(f"Search failed: {str(e)}")
 
-    def batch_search(
+    async def batch_search(
         self,
-        query_embeddings: np.ndarray,
-        k: int = 5,
-        min_score: float = -1.0
+        query_vectors: List[List[float]],
+        limit: int = 10,
+        min_score: float = 0.0,
+        filters: Dict[str, Any] = None,
+        search_params: Dict[str, Any] = None
     ) -> List[List[Tuple[Chunk, float]]]:
         """
         Perform batch search for multiple query vectors.
         
         Args:
-            query_embeddings: Matrix of query vectors
-            k: Number of results per query
+            query_vectors: List of query embedding vectors
+            limit: Maximum number of results per query
             min_score: Minimum similarity score threshold
+            filters: Metadata filters to apply
+            search_params: Additional search parameters
             
         Returns:
             List of search results for each query
@@ -240,267 +336,113 @@ class SearchOptimizer:
         try:
             start_time = time.time()
             
-            # Normalize queries if using cosine similarity
-            if self.config.metric == MetricType.COSINE:
-                query_embeddings = self._normalize_vectors(query_embeddings)
-            
-            # Perform batch search
-            distances, indices = self.index.search(query_embeddings, k)
-            
-            # Process results for each query
+            # For now, perform individual searches
+            # Qdrant supports batch search, but this approach gives us more control
             batch_results = []
-            for query_distances, query_indices in zip(distances, indices):
-                results = []
-                for idx, distance in zip(query_indices, query_distances):
-                    if idx != -1:
-                        # Normalize score consistently with single search
-                        if self.config.metric == MetricType.COSINE:
-                            score = max(0.0, distance)
-                        else:
-                            score = 1 / (1 + distance)
-                        if score >= min_score:
-                            results.append((self.id_to_chunk[idx], float(score)))
-                results.sort(key=lambda x: x[1], reverse=True)
+            for query_vector in query_vectors:
+                results = await self.search(
+                    query_vector=query_vector,
+                    limit=limit,
+                    min_score=min_score,
+                    filters=filters,
+                    search_params=search_params
+                )
                 batch_results.append(results)
             
             batch_time = time.time() - start_time
             self.logger.debug(
                 f"Batch search completed in {batch_time:.4f} seconds, "
-                f"processed {len(query_embeddings)} queries"
+                f"processed {len(query_vectors)} queries"
             )
             
             return batch_results
             
         except Exception as e:
-            self.logger.error(f"Batch search operation failed: {str(e)}")
+            self.logger.error(f"Batch search failed: {str(e)}")
             raise SearchError(f"Batch search failed: {str(e)}")
 
-    def contextual_search(
-        self,
-        query_embedding: np.ndarray,
-        context_embedding: np.ndarray,
-        k: int = 5,
-        filters: Optional[Dict] = None,
-        content_weight: float = 0.7,
-        context_weight: float = 0.3
-    ) -> List[Tuple[Chunk, float]]:
-        """
-        Perform contextual search using both content and context embeddings.
-        """
+    async def get_collection_info(self) -> Dict[str, Any]:
+        """Get information about the Qdrant collection."""
         try:
-            # Search in content space
-            content_results = self.search(
-                query_embedding,
-                k=k * 2,  # Get more results for reranking
-                min_score=-1.0
-            )
+            if not self.client:
+                raise ValueError("Qdrant client not initialized")
             
-            # Search in context space
-            context_results = self.search(
-                context_embedding,
-                k=k * 2,
-                min_score=-1.0
-            )
+            collection_info = self.client.get_collection(self.collection_name)
             
-            # Combine results with weights
-            combined_scores = {}
-            
-            # Process content results
-            for chunk, score in content_results:
-                if self._apply_filters(chunk, filters):
-                    chunk_id = f"{chunk.start_idx}_{chunk.end_idx}"
-                    combined_scores[chunk_id] = {
-                        "chunk": chunk,
-                        "score": score * content_weight
-                    }
-            
-            # Process context results
-            for chunk, score in context_results:
-                if self._apply_filters(chunk, filters):
-                    chunk_id = f"{chunk.start_idx}_{chunk.end_idx}"
-                    if chunk_id in combined_scores:
-                        combined_scores[chunk_id]["score"] += score * context_weight
-                    else:
-                        combined_scores[chunk_id] = {
-                            "chunk": chunk,
-                            "score": score * context_weight
-                        }
-            
-            # Convert to list and sort
-            results = [
-                (item["chunk"], item["score"])
-                for item in combined_scores.values()
-            ]
-            results.sort(key=lambda x: x[1], reverse=True)
-            
-            return results[:k]
+            return {
+                "name": self.collection_name,
+                "vectors_count": collection_info.vectors_count,
+                "indexed_vectors_count": collection_info.indexed_vectors_count,
+                "points_count": collection_info.points_count,
+                "segments_count": collection_info.segments_count,
+                "config": {
+                    "vector_size": collection_info.config.params.vectors.size,
+                    "distance": str(collection_info.config.params.vectors.distance),
+                    "hnsw_config": collection_info.config.params.vectors.hnsw_config,
+                    "optimizer_config": collection_info.config.optimizer_config,
+                },
+                "status": str(collection_info.status)
+            }
             
         except Exception as e:
-            self.logger.error(f"Contextual search failed: {str(e)}")
-            raise SearchError(f"Contextual search failed: {str(e)}")
+            self.logger.error(f"Failed to get collection info: {e}")
+            return {"error": str(e)}
 
-    def batch_contextual_search(
-        self,
-        query_embeddings: np.ndarray,
-        context_embeddings: np.ndarray,
-        k: int = 5,
-        filters: Optional[Dict] = None,
-        content_weight: float = 0.7,
-        context_weight: float = 0.3
-    ) -> List[List[Tuple[Chunk, float]]]:
-        """
-        Perform batch contextual search for multiple queries.
-        """
+    async def delete_collection(self) -> bool:
+        """Delete the Qdrant collection."""
         try:
-            # Batch search in content space
-            content_results = self.batch_search(
-                query_embeddings,
-                k=k * 2
-            )
+            if not self.client:
+                raise ValueError("Qdrant client not initialized")
             
-            # Batch search in context space
-            context_results = self.batch_search(
-                context_embeddings,
-                k=k * 2
-            )
-            
-            # Combine results for each query
-            batch_results = []
-            for i in range(len(query_embeddings)):
-                results = self._combine_results(
-                    content_results[i],
-                    context_results[i],
-                    content_weight,
-                    context_weight,
-                    filters
-                )
-                batch_results.append(results[:k])
-            
-            return batch_results
-            
-        except Exception as e:
-            self.logger.error(f"Batch contextual search failed: {str(e)}")
-            raise SearchError(f"Batch contextual search failed: {str(e)}")
-
-    def _combine_results(
-        self,
-        content_results: List[Tuple[Chunk, float]],
-        context_results: List[Tuple[Chunk, float]],
-        content_weight: float,
-        context_weight: float,
-        filters: Optional[Dict]
-    ) -> List[Tuple[Chunk, float]]:
-        """Combine and rerank results from content and context search."""
-        combined_scores = {}
-        
-        # Process content results
-        for chunk, score in content_results:
-            if self._apply_filters(chunk, filters):
-                chunk_id = f"{chunk.start_idx}_{chunk.end_idx}"
-                combined_scores[chunk_id] = {
-                    "chunk": chunk,
-                    "score": score * content_weight
-                }
-        
-        # Process context results
-        for chunk, score in context_results:
-            if self._apply_filters(chunk, filters):
-                chunk_id = f"{chunk.start_idx}_{chunk.end_idx}"
-                if chunk_id in combined_scores:
-                    combined_scores[chunk_id]["score"] += score * context_weight
-                else:
-                    combined_scores[chunk_id] = {
-                        "chunk": chunk,
-                        "score": score * context_weight
-                    }
-        
-        # Convert to list and sort
-        results = [
-            (item["chunk"], item["score"])
-            for item in combined_scores.values()
-        ]
-        results.sort(key=lambda x: x[1], reverse=True)
-        
-        return results
-
-    def _apply_filters(self, chunk: Chunk, filters: Optional[Dict]) -> bool:
-        """Apply metadata filters to chunk."""
-        if not filters:
+            self.client.delete_collection(self.collection_name)
+            self.logger.info(f"Deleted collection: {self.collection_name}")
             return True
             
-        for key, value in filters.items():
-            if key not in chunk.metadata:
-                return False
-            if isinstance(value, list):
-                if chunk.metadata[key] not in value:
-                    return False
-            elif chunk.metadata[key] != value:
-                return False
-        
-        return True
-
-    def add_vectors(self, vectors: np.ndarray, metadata_list: List[Dict]):
-        """Add vectors directly to the FAISS index."""
-        try:
-            if self.index is None:
-                # Create index if it doesn't exist
-                self.config.dimension = vectors.shape[1]
-                self.index = self._create_index()
-                
-                if not self.index.is_trained:
-                    self.index.train(vectors)
-            
-            # Normalize if using cosine similarity
-            if self.config.metric == MetricType.COSINE:
-                vectors = self._normalize_vectors(vectors)
-            
-            self.index.add(vectors)
-            
-            # Store metadata (simple approach for now)
-            start_id = len(self.chunks)
-            for i, metadata in enumerate(metadata_list):
-                # Create dummy chunk for metadata storage
-                chunk = Chunk(
-                    document_id=metadata.get('document_id', 0),
-                    chunk_id=metadata.get('chunk_id', f'chunk_{start_id + i}'),
-                    start_idx=0,
-                    end_idx=0,
-                    text=metadata.get('text', ''),
-                    embedding=vectors[i],
-                    metadata=metadata
-                )
-                self.chunks.append(chunk)
-                self.id_to_chunk[start_id + i] = chunk
-                
         except Exception as e:
-            self.logger.error(f"Failed to add vectors: {e}")
-            raise SearchError(f"Adding vectors failed: {e}")
+            self.logger.error(f"Failed to delete collection: {e}")
+            return False
 
-    def save_index(self, file_path: str):
-        """Save FAISS index to disk."""
+    async def get_vector_count(self) -> int:
+        """Get the number of vectors in the collection."""
         try:
-            if self.index is None:
-                raise ValueError("No index to save")
-            
-            faiss.write_index(self.index, file_path)
-            self.logger.info(f"Index saved to {file_path}")
-            
-        except Exception as e:
-            self.logger.error(f"Failed to save index: {e}")
-            raise SearchError(f"Saving index failed: {e}")
-
-    def load_index(self, file_path: str):
-        """Load FAISS index from disk."""
-        try:
-            self.index = faiss.read_index(file_path)
-            self.logger.info(f"Index loaded from {file_path}")
-            
-        except Exception as e:
-            self.logger.error(f"Failed to load index: {e}")
-            raise SearchError(f"Loading index failed: {e}")
-
-    def get_index_size(self) -> int:
-        """Get the number of vectors in the index."""
-        if self.index is None:
+            info = await self.get_collection_info()
+            return info.get("vectors_count", 0)
+        except Exception:
             return 0
-        return self.index.ntotal
+
+    def validate_health(self) -> Dict[str, Any]:
+        """Validate search optimizer health and return diagnostic information."""
+        try:
+            if not self.client:
+                return {
+                    "status": "error",
+                    "message": "Qdrant client not initialized",
+                    "collection_name": self.collection_name
+                }
+            
+            # Try to get collection info as health check
+            try:
+                collection_info = self.client.get_collection(self.collection_name)
+                return {
+                    "status": "healthy",
+                    "collection_name": self.collection_name,
+                    "vectors_count": collection_info.vectors_count,
+                    "indexed_vectors_count": collection_info.indexed_vectors_count,
+                    "collection_status": str(collection_info.status)
+                }
+            except Exception as e:
+                return {
+                    "status": "degraded",
+                    "message": f"Collection access failed: {e}",
+                    "collection_name": self.collection_name
+                }
+                
+        except Exception as e:
+            return {
+                "status": "error",
+                "message": f"Health check failed: {e}",
+                "collection_name": self.collection_name
+            }
+
+# Backward compatibility - alias to new class name
+SearchOptimizer = QdrantSearchOptimizer

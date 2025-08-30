@@ -17,7 +17,6 @@ spacy>=3.7.0
 tokenizers>=0.15.0  # Required by transformers for chunking
 
 # Vector Search & Similarity
-faiss-cpu>=1.7.4
 qdrant-client>=1.6.0
 scipy>=1.11.0  # Required for advanced vector operations
 

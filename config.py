@@ -174,7 +174,6 @@ class Settings(BaseSettings):
     EXPORT_COMPRESSION_DEFAULT: bool = Field(default=True, env="EXPORT_COMPRESSION_DEFAULT")
     
     # Vector Database Storage - Updated for organized runtime structure
-    FAISS_INDEX_DIRECTORY: str = Field(default="./runtime/storage/faiss_index", env="FAISS_INDEX_DIRECTORY")
     QDRANT_STORAGE_DIRECTORY: str = Field(default="./runtime/storage/qdrant_storage", env="QDRANT_STORAGE_DIRECTORY")
     EMBEDDINGS_CACHE_DIRECTORY: str = Field(default="./runtime/storage/embeddings", env="EMBEDDINGS_CACHE_DIRECTORY")
     VECTOR_INDICES_DIRECTORY: str = Field(default="./runtime/storage/vector_indices", env="VECTOR_INDICES_DIRECTORY")

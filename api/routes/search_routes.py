@@ -1,19 +1,17 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
-from datetime import datetime
+# datetime removed - not used
 from pydantic import BaseModel, Field
 from ..middleware.auth import get_current_active_user
 from ..controllers import search_controller
 from ..schemas.search_schemas import (
     SearchQuery,
     SearchResponse,
-    SearchFilters,
-    SearchResult,
     convert_search_response_to_api_format,
     convert_api_filters_to_search_filter
 )
-from vector_db.search_engine import EnhancedSearchEngine, SearchType, SearchFilter
-from vector_db.storage_manager import get_storage_manager, init_storage_manager
+from vector_db.search_engine import EnhancedSearchEngine, SearchType
+from vector_db.storage_manager import get_storage_manager
 from vector_db.embedding_manager import EnhancedEmbeddingManager
 from database.connection import get_db
 import warnings
@@ -180,7 +178,7 @@ async def semantic_search(
     """
     try:
         # Get search engine components
-        storage_manager = init_storage_manager()
+        storage_manager = get_storage_manager()
         embedding_manager = EnhancedEmbeddingManager.create_default_manager()
         search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
         
@@ -234,7 +232,7 @@ async def hybrid_search(
     """
     try:
         # Get search engine components
-        storage_manager = init_storage_manager()
+        storage_manager = get_storage_manager()
         embedding_manager = EnhancedEmbeddingManager.create_default_manager()
         search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
         
@@ -290,7 +288,7 @@ async def contextual_search(
     """
     try:
         # Get search engine components
-        storage_manager = init_storage_manager()
+        storage_manager = get_storage_manager()
         embedding_manager = EnhancedEmbeddingManager.create_default_manager()
         search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
         

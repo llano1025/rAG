@@ -580,7 +580,6 @@ class EnhancedEmbeddingManager:
                         await storage_manager.create_index(
                             index_name=index_name,
                             embedding_dimension=self.get_embedding_dimension(),
-                            faiss_index_type="HNSW",
                             user_id=document.user_id,
                             document_id=document.id,
                             db=db

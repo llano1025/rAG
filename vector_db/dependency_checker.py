@@ -18,11 +18,6 @@ class DependencyChecker:
             'pip_name': 'numpy>=1.24.0',
             'description': 'Required for vector operations and array processing'
         },
-        'faiss': {
-            'import_name': 'faiss',
-            'pip_name': 'faiss-cpu>=1.7.4',
-            'description': 'Required for fast similarity search and indexing'
-        },
         'transformers': {
             'import_name': 'transformers',
             'pip_name': 'transformers>=4.35.0',

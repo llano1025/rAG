@@ -24,7 +24,6 @@ class VectorHealthStatus:
     """Vector database specific health status indicators."""
     
     def __init__(self):
-        self.faiss_status = HealthStatus.HEALTHY
         self.qdrant_status = HealthStatus.HEALTHY
         self.database_status = HealthStatus.HEALTHY
         self.storage_manager_status = HealthStatus.HEALTHY
@@ -36,11 +35,10 @@ class VectorHealthChecker:
     Comprehensive health checker for vector database components.
     
     Monitors:
-    - FAISS index health and performance
     - Qdrant collection health and connectivity
     - Database connectivity and consistency
     - Storage manager functionality
-    - Index synchronization status
+    - Vector index status
     """
     
     def __init__(self, storage_manager: VectorStorageManager = None):
@@ -79,10 +77,6 @@ class VectorHealthChecker:
             results['qdrant'] = qdrant_result
             self._update_overall_status(overall_status, qdrant_result['status'])
             
-            # Check FAISS index health
-            faiss_result = await self._check_faiss_health()
-            results['faiss'] = faiss_result
-            self._update_overall_status(overall_status, faiss_result['status'])
             
             # Check storage manager functionality
             storage_result = await self._check_storage_manager(db)
@@ -212,44 +206,6 @@ class VectorHealthChecker:
                 }
             }
     
-    async def _check_faiss_health(self) -> Dict[str, Any]:
-        """Check FAISS index health and functionality."""
-        try:
-            # Get FAISS index statistics from storage manager
-            faiss_stats = await self.storage_manager.get_faiss_stats()
-            
-            total_indices = faiss_stats.get('total_indices', 0)
-            active_indices = faiss_stats.get('active_indices', 0)
-            
-            status = HealthStatus.HEALTHY
-            details = {
-                'total_indices': total_indices,
-                'active_indices': active_indices,
-                'index_health': 'good'
-            }
-            
-            # Check if indices are functioning
-            if total_indices > 0 and active_indices == 0:
-                status = HealthStatus.UNHEALTHY
-                details['index_health'] = 'no_active_indices'
-            elif active_indices < total_indices * 0.8:  # Less than 80% active
-                status = HealthStatus.DEGRADED
-                details['index_health'] = 'some_indices_inactive'
-            
-            # Add detailed index information
-            details.update(faiss_stats)
-            
-            return {
-                'status': status,
-                'details': details
-            }
-            
-        except Exception as e:
-            logger.error(f"FAISS health check failed: {e}")
-            return {
-                'status': HealthStatus.UNHEALTHY,
-                'details': {'error': str(e)}
-            }
     
     async def _check_storage_manager(self, db: Session) -> Dict[str, Any]:
         """Check storage manager functionality with a test operation."""

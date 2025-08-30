@@ -19,6 +19,19 @@ from utils.caching.cache_strategy import CacheStrategy, CacheConfig
 
 logger = logging.getLogger(__name__)
 
+# Lazy import for VectorStorageManager to avoid circular imports
+def get_storage_manager():
+    """Lazy import of VectorStorageManager to avoid circular dependencies."""
+    try:
+        from vector_db.storage_manager import get_storage_manager
+        return get_storage_manager()
+    except ImportError as e:
+        logger.warning(f"VectorStorageManager not available: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Failed to get VectorStorageManager: {e}")
+        return None
+
 class QueryType(Enum):
     """Types of queries for optimization."""
     VECTOR_SIMILARITY = "vector_similarity"
@@ -95,6 +108,9 @@ class QueryOptimizer:
         
         # Redis manager for caching
         self.redis_manager = RedisManager()
+        
+        # Vector storage manager for actual search operations
+        self.storage_manager = get_storage_manager()
         
         # Query plans and statistics
         self.query_plans: Dict[str, QueryPlan] = {}
@@ -553,25 +569,90 @@ class QueryOptimizer:
         filters: Optional[Dict[str, Any]],
         user_id: Optional[int]
     ) -> Dict[str, Any]:
-        """Execute basic vector search (placeholder - integrate with actual vector search)."""
-        # This would integrate with your actual vector search implementation
-        # For now, return a placeholder structure
+        """Execute vector search using VectorStorageManager with Qdrant integration."""
+        start_time = time.time()
         
-        await asyncio.sleep(0.1)  # Simulate search time
-        
-        return {
-            'results': [
-                {
-                    'id': f'doc_{i}',
-                    'score': 0.9 - (i * 0.1),
-                    'content': f'Sample document {i}',
-                    'metadata': {'source': f'file_{i}.txt'}
+        try:
+            if not self.storage_manager:
+                logger.error("VectorStorageManager not available for vector search")
+                return {
+                    'results': [],
+                    'total_count': 0,
+                    'query_time': time.time() - start_time,
+                    'error': 'VectorStorageManager not available'
                 }
-                for i in range(min(top_k, 5))
-            ],
-            'total_count': min(top_k, 5),
-            'query_time': 0.1
-        }
+            
+            # Initialize storage manager if needed
+            if not hasattr(self.storage_manager, 'qdrant_manager') or not self.storage_manager.qdrant_manager:
+                await self.storage_manager.initialize()
+            
+            # Prepare search parameters
+            vector_type = filters.get('vector_type', 'content') if filters else 'content'
+            score_threshold = filters.get('min_score', 0.0) if filters else 0.0
+            
+            # Extract metadata filters (exclude internal parameters)
+            metadata_filters = None
+            if filters:
+                metadata_filters = {
+                    k: v for k, v in filters.items() 
+                    if k not in ['vector_type', 'min_score']
+                }
+                # Add user access control if provided
+                if user_id:
+                    metadata_filters['user_id'] = user_id
+            
+            logger.debug(f"Executing vector search: index={index_name}, type={vector_type}, k={top_k}")
+            
+            # Execute the search using VectorStorageManager
+            search_results = await self.storage_manager.search_vectors(
+                index_name=index_name,
+                query_vector=query_vector,
+                vector_type=vector_type,
+                limit=top_k,
+                score_threshold=score_threshold,
+                metadata_filters=metadata_filters
+            )
+            
+            # Convert results to expected format
+            formatted_results = []
+            for result in search_results:
+                # Ensure consistent result format
+                formatted_result = {
+                    'id': result.get('metadata', {}).get('chunk_id', result.get('id', 'unknown')),
+                    'score': float(result.get('score', 0.0)),
+                    'content': result.get('content', ''),
+                    'metadata': result.get('metadata', {})
+                }
+                
+                # Add source information
+                formatted_result['metadata']['source'] = result.get('source', 'qdrant')
+                formatted_result['metadata']['search_type'] = vector_type
+                
+                formatted_results.append(formatted_result)
+            
+            query_time = time.time() - start_time
+            
+            logger.debug(f"Vector search completed: {len(formatted_results)} results in {query_time:.4f}s")
+            
+            return {
+                'results': formatted_results,
+                'total_count': len(formatted_results),
+                'query_time': query_time,
+                'index_name': index_name,
+                'vector_type': vector_type
+            }
+            
+        except Exception as e:
+            query_time = time.time() - start_time
+            logger.error(f"Vector search failed for index {index_name}: {e}")
+            
+            return {
+                'results': [],
+                'total_count': 0,
+                'query_time': query_time,
+                'error': str(e),
+                'index_name': index_name
+            }
     
     async def _execute_parallel_vector_search(
         self,
