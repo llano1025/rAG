@@ -56,13 +56,14 @@ class VectorStorageManager:
             return False
     
     async def _discover_and_init_collections(self):
-        """Discover existing Qdrant collections and initialize search optimizers."""
+        """Discover existing active Qdrant collections and initialize search optimizers."""
         try:
             if not self.qdrant_manager:
                 return
             
-            collections = await self.qdrant_manager.list_collections()
-            logger.info(f"Discovered {len(collections)} Qdrant collections: {collections}")
+            # Only initialize search optimizers for active collections
+            collections = await self.qdrant_manager.list_active_collections()
+            logger.info(f"Discovered {len(collections)} active Qdrant collections")
             logger.info(f"Looking for collections with suffixes: '{self.content_collection_suffix}' and '{self.context_collection_suffix}'")
             
             # Group collections by index name
@@ -84,19 +85,19 @@ class VectorStorageManager:
                 else:
                     logger.debug(f"Collection '{collection_name}' doesn't match expected suffixes, skipping")
             
-            # logger.info(f"Grouped collections into {len(index_collections)} indices: {list(index_collections.keys())}")
+            logger.info(f"Grouped active collections into {len(index_collections)} indices: {list(index_collections.keys())}")
             
-            # Initialize search optimizers for discovered indices
+            # Initialize search optimizers for discovered active indices
             for index_name, collections_dict in index_collections.items():
                 try:
-                    # logger.info(f"Initializing search optimizer for index '{index_name}' with collections: {collections_dict}")
+                    logger.info(f"Initializing search optimizer for active index '{index_name}' with collections: {collections_dict}")
                     await self._init_search_optimizer_for_index(index_name, collections_dict)
-                    # logger.info(f"Successfully initialized search optimizer for index: {index_name}")
+                    logger.info(f"Successfully initialized search optimizer for active index: {index_name}")
                 except Exception as e:
                     logger.warning(f"Failed to initialize search optimizer for {index_name}: {e}")
             
-            # logger.info(f"Search optimizer initialization complete. Active optimizers: {len(self.search_optimizers)}")
-            # logger.info(f"Available optimizer keys: {list(self.search_optimizers.keys())}")
+            logger.info(f"Search optimizer initialization complete. Active optimizers: {len(self.search_optimizers)}")
+            logger.info(f"Available optimizer keys: {list(self.search_optimizers.keys())}")
                     
         except Exception as e:
             logger.error(f"Failed to discover collections: {e}")
@@ -219,6 +220,12 @@ class VectorStorageManager:
                     document_id=document_id,
                     embedding_model="sentence-transformers/all-MiniLM-L6-v2",  # Default
                     embedding_dimension=embedding_dimension,
+                    similarity_metric="cosine",
+                    # Set FAISS fields to default values for Qdrant-only mode
+                    faiss_index_type="none",
+                    faiss_index_path=None,
+                    faiss_index_params=None,
+                    # Qdrant-specific fields
                     qdrant_collection_name=content_collection,
                     build_status="ready"
                 )
@@ -241,10 +248,11 @@ class VectorStorageManager:
         content_vectors: List[List[float]],
         context_vectors: List[List[float]],
         metadata_list: List[Dict[str, Any]],
-        chunk_ids: List[str] = None
+        chunk_ids: List[str] = None,
+        validate_chunks: bool = True
     ) -> List[str]:
         """
-        Add vectors to Qdrant collections.
+        Add vectors to Qdrant collections with validation to prevent inconsistencies.
         
         Args:
             index_name: Name of the target index
@@ -252,6 +260,7 @@ class VectorStorageManager:
             context_vectors: List of context embedding vectors  
             metadata_list: List of metadata dictionaries for each vector
             chunk_ids: Optional list of chunk IDs
+            validate_chunks: Whether to validate chunk existence in database
             
         Returns:
             List of point IDs that were added
@@ -268,6 +277,29 @@ class VectorStorageManager:
                 import uuid
                 chunk_ids = [str(uuid.uuid4()) for _ in range(len(content_vectors))]
             
+            # Validate chunk consistency if requested
+            valid_indices = []
+            if validate_chunks and chunk_ids:
+                valid_indices = await self._validate_chunk_consistency(
+                    chunk_ids, metadata_list, index_name
+                )
+                
+                if len(valid_indices) < len(chunk_ids):
+                    logger.warning(
+                        f"Filtered out {len(chunk_ids) - len(valid_indices)} invalid chunks "
+                        f"from vector addition to prevent inconsistencies"
+                    )
+                
+                # Filter vectors and metadata to only include valid chunks
+                if valid_indices:
+                    content_vectors = [content_vectors[i] for i in valid_indices]
+                    context_vectors = [context_vectors[i] for i in valid_indices]
+                    metadata_list = [metadata_list[i] for i in valid_indices]
+                    chunk_ids = [chunk_ids[i] for i in valid_indices]
+                else:
+                    logger.error("No valid chunks found after validation - aborting vector addition")
+                    return []
+            
             # Get search optimizers
             content_optimizer = self.search_optimizers.get(f"{index_name}_content")
             context_optimizer = self.search_optimizers.get(f"{index_name}_context")
@@ -277,11 +309,13 @@ class VectorStorageManager:
             
             # Add content vectors
             content_metadata = []
-            for metadata in metadata_list:
+            for i, metadata in enumerate(metadata_list):
                 enhanced_metadata = metadata.copy()
                 enhanced_metadata['vector_type'] = 'content'
                 enhanced_metadata['index_name'] = index_name
                 enhanced_metadata['added_at'] = datetime.now(timezone.utc).isoformat()
+                # Ensure chunk_id is in metadata
+                enhanced_metadata['chunk_id'] = chunk_ids[i]
                 content_metadata.append(enhanced_metadata)
             
             await content_optimizer.add_vectors(
@@ -292,11 +326,13 @@ class VectorStorageManager:
             
             # Add context vectors
             context_metadata = []
-            for metadata in metadata_list:
+            for i, metadata in enumerate(metadata_list):
                 enhanced_metadata = metadata.copy()
                 enhanced_metadata['vector_type'] = 'context'
                 enhanced_metadata['index_name'] = index_name
                 enhanced_metadata['added_at'] = datetime.now(timezone.utc).isoformat()
+                # Ensure chunk_id is in metadata
+                enhanced_metadata['chunk_id'] = chunk_ids[i]
                 context_metadata.append(enhanced_metadata)
             
             await context_optimizer.add_vectors(
@@ -305,12 +341,65 @@ class VectorStorageManager:
                 chunk_ids=chunk_ids
             )
             
-            logger.info(f"Added {len(content_vectors)} vectors to index {index_name}")
+            logger.info(f"Added {len(content_vectors)} validated vectors to index {index_name}")
             return chunk_ids
             
         except Exception as e:
             logger.error(f"Failed to add vectors to index {index_name}: {e}")
             return []
+    
+    async def _validate_chunk_consistency(
+        self, 
+        chunk_ids: List[str], 
+        metadata_list: List[Dict[str, Any]], 
+        index_name: str
+    ) -> List[int]:
+        """
+        Validate that chunks exist in database and have content before adding vectors.
+        
+        Args:
+            chunk_ids: List of chunk IDs to validate
+            metadata_list: Metadata for each chunk
+            index_name: Name of the target index
+            
+        Returns:
+            List of valid indices (positions in original lists)
+        """
+        try:
+            from database.connection import get_db
+            db = next(get_db())
+            
+            try:
+                valid_indices = []
+                
+                for i, chunk_id in enumerate(chunk_ids):
+                    try:
+                        # Check if chunk exists and has content
+                        chunk = db.query(DocumentChunk).filter(
+                            DocumentChunk.chunk_id == chunk_id
+                        ).first()
+                        
+                        if chunk and chunk.text and chunk.text.strip():
+                            valid_indices.append(i)
+                        else:
+                            reason = "not found" if not chunk else "empty text"
+                            logger.debug(f"Skipping chunk {chunk_id}: {reason}")
+                    
+                    except Exception as e:
+                        logger.warning(f"Error validating chunk {chunk_id}: {e}")
+                        continue
+                
+                logger.debug(f"Validated {len(valid_indices)} out of {len(chunk_ids)} chunks")
+                return valid_indices
+                
+            finally:
+                db.close()
+                
+        except Exception as e:
+            logger.error(f"Failed to validate chunk consistency: {e}")
+            # Return all indices as valid if validation fails - better to have some inconsistency
+            # than to fail completely
+            return list(range(len(chunk_ids)))
     
     async def search_vectors(
         self,
@@ -389,24 +478,49 @@ class VectorStorageManager:
             return []
     
     async def _get_chunk_content(self, chunk_id: str) -> str:
-        """Get chunk text content from database by chunk_id."""
+        """
+        Get chunk text content from database by chunk_id with enhanced error handling.
+        
+        This method is called when vector search results don't contain text content,
+        serving as a fallback to retrieve content from the database.
+        """
         try:
             from database.connection import get_db
             db = next(get_db())
             
             try:
                 chunk = db.query(DocumentChunk).filter(DocumentChunk.chunk_id == chunk_id).first()
-                if chunk and chunk.text:
-                    return chunk.text
-                else:
-                    logger.warning(f"No text content found for chunk_id: {chunk_id}")
-                    return f"[Content not available for chunk {chunk_id}]"
+                
+                if not chunk:
+                    # Chunk doesn't exist in database - this indicates data inconsistency
+                    logger.warning(
+                        f"Chunk not found in database: {chunk_id}. "
+                        f"This may indicate orphaned vector data. "
+                        f"Run data integrity audit to identify and fix inconsistencies."
+                    )
+                    return f"[Chunk {chunk_id} not found in database - data inconsistency detected]"
+                
+                if not chunk.text or chunk.text.strip() == "":
+                    # Chunk exists but has no text content
+                    logger.warning(
+                        f"Empty text content for chunk_id: {chunk_id} "
+                        f"(document_id: {chunk.document_id}, chunk_index: {chunk.chunk_index}). "
+                        f"Consider running data cleanup to remove empty chunks."
+                    )
+                    # Try to provide more context about the chunk
+                    context_info = f"doc_{chunk.document_id}_chunk_{chunk.chunk_index}"
+                    return f"[Empty content for chunk {context_info}]"
+                
+                # Successfully found content
+                logger.debug(f"Retrieved content for chunk_id: {chunk_id} ({len(chunk.text)} chars)")
+                return chunk.text
+                
             finally:
                 db.close()
                 
         except Exception as e:
-            logger.error(f"Failed to fetch content for chunk_id {chunk_id}: {e}")
-            return f"[Error fetching content for chunk {chunk_id}]"
+            logger.error(f"Database error while fetching chunk_id {chunk_id}: {e}")
+            return f"[Database error for chunk {chunk_id}: {str(e)[:100]}...]"
     
     async def contextual_search(
         self,
@@ -532,6 +646,91 @@ class VectorStorageManager:
             
         except Exception as e:
             logger.error(f"Failed to delete index {index_name}: {e}")
+            return False
+    
+    async def soft_delete_index(self, index_name: str, db: Session = None) -> bool:
+        """Soft delete an index by disabling vectors but keeping data."""
+        try:
+            # Disable both content and context collections in Qdrant
+            content_collection, context_collection = self._get_collection_names(index_name)
+            
+            content_disabled = await self.qdrant_manager.disable_vector_collection(content_collection)
+            context_disabled = await self.qdrant_manager.disable_vector_collection(context_collection)
+            
+            if not (content_disabled and context_disabled):
+                logger.warning(f"Partial failure soft deleting index {index_name}")
+                return False
+            
+            # Update database vector index status if db is provided
+            if db:
+                vector_index = db.query(VectorIndex).filter(
+                    VectorIndex.index_name == index_name
+                ).first()
+                if vector_index:
+                    vector_index.is_active = False
+                    vector_index.build_status = "soft_deleted"
+                    vector_index.updated_at = datetime.now(timezone.utc)
+                    db.commit()
+            
+            # Keep search optimizers but mark them as inactive (don't remove them)
+            content_key = f"{index_name}_content"
+            context_key = f"{index_name}_context"
+            
+            if content_key in self.search_optimizers:
+                # Set a flag to indicate this optimizer is disabled
+                self.search_optimizers[content_key]._disabled = True
+            
+            if context_key in self.search_optimizers:
+                self.search_optimizers[context_key]._disabled = True
+            
+            logger.info(f"Soft deleted vector index: {index_name}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to soft delete index {index_name}: {e}")
+            return False
+    
+    async def restore_index(self, index_name: str, db: Session = None) -> bool:
+        """Restore a soft-deleted index by re-enabling vectors."""
+        try:
+            # Re-enable both content and context collections in Qdrant
+            content_collection, context_collection = self._get_collection_names(index_name)
+            
+            content_enabled = await self.qdrant_manager.enable_vector_collection(content_collection)
+            context_enabled = await self.qdrant_manager.enable_vector_collection(context_collection)
+            
+            if not (content_enabled and context_enabled):
+                logger.warning(f"Partial failure restoring index {index_name}")
+                return False
+            
+            # Update database vector index status if db is provided
+            if db:
+                vector_index = db.query(VectorIndex).filter(
+                    VectorIndex.index_name == index_name
+                ).first()
+                if vector_index:
+                    vector_index.is_active = True
+                    vector_index.build_status = "ready"
+                    vector_index.updated_at = datetime.now(timezone.utc)
+                    db.commit()
+            
+            # Re-enable search optimizers
+            content_key = f"{index_name}_content"
+            context_key = f"{index_name}_context"
+            
+            if content_key in self.search_optimizers:
+                if hasattr(self.search_optimizers[content_key], '_disabled'):
+                    delattr(self.search_optimizers[content_key], '_disabled')
+            
+            if context_key in self.search_optimizers:
+                if hasattr(self.search_optimizers[context_key], '_disabled'):
+                    delattr(self.search_optimizers[context_key], '_disabled')
+            
+            logger.info(f"Restored vector index: {index_name}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to restore index {index_name}: {e}")
             return False
     
     async def get_index_stats(self, index_name: str) -> Dict[str, Any]:

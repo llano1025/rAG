@@ -6,6 +6,7 @@ Provides version control for documents with database persistence and vector sync
 import logging
 import hashlib
 import asyncio
+import uuid
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
@@ -362,11 +363,14 @@ class DocumentVersionManager:
             
             chunks_data = []
             for i, chunk in enumerate(chunks):
+                # Generate UUID for Qdrant point ID
+                qdrant_point_id = str(uuid.uuid4())
+                
                 # Create database record for chunk
                 doc_chunk = DocumentChunk(
                     document_id=document_id,
                     chunk_index=i,
-                    chunk_id=f"doc_{document_id}_chunk_{i}",
+                    chunk_id=f"doc_{document_id}_chunk_{i}",  # Keep original format for database
                     text=chunk.text,
                     text_length=len(chunk.text),
                     start_char=chunk.start_idx,
@@ -392,7 +396,8 @@ class DocumentVersionManager:
                     'chunk': doc_chunk,
                     'text': chunk.text,
                     'context': context_dict,
-                    'metadata': chunk.metadata or {}
+                    'metadata': chunk.metadata or {},
+                    'qdrant_point_id': qdrant_point_id  # Add UUID for Qdrant
                 })
             
             db.flush()  # Ensure chunk IDs are generated
@@ -451,9 +456,11 @@ class DocumentVersionManager:
             chunk_ids = []
             for i, chunk_data in enumerate(chunks_data):
                 chunk = chunk_data['chunk']
+                qdrant_point_id = chunk_data['qdrant_point_id']
+                
                 metadata = {
                     'document_id': document.id,
-                    'chunk_id': chunk.chunk_id,
+                    'chunk_id': chunk.chunk_id,  # Keep original for reference
                     'chunk_index': chunk.chunk_index,
                     'user_id': document.user_id,
                     'filename': document.filename,
@@ -469,7 +476,7 @@ class DocumentVersionManager:
                     metadata.update(chunk_data['metadata'])
                 
                 vector_metadata.append(metadata)
-                chunk_ids.append(chunk.chunk_id)
+                chunk_ids.append(qdrant_point_id)  # Use UUID for Qdrant
             
             # Add vectors to storage
             added_ids = await self.storage_manager.add_vectors(

@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Optional
+import logging
 # datetime removed - not used
 from pydantic import BaseModel, Field
 from ..middleware.auth import get_current_active_user
@@ -15,6 +16,8 @@ from vector_db.storage_manager import get_storage_manager
 from vector_db.embedding_manager import EnhancedEmbeddingManager
 from database.connection import get_db
 import warnings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/search", tags=["search"])
 

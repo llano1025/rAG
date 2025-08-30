@@ -287,10 +287,15 @@ class QdrantManager:
         self.ensure_connected()
         
         try:
-            # Build filter if provided
-            qdrant_filter = None
+            # Build filter if provided - always include is_active filter
+            conditions = []
+            
+            # Always filter for active vectors (exclude disabled ones)
+            conditions.append(
+                FieldCondition(key="is_active", match=MatchValue(value=True))
+            )
+            
             if filters:
-                conditions = []
                 for key, value in filters.items():
                     if isinstance(value, (list, tuple)):
                         # Handle multiple values (OR condition)
@@ -302,9 +307,20 @@ class QdrantManager:
                         conditions.append(
                             FieldCondition(key=key, match=MatchValue(value=value))
                         )
-                
-                if conditions:
-                    qdrant_filter = Filter(should=conditions)
+            
+            # Create filter with conditions
+            qdrant_filter = None
+            if conditions:
+                if len(conditions) == 1:
+                    qdrant_filter = Filter(must=[conditions[0]])
+                else:
+                    # Use must for AND conditions (active AND user filters)
+                    qdrant_filter = Filter(must=[
+                        conditions[0],  # is_active filter
+                        Filter(should=conditions[1:]) if len(conditions) > 1 else None
+                    ])
+                    # Clean up None values
+                    qdrant_filter = Filter(must=[c for c in qdrant_filter.must if c is not None])
             
             # Perform search
             search_result = self.client.search(
@@ -317,8 +333,6 @@ class QdrantManager:
                 with_vectors=False  # Don't return vectors to save bandwidth
             )
 
-            logger.info(f"{search_result}")
-            
             # Format results
             results = []
             for hit in search_result:
@@ -799,6 +813,99 @@ class QdrantManager:
             logger.error(f"Failed to list backups in {backup_directory}: {e}")
             return []
 
+    async def set_collection_active_status(self, collection_name: str, is_active: bool) -> bool:
+        """Set active/inactive status for all vectors in a collection via payload update."""
+        try:
+            self.ensure_connected()
+            
+            # Create payload with active status and timestamp
+            payload = {
+                "is_active": is_active,
+                "status_updated_at": datetime.now(timezone.utc).isoformat()
+            }
+            
+            if not is_active:
+                payload["disabled_at"] = datetime.now(timezone.utc).isoformat()
+                payload["disabled_reason"] = "manual_patch"
+            else:
+                payload["enabled_at"] = datetime.now(timezone.utc).isoformat()
+            
+            # Update all points in the collection
+            # First get all point IDs in the collection
+            scroll_result = self.client.scroll(
+                collection_name=collection_name,
+                limit=10000,  # Get a large batch of points
+                with_payload=False,
+                with_vectors=False
+            )
+            
+            if not scroll_result[0]:  # No points in collection
+                logger.warning(f"No points found in collection {collection_name}")
+                return True
+            
+            point_ids = [point.id for point in scroll_result[0]]
+            
+            # Update payload for all points
+            operation_info = self.client.set_payload(
+                collection_name=collection_name,
+                payload=payload,
+                points=point_ids
+            )
+            
+            if operation_info.status == UpdateStatus.COMPLETED:
+                status_text = "disabled" if not is_active else "enabled"
+                logger.info(f"Successfully {status_text} collection {collection_name}")
+                return True
+            else:
+                logger.error(f"Failed to update collection {collection_name} status: {operation_info.status}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Failed to set active status for collection {collection_name}: {e}")
+            return False
+
+    async def disable_vector_collection(self, collection_name: str) -> bool:
+        """Disable a vector collection by setting all vectors as inactive."""
+        return await self.set_collection_active_status(collection_name, False)
+    
+    async def enable_vector_collection(self, collection_name: str) -> bool:
+        """Enable a vector collection by setting all vectors as active."""
+        return await self.set_collection_active_status(collection_name, True)
+
+    async def is_collection_active(self, collection_name: str) -> bool:
+        """Check if a collection has active vectors (not disabled)."""
+        try:
+            self.ensure_connected()
+            
+            # Get a sample of points to check their active status
+            scroll_result = self.client.scroll(
+                collection_name=collection_name,
+                limit=1,  # Just check the first point
+                with_payload=True,
+                with_vectors=False
+            )
+            
+            if not scroll_result[0]:  # No points in collection
+                # If no points, consider it inactive
+                return False
+            
+            # Check if the first point has is_active = False
+            first_point = scroll_result[0][0]
+            payload = first_point.payload or {}
+            
+            # If is_active is explicitly set to False, collection is disabled
+            is_active = payload.get("is_active")
+            if is_active is False:
+                return False
+            
+            # If is_active is not set or True, consider it active
+            return True
+            
+        except Exception as e:
+            logger.debug(f"Error checking if collection {collection_name} is active: {e}")
+            # If we can't determine, assume active to be safe
+            return True
+
     async def list_collections(self) -> List[str]:
         """List all collections in Qdrant."""
         try:
@@ -814,6 +921,29 @@ class QdrantManager:
         except Exception as e:
             logger.error(f"Failed to list collections: {e}")
             return []
+
+    async def list_active_collections(self) -> List[str]:
+        """List only active (non-disabled) collections in Qdrant."""
+        try:
+            all_collections = await self.list_collections()
+            active_collections = []
+            
+            logger.info(f"Checking active status for {len(all_collections)} collections...")
+            
+            for collection in all_collections:
+                is_active = await self.is_collection_active(collection)
+                if is_active:
+                    active_collections.append(collection)
+                else:
+                    logger.debug(f"Collection {collection} is disabled, skipping")
+            
+            logger.info(f"Found {len(active_collections)} active collections out of {len(all_collections)}")
+            return active_collections
+            
+        except Exception as e:
+            logger.error(f"Failed to list active collections: {e}")
+            # Fallback to all collections if we can't filter
+            return await self.list_collections()
 
 
 # Global Qdrant manager instance

@@ -479,11 +479,12 @@ class EnhancedSearchEngine:
             logger.error(f"search_with_context failed: {str(e)}")
             return []
 
-    def _generate_stable_cache_key(self, query: str, user_id: int, filters: 'SearchFilter') -> str:
+    def _generate_stable_cache_key(self, query: str, user_id: int, search_type: str, filters: 'SearchFilter') -> str:
         """Generate a stable, deterministic cache key for search operations."""
         try:
             # Create normalized filter dictionary with only essential stable fields
             normalized_filter = {
+                'search_type': search_type,  # Include search type for cache separation
                 'user_id': filters.user_id,
                 'document_ids': sorted(filters.document_ids) if filters.document_ids else None,
                 'content_types': sorted(filters.content_types) if filters.content_types else None,
@@ -507,14 +508,15 @@ class EnhancedSearchEngine:
             filter_str = json.dumps(stable_filter, sort_keys=True, ensure_ascii=True)
             
             # Create stable hash
-            hash_input = f"{query.strip()}_{user_id}_{filter_str}"
+            hash_input = f"{query.strip()}_{user_id}_{search_type}_{filter_str}"
             cache_hash = hashlib.md5(hash_input.encode('utf-8')).hexdigest()
-            cache_key = f"search_{cache_hash}"
+            cache_key = f"search_{search_type}_{cache_hash}"
             
             # Debug logging to identify instability sources  
             logger.info(f"Cache key generation:")
             logger.info(f"Query: '{query[:50]}...'")
             logger.info(f"User ID: {user_id}")
+            logger.info(f"Search Type: {search_type}")
             logger.info(f"Normalized filter: {stable_filter}")
             logger.info(f"Filter string: {filter_str}")
             logger.info(f"Hash input length: {len(hash_input)} chars")
@@ -557,13 +559,23 @@ class EnhancedSearchEngine:
         limit = min(limit or self.default_limit, self.max_limit)
         filters = filters or SearchFilter()
         
-        # Ensure storage manager is initialized
-        await self._ensure_storage_initialized()
+        # Only initialize storage for vector-based search types
+        vector_search_types = {SearchType.SEMANTIC, SearchType.HYBRID, SearchType.CONTEXTUAL}
+        database_only_search_types = {SearchType.KEYWORD, "basic"}  # Include "basic" alias for keyword
+        
+        if search_type in vector_search_types:
+            await self._ensure_storage_initialized()
+        elif search_type in database_only_search_types:
+            logger.info(f"Skipping Qdrant initialization for {search_type} search (database-only)")
+        else:
+            # Unknown search type - be safe and initialize storage
+            logger.warning(f"Unknown search type '{search_type}', initializing storage as safety measure")
+            await self._ensure_storage_initialized()
         
         # Generate cache key ONCE at the beginning - before any filter modifications
         cache_key = None
         if use_cache:
-            cache_key = self._generate_stable_cache_key(query, user.id, filters)
+            cache_key = self._generate_stable_cache_key(query, user.id, search_type, filters)
             logger.info(f"Generated cache key for entire method: {cache_key}")
         
         try:
@@ -597,7 +609,7 @@ class EnhancedSearchEngine:
                     logger.warning(f"Redis cache retrieval failed: {e}")
                 
                 # Fallback to database cache
-                cached_results = await self._get_cached_results(query, user.id, filters, db)
+                cached_results = await self._get_cached_results(query, user.id, search_type, filters, db)
                 if cached_results:
                     logger.info(f"Returning database cached results for query: {query[:50]}...")
                     return cached_results
@@ -677,7 +689,7 @@ class EnhancedSearchEngine:
             if use_cache and cache_key and results:
                 # Cache results using both methods for optimal performance
                 # Database cache for analytics and persistence
-                await self._cache_results(query, user.id, filters, results, db)
+                await self._cache_results(query, user.id, search_type, filters, results, db)
                 
                 # Redis cache via query optimizer for fast retrieval
                 try:
@@ -1263,6 +1275,7 @@ class EnhancedSearchEngine:
         self,
         query: str,
         user_id: int,
+        search_type: str,
         filters: SearchFilter,
         db: Session
     ) -> Optional[List[SearchResult]]:
@@ -1270,8 +1283,8 @@ class EnhancedSearchEngine:
         try:
             import hashlib
             
-            # Create query hash for cache lookup
-            cache_key = f"{query}_{user_id}_{filters.to_dict()}"
+            # Create query hash for cache lookup (include search type)
+            cache_key = f"{query}_{user_id}_{search_type}_{filters.to_dict()}"
             query_hash = hashlib.sha256(cache_key.encode()).hexdigest()
             
             # Look for cached query
@@ -1309,6 +1322,7 @@ class EnhancedSearchEngine:
         self,
         query: str,
         user_id: int,
+        search_type: str,
         filters: SearchFilter,
         results: List[SearchResult],
         db: Session
@@ -1317,8 +1331,8 @@ class EnhancedSearchEngine:
         try:
             import hashlib
             
-            # Create query hash
-            cache_key = f"{query}_{user_id}_{filters.to_dict()}"
+            # Create query hash (include search type)
+            cache_key = f"{query}_{user_id}_{search_type}_{filters.to_dict()}"
             query_hash = hashlib.sha256(cache_key.encode()).hexdigest()
             
             # Serialize results
@@ -1338,7 +1352,7 @@ class EnhancedSearchEngine:
                     user_id=user_id,
                     query_text=query,
                     query_hash=query_hash,
-                    query_type="semantic",
+                    query_type=search_type,
                     results_count=len(results)
                 )
                 search_query.set_cached_results(results_data, self.cache_duration_hours)
@@ -1522,7 +1536,7 @@ class EnhancedSearchEngine:
                 from database.connection import SessionLocal
                 db = SessionLocal()
             
-            # 1. Search history suggestions
+            # Search history suggestions
             recent_searches = db.query(SearchQuery).filter(
                 SearchQuery.user_id == user.id,
                 SearchQuery.query_text.ilike(f'%{query}%')
@@ -1535,7 +1549,7 @@ class EnhancedSearchEngine:
                     'icon': 'history'
                 })
             
-            # 2. Document title suggestions
+            # Document title suggestions
             documents = db.query(Document).filter(
                 Document.user_id == user.id,
                 Document.filename.ilike(f'%{query}%')
@@ -1547,33 +1561,6 @@ class EnhancedSearchEngine:
                     'text': doc.filename.replace('.pdf', '').replace('.txt', ''),
                     'icon': 'document'
                 })
-            
-            # 3. Tag suggestions (if tags exist)
-            # This would require tag implementation in the database
-            
-            # 4. Content-based suggestions using semantic search
-            if len(suggestions) < limit and len(query) > 2:
-                try:
-                    search_results = await self.search(
-                        query=query,
-                        user=user,
-                        search_type=SearchType.SEMANTIC,
-                        limit=2,
-                        db=db
-                    )
-                    
-                    for result in search_results:
-                        # Extract key phrases from the result text
-                        words = result.text.split()[:10]  # First 10 words
-                        suggestion_text = ' '.join(words)
-                        suggestions.append({
-                            'type': 'content',
-                            'text': suggestion_text,
-                            'icon': 'search'
-                        })
-                
-                except Exception as e:
-                    logger.debug(f"Content-based suggestions failed: {e}")
             
             # Remove duplicates and limit results
             unique_suggestions = []
