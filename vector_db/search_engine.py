@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
 
 from database.models import Document, DocumentChunk, User, SearchQuery, VectorIndex
-from .storage_manager import VectorStorageManager, get_storage_manager
+from .storage_manager import VectorStorageManager, get_storage_manager, get_initialized_storage_manager
 from .context_processor import ContextProcessor
 from .reranker import get_reranker_manager, get_reranker_config, RerankResult
 from .reranker.base_reranker import SearchResult as RerankerSearchResult
@@ -2310,5 +2310,14 @@ def get_search_engine() -> EnhancedSearchEngine:
     """Get the global enhanced search engine instance."""
     global _search_engine
     if _search_engine is None:
-        _search_engine = EnhancedSearchEngine()
+        # Use the optimized storage manager singleton
+        storage_manager = get_storage_manager()
+        _search_engine = EnhancedSearchEngine(storage_manager)
     return _search_engine
+
+async def get_initialized_search_engine() -> EnhancedSearchEngine:
+    """Get the global search engine instance and ensure storage is initialized."""
+    search_engine = get_search_engine()
+    if not search_engine._storage_initialized:
+        await search_engine._ensure_storage_initialized()
+    return search_engine

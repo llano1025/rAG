@@ -11,8 +11,7 @@ from ..schemas.search_schemas import (
     convert_search_response_to_api_format,
     convert_api_filters_to_search_filter
 )
-from vector_db.search_engine import EnhancedSearchEngine, SearchType
-from vector_db.storage_manager import get_storage_manager
+from vector_db.search_engine import EnhancedSearchEngine, SearchType, get_initialized_search_engine
 from vector_db.embedding_manager import EnhancedEmbeddingManager
 from database.connection import get_db
 import warnings
@@ -37,9 +36,9 @@ async def unified_search(
     """
     try:
         # Get search engine components
-        storage_manager = get_storage_manager()
+        # Use persistent search engine instance
+        search_engine = await get_initialized_search_engine()
         embedding_manager = EnhancedEmbeddingManager.create_default_manager()
-        search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
         
         db = next(get_db())
         
@@ -115,9 +114,9 @@ async def text_search(
         logger.info(f"Text search request: query='{request.query[:50]}...', user_id={current_user.id}, top_k={request.top_k}")
         
         # Get search engine components
-        storage_manager = get_storage_manager()
+        # Use persistent search engine instance
+        search_engine = await get_initialized_search_engine()
         embedding_manager = EnhancedEmbeddingManager.create_default_manager()
-        search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
         logger.debug("Search engine components initialized successfully")
         
         # Get database session with proper error handling
@@ -181,9 +180,9 @@ async def semantic_search(
     """
     try:
         # Get search engine components
-        storage_manager = get_storage_manager()
+        # Use persistent search engine instance
+        search_engine = await get_initialized_search_engine()
         embedding_manager = EnhancedEmbeddingManager.create_default_manager()
-        search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
         
         db = next(get_db())
         
@@ -235,9 +234,9 @@ async def hybrid_search(
     """
     try:
         # Get search engine components
-        storage_manager = get_storage_manager()
+        # Use persistent search engine instance
+        search_engine = await get_initialized_search_engine()
         embedding_manager = EnhancedEmbeddingManager.create_default_manager()
-        search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
         
         db = next(get_db())
         
@@ -291,9 +290,9 @@ async def contextual_search(
     """
     try:
         # Get search engine components
-        storage_manager = get_storage_manager()
+        # Use persistent search engine instance
+        search_engine = await get_initialized_search_engine()
         embedding_manager = EnhancedEmbeddingManager.create_default_manager()
-        search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
         
         db = next(get_db())
         
@@ -374,9 +373,9 @@ async def get_available_filters(
     """
     try:
         # Get search engine components
-        storage_manager = get_storage_manager()
+        # Use persistent search engine instance
+        search_engine = await get_initialized_search_engine()
         embedding_manager = EnhancedEmbeddingManager.create_default_manager()
-        search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
         
         db = next(get_db())
         
@@ -474,9 +473,9 @@ async def get_search_suggestions(
     """
     try:
         # Get search engine components
-        storage_manager = get_storage_manager()
+        # Use persistent search engine instance
+        search_engine = await get_initialized_search_engine()
         embedding_manager = EnhancedEmbeddingManager.create_default_manager()
-        search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
         
         db = next(get_db())
         

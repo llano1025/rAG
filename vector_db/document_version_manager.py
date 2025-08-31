@@ -512,6 +512,15 @@ class DocumentVersionManager:
             
             logger.info(f"Created vector index {index_name} with {len(added_ids)} embeddings")
             
+            # Add new collection to storage manager incrementally
+            try:
+                embedding_dimension = len(content_embeddings[0]) if content_embeddings else 768
+                await self.storage_manager.add_collection(index_name, embedding_dimension)
+                logger.info(f"Added collection {index_name} to storage manager")
+            except Exception as e:
+                logger.warning(f"Failed to add collection to storage manager: {e}")
+                # Continue - this is for performance optimization only
+            
         except Exception as e:
             logger.error(f"Failed to create vector index: {e}")
             raise
@@ -576,6 +585,14 @@ class DocumentVersionManager:
                     try:
                         await self.storage_manager.delete_index(index_name, db)
                         logger.info(f"Successfully deleted vector index {index_name}")
+                        
+                        # Remove collection from storage manager
+                        try:
+                            await self.storage_manager.remove_collection(index_name)
+                            logger.info(f"Removed collection {index_name} from storage manager")
+                        except Exception as e:
+                            logger.warning(f"Failed to remove collection from storage manager: {e}")
+                        
                     except Exception as e:
                         logger.warning(f"Failed to delete vector index {index_name}: {e}")
                         # Continue with document deletion even if vector deletion fails

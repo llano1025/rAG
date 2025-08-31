@@ -36,9 +36,17 @@ class VectorStorageManager:
         # Collection naming convention
         self.content_collection_suffix = "_content"
         self.context_collection_suffix = "_context"
+        
+        # Optimization state tracking
+        self._is_initialized = False
+        self._collections_state = {}  # Track collection state for smart refresh
     
     async def initialize(self) -> bool:
         """Initialize Qdrant connection and discover existing collections."""
+        if self._is_initialized:
+            logger.debug("Storage manager already initialized, skipping")
+            return True
+            
         try:
             # Initialize Qdrant connection
             self.qdrant_manager = get_qdrant_manager()
@@ -48,6 +56,7 @@ class VectorStorageManager:
             # Initialize search optimizers for existing collections
             await self._discover_and_init_collections()
             
+            self._is_initialized = True
             logger.info("Vector storage manager initialized successfully")
             return True
             
@@ -795,12 +804,112 @@ class VectorStorageManager:
             logger.error(f"Failed to get performance stats: {e}")
             return {'error': str(e)}
 
+    async def add_collection(self, index_name: str, embedding_dimension: int) -> bool:
+        """Add a new collection to the storage manager incrementally."""
+        try:
+            if not self._is_initialized:
+                await self.initialize()
+            
+            content_collection, context_collection = self._get_collection_names(index_name)
+            
+            # Create search optimizers for new collections
+            content_key = f"{index_name}_content"
+            context_key = f"{index_name}_context"
+            
+            # Check if collections exist in Qdrant
+            if await self.qdrant_manager.collection_exists(content_collection):
+                if content_key not in self.search_optimizers:
+                    content_config = SearchConfig(
+                        dimension=embedding_dimension,
+                        collection_name=content_collection
+                    )
+                    content_optimizer = QdrantSearchOptimizer(content_config, self.qdrant_manager)
+                    self.search_optimizers[content_key] = content_optimizer
+                    logger.info(f"Added search optimizer for content collection: {content_collection}")
+            
+            if await self.qdrant_manager.collection_exists(context_collection):
+                if context_key not in self.search_optimizers:
+                    context_config = SearchConfig(
+                        dimension=embedding_dimension,
+                        collection_name=context_collection
+                    )
+                    context_optimizer = QdrantSearchOptimizer(context_config, self.qdrant_manager)
+                    self.search_optimizers[context_key] = context_optimizer
+                    logger.info(f"Added search optimizer for context collection: {context_collection}")
+            
+            # Update collections state
+            self._collections_state[index_name] = {
+                'content': content_collection,
+                'context': context_collection,
+                'dimension': embedding_dimension
+            }
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to add collection for index {index_name}: {e}")
+            return False
+
+    async def remove_collection(self, index_name: str) -> bool:
+        """Remove a collection from the storage manager incrementally."""
+        try:
+            content_key = f"{index_name}_content"
+            context_key = f"{index_name}_context"
+            
+            # Remove search optimizers
+            if content_key in self.search_optimizers:
+                del self.search_optimizers[content_key]
+                logger.info(f"Removed search optimizer for {content_key}")
+            
+            if context_key in self.search_optimizers:
+                del self.search_optimizers[context_key]
+                logger.info(f"Removed search optimizer for {context_key}")
+            
+            # Remove from collections state
+            if index_name in self._collections_state:
+                del self._collections_state[index_name]
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to remove collection for index {index_name}: {e}")
+            return False
+
+    async def refresh_collections(self, force: bool = False) -> bool:
+        """Refresh collections discovery only if needed."""
+        try:
+            if not self._is_initialized and not force:
+                logger.debug("Storage manager not initialized, skipping refresh")
+                return True
+            
+            if not force:
+                # Check if collections state has actually changed
+                current_collections = await self.qdrant_manager.list_active_collections()
+                expected_collections = set()
+                for index_name, state in self._collections_state.items():
+                    expected_collections.add(state['content'])
+                    expected_collections.add(state['context'])
+                
+                if set(current_collections) == expected_collections:
+                    logger.debug("Collection state unchanged, skipping refresh")
+                    return True
+            
+            logger.info("Refreshing collections discovery...")
+            await self._discover_and_init_collections()
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to refresh collections: {e}")
+            return False
+
     async def cleanup(self):
         """Cleanup storage manager and close connections."""
         if self.qdrant_manager:
             await self.qdrant_manager.disconnect()
         
         self.search_optimizers.clear()
+        self._collections_state.clear()
+        self._is_initialized = False
         logger.info("Vector storage manager cleaned up")
 
 
@@ -815,8 +924,13 @@ def get_storage_manager() -> VectorStorageManager:
         # Note: Initialization must be done async, caller should call initialize() if needed
     return _storage_manager
 
-async def init_storage_manager() -> VectorStorageManager:
-    """Initialize storage manager and return instance."""
+async def get_initialized_storage_manager() -> VectorStorageManager:
+    """Get the global vector storage manager instance and ensure it's initialized."""
     manager = get_storage_manager()
-    await manager.initialize()
+    if not manager._is_initialized:
+        await manager.initialize()
     return manager
+
+async def init_storage_manager() -> VectorStorageManager:
+    """Initialize storage manager and return instance (legacy compatibility)."""
+    return await get_initialized_storage_manager()
