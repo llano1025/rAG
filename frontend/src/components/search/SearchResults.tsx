@@ -160,9 +160,22 @@ export default function SearchResults({ response, loading }: SearchResultsProps)
                       </span>
                     )}
                     {result.metadata.tags && result.metadata.tags.length > 0 && (
-                      <span>
-                        Tags: {result.metadata.tags.join(', ')}
-                      </span>
+                      <div className="flex items-center flex-wrap gap-1">
+                        <span className="text-xs text-gray-500">Tags:</span>
+                        {result.metadata.tags.slice(0, 5).map((tag: string, index: number) => (
+                          <span
+                            key={index}
+                            className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800"
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                        {result.metadata.tags.length > 5 && (
+                          <span className="text-xs text-gray-400">
+                            +{result.metadata.tags.length - 5} more
+                          </span>
+                        )}
+                      </div>
                     )}
                   </div>
                 )}

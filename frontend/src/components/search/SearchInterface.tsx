@@ -32,8 +32,13 @@ export default function SearchInterface() {
     date_range: null as { start: string; end: string } | null,
     owner: '',
     tags: [] as string[],
+    tag_match_mode: 'any' as 'any' | 'all' | 'exact',
+    exclude_tags: [] as string[],
     folder_ids: [] as string[],
     languages: [] as string[],
+    file_size_range: null as [number, number] | null,
+    language: '',
+    is_public: undefined as boolean | undefined,
   });
 
   // Reranker settings
@@ -129,8 +134,14 @@ export default function SearchInterface() {
         searchFilters.file_types = filters.file_type;
       }
       
+      // Updated tag filtering with new schema
       if (filters.tags.length > 0) {
-        searchFilters.tag_ids = filters.tags;
+        searchFilters.tags = filters.tags;  // Changed from tag_ids to tags
+        searchFilters.tag_match_mode = filters.tag_match_mode;
+      }
+
+      if (filters.exclude_tags.length > 0) {
+        searchFilters.exclude_tags = filters.exclude_tags;
       }
 
       if (filters.folder_ids && filters.folder_ids.length > 0) {
@@ -139,6 +150,18 @@ export default function SearchInterface() {
       
       if (filters.date_range) {
         searchFilters.date_range = [filters.date_range.start, filters.date_range.end];
+      }
+
+      if (filters.file_size_range) {
+        searchFilters.file_size_range = filters.file_size_range;
+      }
+
+      if (filters.language) {
+        searchFilters.language = filters.language;
+      }
+
+      if (filters.is_public !== undefined) {
+        searchFilters.is_public = filters.is_public;
       }
       
       if (filters.owner) {
@@ -214,8 +237,14 @@ export default function SearchInterface() {
         searchFilters.file_types = filters.file_type;
       }
       
+      // Updated tag filtering with new schema
       if (filters.tags.length > 0) {
-        searchFilters.tag_ids = filters.tags;
+        searchFilters.tags = filters.tags;  // Changed from tag_ids to tags
+        searchFilters.tag_match_mode = filters.tag_match_mode;
+      }
+
+      if (filters.exclude_tags.length > 0) {
+        searchFilters.exclude_tags = filters.exclude_tags;
       }
 
       if (filters.folder_ids && filters.folder_ids.length > 0) {
@@ -224,6 +253,18 @@ export default function SearchInterface() {
       
       if (filters.date_range) {
         searchFilters.date_range = [filters.date_range.start, filters.date_range.end];
+      }
+
+      if (filters.file_size_range) {
+        searchFilters.file_size_range = filters.file_size_range;
+      }
+
+      if (filters.language) {
+        searchFilters.language = filters.language;
+      }
+
+      if (filters.is_public !== undefined) {
+        searchFilters.is_public = filters.is_public;
       }
       
       if (filters.owner) {
@@ -270,9 +311,14 @@ export default function SearchInterface() {
       const searchFilters = savedSearch.filters;
       setFilters({
         file_type: searchFilters.file_types || [],
-        tags: searchFilters.tag_ids || [],
+        tags: searchFilters.tags || searchFilters.tag_ids || [],  // Support both old and new formats
+        tag_match_mode: searchFilters.tag_match_mode || 'any',
+        exclude_tags: searchFilters.exclude_tags || [],
         folder_ids: searchFilters.folder_ids || [],
         languages: searchFilters.metadata_filters?.languages || [],
+        file_size_range: searchFilters.file_size_range || null,
+        language: searchFilters.language || '',
+        is_public: searchFilters.is_public,
         date_range: searchFilters.date_range ? {
           start: searchFilters.date_range[0],
           end: searchFilters.date_range[1]
@@ -306,9 +352,14 @@ export default function SearchInterface() {
       const searchFilters = historyItem.filters;
       setFilters({
         file_type: searchFilters.file_types || [],
-        tags: searchFilters.tag_ids || [],
+        tags: searchFilters.tags || searchFilters.tag_ids || [],  // Support both old and new formats
+        tag_match_mode: searchFilters.tag_match_mode || 'any',
+        exclude_tags: searchFilters.exclude_tags || [],
         folder_ids: searchFilters.folder_ids || [],
         languages: searchFilters.metadata_filters?.languages || [],
+        file_size_range: searchFilters.file_size_range || null,
+        language: searchFilters.language || '',
+        is_public: searchFilters.is_public,
         date_range: searchFilters.date_range ? {
           start: searchFilters.date_range[0],
           end: searchFilters.date_range[1]

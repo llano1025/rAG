@@ -374,12 +374,22 @@ class Document(Base, TimestampMixin, SoftDeleteMixin):
         return f"<Document(id={self.id}, filename='{self.filename}', status='{self.status}')>"
     
     def get_tag_list(self) -> list:
-        """Get tags as a list."""
+        """Get tags as a list, supporting both TEXT and JSONB column formats."""
         if self.tags:
             import json
             try:
-                parsed_tags = json.loads(self.tags)
-                # Ensure we return a list, handle case where tags might be a string
+                # Handle both TEXT (JSON string) and JSONB formats
+                if isinstance(self.tags, list):
+                    # Already a list (JSONB format)
+                    parsed_tags = self.tags
+                elif isinstance(self.tags, str):
+                    # JSON string (TEXT format)
+                    parsed_tags = json.loads(self.tags)
+                else:
+                    # Other types - try to convert
+                    parsed_tags = json.loads(str(self.tags))
+                
+                # Ensure we return a normalized list
                 if isinstance(parsed_tags, list):
                     return [str(tag).strip() for tag in parsed_tags if tag and str(tag).strip()]
                 elif isinstance(parsed_tags, str):
@@ -395,7 +405,7 @@ class Document(Base, TimestampMixin, SoftDeleteMixin):
         return []
     
     def set_tag_list(self, tags: list):
-        """Set tags from a list."""
+        """Set tags from a list, supporting both TEXT and JSONB column formats."""
         import json
         if tags is None:
             self.tags = None
@@ -407,6 +417,9 @@ class Document(Base, TimestampMixin, SoftDeleteMixin):
                     clean_tag = str(tag).strip().lower()
                     if clean_tag and clean_tag not in clean_tags:
                         clean_tags.append(clean_tag)
+            
+            # For now, store as JSON string (compatible with both formats)
+            # After migration, this will be stored as JSONB automatically by SQLAlchemy
             self.tags = json.dumps(clean_tags) if clean_tags else None
         else:
             # Handle single tag or other types

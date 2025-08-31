@@ -265,6 +265,12 @@ class CorpusStatsManager:
         
         return [exp_score / total for exp_score in exp_scores]
 
+class TagMatchMode:
+    """Tag matching modes for search filtering."""
+    ANY = "any"  # Document must have ANY of the specified tags (OR logic)
+    ALL = "all"  # Document must have ALL of the specified tags (AND logic)
+    EXACT = "exact"  # Document must have EXACTLY the specified tags (no more, no less)
+
 class SearchFilter:
     """Search filter class for structured filtering."""
     
@@ -275,6 +281,8 @@ class SearchFilter:
         self.date_range: Optional[Tuple[datetime, datetime]] = None
         self.file_size_range: Optional[Tuple[int, int]] = None
         self.tags: Optional[List[str]] = None
+        self.tag_match_mode: str = TagMatchMode.ANY
+        self.exclude_tags: Optional[List[str]] = None  # Tags to exclude (NOT logic)
         self.language: Optional[str] = None
         self.is_public: Optional[bool] = None
         self.min_score: Optional[float] = None
@@ -295,6 +303,8 @@ class SearchFilter:
             'date_range': [dt.isoformat() for dt in self.date_range] if self.date_range else None,
             'file_size_range': self.file_size_range,
             'tags': self.tags,
+            'tag_match_mode': self.tag_match_mode,
+            'exclude_tags': self.exclude_tags,
             'language': self.language,
             'is_public': self.is_public,
             'min_score': self.min_score,
@@ -304,6 +314,34 @@ class SearchFilter:
             'min_rerank_score': self.min_rerank_score,
             'max_results_to_rerank': self.max_results_to_rerank
         }
+    
+    def normalize_tags(self, tags: List[str]) -> List[str]:
+        """Normalize tags for consistent matching (lowercase, strip whitespace)."""
+        if not tags:
+            return []
+        
+        normalized = []
+        for tag in tags:
+            if isinstance(tag, str) and tag.strip():
+                normalized_tag = tag.strip().lower()
+                if normalized_tag not in normalized:  # Remove duplicates
+                    normalized.append(normalized_tag)
+        
+        return normalized
+    
+    def set_tags(self, tags: Optional[List[str]]):
+        """Set tags with automatic normalization."""
+        if tags:
+            self.tags = self.normalize_tags(tags)
+        else:
+            self.tags = None
+    
+    def set_exclude_tags(self, exclude_tags: Optional[List[str]]):
+        """Set exclude tags with automatic normalization.""" 
+        if exclude_tags:
+            self.exclude_tags = self.normalize_tags(exclude_tags)
+        else:
+            self.exclude_tags = None
 
 class SearchResult:
     """Enhanced search result with metadata and access control."""
@@ -619,7 +657,7 @@ class EnhancedSearchEngine:
                 if search_type == SearchType.SEMANTIC:
                     # Get accessible documents first for coverage check
                     filters.user_id = user.id
-                    accessible_doc_ids = await self._get_accessible_documents(user, db)
+                    accessible_doc_ids = await self._get_accessible_documents(user, db, filters)
                     filters.document_ids = accessible_doc_ids
                     
                     # Check if we have high vector cache coverage
@@ -657,7 +695,7 @@ class EnhancedSearchEngine:
             # Apply user access control to filters (skip if already done for semantic cache check)
             if not hasattr(filters, 'document_ids') or not filters.document_ids:
                 filters.user_id = user.id
-                accessible_doc_ids = await self._get_accessible_documents(user, db)
+                accessible_doc_ids = await self._get_accessible_documents(user, db, filters)
                 filters.document_ids = accessible_doc_ids
             else:
                 accessible_doc_ids = filters.document_ids
@@ -715,8 +753,8 @@ class EnhancedSearchEngine:
             logger.error(f"Search failed for query '{query}': {e}")
             return []
     
-    async def _get_accessible_documents(self, user: User, db: Session) -> List[int]:
-        """Get list of document IDs accessible to the user."""
+    async def _get_accessible_documents(self, user: User, db: Session, filters: SearchFilter = None) -> List[int]:
+        """Get list of document IDs accessible to the user with optional filtering."""
         try:
             # Build query for accessible documents with active vector indices
             query = db.query(Document.id).join(
@@ -743,14 +781,130 @@ class EnhancedSearchEngine:
                     VectorIndex.is_active == True
                 ).distinct()
             
+            # Apply additional filters if provided
+            if filters:
+                query = self._apply_search_filters_to_query(query, filters)
+            
             doc_ids = [row[0] for row in query.all()]
-            logger.debug(f"User {user.id} has access to {len(doc_ids)} documents")
+            logger.debug(f"User {user.id} has access to {len(doc_ids)} documents (after filtering)")
             
             return doc_ids
             
         except Exception as e:
             logger.error(f"Failed to get accessible documents: {e}")
             return []
+    
+    def _apply_search_filters_to_query(self, query, filters: SearchFilter):
+        """Apply search filters to a database query."""
+        
+        # Apply content type filtering
+        if filters.content_types:
+            query = query.filter(Document.content_type.in_(filters.content_types))
+        
+        # Apply date range filtering
+        if filters.date_range and len(filters.date_range) == 2:
+            start_date, end_date = filters.date_range
+            query = query.filter(
+                Document.created_at >= start_date,
+                Document.created_at <= end_date
+            )
+        
+        # Apply file size filtering
+        if filters.file_size_range and len(filters.file_size_range) == 2:
+            min_size, max_size = filters.file_size_range
+            query = query.filter(
+                Document.file_size >= min_size,
+                Document.file_size <= max_size
+            )
+        
+        # Apply language filtering
+        if filters.language:
+            query = query.filter(Document.language == filters.language)
+        
+        # Apply public/private filtering
+        if filters.is_public is not None:
+            query = query.filter(Document.is_public == filters.is_public)
+        
+        # Apply tag filtering - this is the main enhancement
+        if filters.tags or filters.exclude_tags:
+            query = self._apply_tag_filters_to_query(query, filters)
+        
+        return query
+    
+    def _apply_tag_filters_to_query(self, query, filters: SearchFilter):
+        """Apply tag filtering to a database query optimized for TEXT columns."""
+        from sqlalchemy import text
+        import logging
+        
+        logger = logging.getLogger(__name__)
+        
+        try:
+            # Apply include tags filtering
+            if filters.tags:
+                normalized_tags = filters.normalize_tags(filters.tags)
+                
+                if filters.tag_match_mode == TagMatchMode.ANY:
+                    # Document must have ANY of the specified tags (OR logic)
+                    # Use LIKE patterns for TEXT column with JSON strings
+                    conditions = []
+                    for tag in normalized_tags:
+                        conditions.append(f"LOWER(documents.tags) LIKE LOWER('%\"{tag}\"%')")
+                    
+                    if conditions:
+                        query = query.filter(text(f"({' OR '.join(conditions)})"))
+                
+                elif filters.tag_match_mode == TagMatchMode.ALL:
+                    # Document must have ALL of the specified tags (AND logic)
+                    conditions = []
+                    for tag in normalized_tags:
+                        conditions.append(f"LOWER(documents.tags) LIKE LOWER('%\"{tag}\"%')")
+                    
+                    if conditions:
+                        query = query.filter(text(f"({' AND '.join(conditions)})"))
+                
+                elif filters.tag_match_mode == TagMatchMode.EXACT:
+                    # Document must have EXACTLY the specified tags (no more, no less)
+                    # Generate different possible JSON formats
+                    sorted_tags = sorted(normalized_tags)
+                    
+                    # Format variations for JSON arrays
+                    formats = [
+                        '["' + '","'.join(sorted_tags) + '"]',  # Standard format with spaces
+                        "[" + ",".join([f'"{tag}"' for tag in sorted_tags]) + "]",  # Compact format
+                        '[ "' + '", "'.join(sorted_tags) + '" ]',  # Spaced format
+                    ]
+                    
+                    conditions = []
+                    for i, _ in enumerate(formats):
+                        conditions.append(f"documents.tags = :format_{i}")
+                    
+                    # Also check normalized version (remove spaces and quotes)
+                    normalized_check = "[" + ",".join(sorted_tags) + "]"
+                    conditions.append("REPLACE(REPLACE(documents.tags, ' ', ''), '\"', '') = :normalized")
+                    
+                    params = {f"format_{i}": fmt for i, fmt in enumerate(formats)}
+                    params["normalized"] = normalized_check
+                    
+                    query = query.filter(text(f"({' OR '.join(conditions)})")).params(**params)
+            
+            # Apply exclude tags filtering (NOT logic)
+            if filters.exclude_tags:
+                normalized_exclude_tags = filters.normalize_tags(filters.exclude_tags)
+                
+                # Document must NOT contain any of the excluded tags
+                conditions = []
+                for tag in normalized_exclude_tags:
+                    conditions.append(f"LOWER(documents.tags) NOT LIKE LOWER('%\"{tag}\"%')")
+                
+                if conditions:
+                    query = query.filter(text(f"({' AND '.join(conditions)})"))
+            
+            return query
+            
+        except Exception as e:
+            logger.error(f"Error applying tag filters: {e}")
+            # Return original query if tag filtering fails
+            return query
     
     async def _semantic_search(
         self,
@@ -1034,7 +1188,8 @@ class EnhancedSearchEngine:
                         'filename': document.filename,
                         'content_type': document.content_type,
                         'created_at': document.created_at.isoformat(),
-                        'version': document.version
+                        'version': document.version,
+                        'tags': document.get_tag_list()  # Include document tags
                     },
                     highlight=self._generate_highlight(query, chunk.text)
                 )
@@ -1181,7 +1336,8 @@ class EnhancedSearchEngine:
                     'content_type': document.content_type,
                     'created_at': document.created_at.isoformat(),
                     'version': document.version,
-                    'title': document.title
+                    'title': document.title,
+                    'tags': document.get_tag_list()  # Include document tags
                 }
             )
             
@@ -1228,7 +1384,8 @@ class EnhancedSearchEngine:
                     'content_type': document.content_type,
                     'created_at': document.created_at.isoformat(),
                     'version': document.version,
-                    'title': document.title
+                    'title': document.title,
+                    'tags': document.get_tag_list()  # Include document tags
                 }
             )
             

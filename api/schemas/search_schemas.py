@@ -3,10 +3,33 @@ from pydantic import BaseModel, Field, confloat
 
 class SearchFilters(BaseModel):
     folder_ids: Optional[List[str]] = Field(None, description="Filter by folder IDs")
-    tag_ids: Optional[List[str]] = Field(None, description="Filter by tag IDs")
-    file_types: Optional[List[str]] = Field(None, description="Filter by file types")
-    date_range: Optional[tuple[str, str]] = Field(None, description="Filter by date range")
+    tags: Optional[List[str]] = Field(None, description="Filter by tags (case-insensitive)")
+    tag_match_mode: Optional[str] = Field(
+        "any", 
+        description="Tag matching mode: 'any' (OR logic), 'all' (AND logic), or 'exact' (exact match)",
+        pattern="^(any|all|exact)$"
+    )
+    exclude_tags: Optional[List[str]] = Field(None, description="Tags to exclude from results")
+    file_types: Optional[List[str]] = Field(None, description="Filter by file types (MIME types)")
+    date_range: Optional[tuple[str, str]] = Field(None, description="Filter by date range (ISO format)")
+    file_size_range: Optional[tuple[int, int]] = Field(None, description="Filter by file size range (bytes)")
+    language: Optional[str] = Field(None, description="Filter by document language")
+    is_public: Optional[bool] = Field(None, description="Filter by public/private status")
     metadata_filters: Optional[dict] = Field(None, description="Filter by custom metadata")
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "tags": ["python", "machine-learning"],
+                "tag_match_mode": "any",
+                "exclude_tags": ["deprecated"],
+                "file_types": ["application/pdf", "text/plain"],
+                "date_range": ["2024-01-01T00:00:00Z", "2024-12-31T23:59:59Z"],
+                "file_size_range": [1024, 10485760],
+                "language": "en",
+                "is_public": False
+            }
+        }
 
 class SearchQuery(BaseModel):
     query: str = Field(..., description="Search query text")
@@ -75,14 +98,16 @@ class SearchResult(BaseModel):
         json_schema_extra = {
             "example": {
                 "document_id": "doc123",
+                "filename": "example.pdf",
+                "content_snippet": "This is a relevant excerpt from the document...",
                 "score": 0.95,
-                "snippet": "This is a relevant excerpt from the document...",
                 "metadata": {
                     "title": "Example Document",
                     "created_at": "2024-02-08T12:00:00Z",
-                    "file_type": "pdf"
-                },
-                "highlights": [(4, 10), (15, 22)]
+                    "content_type": "application/pdf",
+                    "tags": ["python", "machine-learning", "tutorial"],
+                    "version": 1
+                }
             }
         }
 
@@ -189,29 +214,65 @@ def convert_search_response_to_api_format(results: List, query: str,
 
 
 def convert_api_filters_to_search_filter(api_filters: Optional[SearchFilters]) -> 'SearchFilter':
-    """Convert API SearchFilters to SearchEngine SearchFilter."""
-    from vector_db.search_engine import SearchFilter
+    """Convert API SearchFilters to SearchEngine SearchFilter with enhanced tag support."""
+    from vector_db.search_engine import SearchFilter, TagMatchMode
     from datetime import datetime
     
     search_filter = SearchFilter()
     
     if api_filters:
+        # Convert file types
         if api_filters.file_types:
             search_filter.content_types = api_filters.file_types
         
-        if api_filters.tag_ids:
-            search_filter.tags = api_filters.tag_ids
+        # Convert and normalize tags with proper mode handling
+        if api_filters.tags:
+            search_filter.set_tags(api_filters.tags)
+            
+            # Set tag matching mode
+            if api_filters.tag_match_mode:
+                mode_map = {
+                    "any": TagMatchMode.ANY,
+                    "all": TagMatchMode.ALL,
+                    "exact": TagMatchMode.EXACT
+                }
+                search_filter.tag_match_mode = mode_map.get(api_filters.tag_match_mode.lower(), TagMatchMode.ANY)
         
+        # Convert exclude tags
+        if api_filters.exclude_tags:
+            search_filter.set_exclude_tags(api_filters.exclude_tags)
+        
+        # Convert date range
         if api_filters.date_range and len(api_filters.date_range) == 2:
             try:
                 start_date = datetime.fromisoformat(api_filters.date_range[0])
                 end_date = datetime.fromisoformat(api_filters.date_range[1])
                 search_filter.date_range = (start_date, end_date)
+            except (ValueError, TypeError) as e:
+                # Log but don't fail - just ignore invalid dates
+                import logging
+                logging.getLogger(__name__).warning(f"Invalid date range format: {e}")
+        
+        # Convert file size range
+        if api_filters.file_size_range and len(api_filters.file_size_range) == 2:
+            try:
+                min_size, max_size = api_filters.file_size_range
+                if min_size >= 0 and max_size >= min_size:
+                    search_filter.file_size_range = (min_size, max_size)
             except (ValueError, TypeError):
-                pass  # Invalid date format, ignore
-                
+                pass  # Invalid size range, ignore
+        
+        # Convert language filter
+        if api_filters.language:
+            search_filter.language = api_filters.language.strip().lower()
+        
+        # Convert public/private filter
+        if api_filters.is_public is not None:
+            search_filter.is_public = api_filters.is_public
+        
+        # Handle custom metadata filters if needed
         if api_filters.metadata_filters:
-            # Handle custom metadata filters if needed
+            # Custom metadata filtering can be extended here
             pass
     
     return search_filter

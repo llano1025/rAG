@@ -59,9 +59,14 @@ export interface DocumentUpload {
 // Search types
 export interface SearchFilters {
   folder_ids?: string[];
-  tag_ids?: string[];
+  tags?: string[];  // Changed from tag_ids to tags
+  tag_match_mode?: 'any' | 'all' | 'exact';  // New tag matching mode
+  exclude_tags?: string[];  // New tag exclusion support
   file_types?: string[];
   date_range?: [string, string];
+  file_size_range?: [number, number];  // New file size filtering
+  language?: string;  // New language filtering
+  is_public?: boolean;  // New public/private filtering
   metadata_filters?: Record<string, any>;
 }
 
