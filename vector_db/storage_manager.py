@@ -307,13 +307,17 @@ class VectorStorageManager:
             content_metadata = []
             for i, metadata in enumerate(metadata_list):
                 enhanced_metadata = metadata.copy()
+                # chunk_ids now contains original string chunk_ids from document_version_manager
                 enhanced_metadata.update({
-                    'chunk_id': chunk_ids[i],
+                    'chunk_id': chunk_ids[i],  # Use original string chunk_id for database lookup
                     'index_name': index_name,
                     'vector_type': 'content',
                     'added_at': datetime.now(timezone.utc).isoformat()
                 })
                 content_metadata.append(enhanced_metadata)
+                
+                # Debug: Log what chunk_id is being stored
+                logger.debug(f"DEBUG: Storing content metadata - chunk_id: {chunk_ids[i]}")
             
             # Add content vectors directly to Qdrant
             content_ids = await self.qdrant_manager.upsert_vectors(
@@ -327,8 +331,9 @@ class VectorStorageManager:
             context_metadata = []
             for i, metadata in enumerate(metadata_list):
                 enhanced_metadata = metadata.copy()
+                # chunk_ids now contains original string chunk_ids from document_version_manager
                 enhanced_metadata.update({
-                    'chunk_id': chunk_ids[i],
+                    'chunk_id': chunk_ids[i],  # Use original string chunk_id for database lookup
                     'index_name': index_name,
                     'vector_type': 'context',
                     'added_at': datetime.now(timezone.utc).isoformat()

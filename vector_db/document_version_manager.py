@@ -325,24 +325,38 @@ class DocumentVersionManager:
                 db=db
             )
             
+            # Commit document and chunks to database 
+            document.status = DocumentStatusEnum.PROCESSING  # Keep processing until vectors succeed
+            db.commit()
+            logger.info(f"Document and chunks committed to database: {document.id}")
+            
             # Create vector index and add embeddings
             index_name = f"doc_{document.id}"
-            await self._create_vector_index(
-                document=document,
-                chunks_data=chunks_data,
-                index_name=index_name,
-                embedding_model=embedding_model,
-                db=db
-            )
-            
-            # Update document status
-            document.status = DocumentStatusEnum.COMPLETED
-            document.processed_at = datetime.now(timezone.utc)
-            
-            db.commit()
-            
-            logger.info(f"Created document version {version} for document {document.id}")
-            return document
+            try:
+                await self._create_vector_index(
+                    document=document,
+                    chunks_data=chunks_data,
+                    index_name=index_name,
+                    embedding_model=embedding_model,
+                    db=db
+                )
+                
+                # Only mark as completed if vector creation succeeds
+                document.status = DocumentStatusEnum.COMPLETED
+                document.processed_at = datetime.now(timezone.utc)
+                db.commit()
+                
+                logger.info(f"Created document version {version} for document {document.id}")
+                return document
+                
+            except Exception as vector_error:
+                # Vector creation failed, but chunks are already saved
+                logger.error(f"Vector creation failed for document {document.id}: {vector_error}")
+                document.status = DocumentStatusEnum.FAILED
+                db.commit()
+                
+                # Re-raise the error for caller to handle
+                raise DocumentVersionError(f"Vector creation failed: {vector_error}")
             
         except Exception as e:
             db.rollback()
@@ -476,7 +490,7 @@ class DocumentVersionManager:
                     metadata.update(chunk_data['metadata'])
                 
                 vector_metadata.append(metadata)
-                chunk_ids.append(qdrant_point_id)  # Use UUID for Qdrant
+                chunk_ids.append(chunk.chunk_id)  # Use original string chunk_id
 
             logger.info(f"{chunk_ids}")
             

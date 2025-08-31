@@ -2,6 +2,13 @@ import { useState, useEffect } from 'react';
 import { libraryApi, Tag } from '@/api/library';
 import { searchApi, AvailableFilters, FilterOption } from '@/api/search';
 import TagInput from '@/components/common/TagInput';
+import { 
+  CpuChipIcon,
+  InformationCircleIcon,
+  ExclamationTriangleIcon,
+  CheckCircleIcon,
+  ArrowPathIcon
+} from '@heroicons/react/24/outline';
 
 interface SearchFiltersProps {
   filters: {
@@ -170,8 +177,9 @@ export default function SearchFilters({ filters, onFiltersChange }: SearchFilter
 
   if (loading) {
     return (
-      <div className="space-y-6">
-        <div className="text-sm text-gray-500">Loading filters...</div>
+      <div className="flex items-center space-x-2 text-sm text-gray-500">
+        <ArrowPathIcon className="h-4 w-4 animate-spin" />
+        <span>Loading filters...</span>
       </div>
     );
   }

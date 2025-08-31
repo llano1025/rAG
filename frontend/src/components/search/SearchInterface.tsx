@@ -49,7 +49,7 @@ export default function SearchInterface() {
 
   // Search parameters
   const [maxResults, setMaxResults] = useState(10);
-  const [minScore, setMinScore] = useState(0.3);
+  const [minScore, setMinScore] = useState(0.1);
 
   const {
     register,

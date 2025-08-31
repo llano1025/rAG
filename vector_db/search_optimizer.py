@@ -227,10 +227,27 @@ class QdrantSearchOptimizer:
                 try:
                     payload = result.payload or {}
                     
+                    # Debug payload contents to understand what's stored
+                    self.logger.debug(f"DEBUG: Qdrant result point_id={result.id}")
+                    self.logger.debug(f"DEBUG: Payload keys: {list(payload.keys())}")
+                    
+                    # Get original chunk_id from payload metadata (prioritize over UUID)
+                    original_chunk_id = payload.get('chunk_id')
+                    if not original_chunk_id:
+                        self.logger.warning(
+                            f"Missing original chunk_id in Qdrant payload for point {result.id}. "
+                            f"This indicates metadata corruption during upload. Using UUID as fallback."
+                        )
+                        original_chunk_id = str(result.id)  # UUID fallback
+                    elif original_chunk_id == str(result.id):
+                        self.logger.warning(f"chunk_id equals UUID for point {result.id} - this will cause database lookup issues")
+                    else:
+                        self.logger.debug(f"Using original chunk_id: {original_chunk_id} for point {result.id}")
+                    
                     # Create Chunk object from payload
                     chunk = Chunk(
                         document_id=payload.get('document_id', 0),
-                        chunk_id=payload.get('chunk_id', str(result.id)),
+                        chunk_id=original_chunk_id,
                         start_idx=payload.get('start_char', 0),
                         end_idx=payload.get('end_char', 0),
                         text=payload.get('text', ''),
