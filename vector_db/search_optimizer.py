@@ -142,62 +142,6 @@ class QdrantSearchOptimizer:
             self.logger.error(f"Failed to create collection {self.collection_name}: {e}")
             raise SearchError(f"Collection creation failed: {e}")
 
-    async def add_vectors(
-        self,
-        vectors: List[List[float]],
-        metadata_list: List[Dict[str, Any]],
-        chunk_ids: List[str] = None
-    ) -> List[str]:
-        """
-        Add vectors to Qdrant collection with metadata as payloads.
-        
-        Args:
-            vectors: List of embedding vectors
-            metadata_list: List of metadata dictionaries
-            chunk_ids: Optional list of chunk IDs (will generate if not provided)
-            
-        Returns:
-            List of point IDs that were added
-        """
-        try:
-            if not self.client:
-                raise ValueError("Qdrant client not initialized")
-            
-            if len(vectors) != len(metadata_list):
-                raise ValueError("Vectors and metadata lists must have the same length")
-            
-            # Generate chunk IDs if not provided
-            if chunk_ids is None:
-                import uuid
-                chunk_ids = [str(uuid.uuid4()) for _ in range(len(vectors))]
-            
-            # Create points for Qdrant
-            points = []
-            for i, (vector, metadata, chunk_id) in enumerate(zip(vectors, metadata_list, chunk_ids)):
-                # Ensure metadata includes chunk_id
-                enhanced_metadata = metadata.copy()
-                enhanced_metadata['chunk_id'] = chunk_id
-                enhanced_metadata['added_at'] = time.time()
-                
-                point = PointStruct(
-                    id=chunk_id,  # Use chunk_id as the point ID
-                    vector=vector,
-                    payload=enhanced_metadata
-                )
-                points.append(point)
-            
-            # Upsert points to collection
-            self.client.upsert(
-                collection_name=self.collection_name,
-                points=points
-            )
-            
-            self.logger.info(f"Added {len(points)} vectors to collection {self.collection_name}")
-            return chunk_ids
-            
-        except Exception as e:
-            self.logger.error(f"Failed to add vectors: {e}")
-            raise SearchError(f"Adding vectors failed: {e}")
 
     async def search(
         self,

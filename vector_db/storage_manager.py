@@ -300,49 +300,52 @@ class VectorStorageManager:
                     logger.error("No valid chunks found after validation - aborting vector addition")
                     return []
             
-            # Get search optimizers
-            content_optimizer = self.search_optimizers.get(f"{index_name}_content")
-            context_optimizer = self.search_optimizers.get(f"{index_name}_context")
+            # Get collection names for direct Qdrant operations
+            content_collection, context_collection = self._get_collection_names(index_name)
             
-            if not content_optimizer or not context_optimizer:
-                raise ValueError(f"Index {index_name} not found. Create index first.")
-            
-            # Add content vectors
+            # Add enhanced metadata for content vectors
             content_metadata = []
             for i, metadata in enumerate(metadata_list):
                 enhanced_metadata = metadata.copy()
-                enhanced_metadata['vector_type'] = 'content'
-                enhanced_metadata['index_name'] = index_name
-                enhanced_metadata['added_at'] = datetime.now(timezone.utc).isoformat()
-                # Ensure chunk_id is in metadata
-                enhanced_metadata['chunk_id'] = chunk_ids[i]
+                enhanced_metadata.update({
+                    'chunk_id': chunk_ids[i],
+                    'index_name': index_name,
+                    'vector_type': 'content',
+                    'added_at': datetime.now(timezone.utc).isoformat()
+                })
                 content_metadata.append(enhanced_metadata)
             
-            await content_optimizer.add_vectors(
+            # Add content vectors directly to Qdrant
+            content_ids = await self.qdrant_manager.upsert_vectors(
+                collection_name=content_collection,
                 vectors=content_vectors,
-                metadata_list=content_metadata,
-                chunk_ids=chunk_ids
+                payloads=content_metadata,
+                ids=chunk_ids  # QdrantManager handles ID conversion
             )
             
-            # Add context vectors
+            # Add enhanced metadata for context vectors
             context_metadata = []
             for i, metadata in enumerate(metadata_list):
                 enhanced_metadata = metadata.copy()
-                enhanced_metadata['vector_type'] = 'context'
-                enhanced_metadata['index_name'] = index_name
-                enhanced_metadata['added_at'] = datetime.now(timezone.utc).isoformat()
-                # Ensure chunk_id is in metadata
-                enhanced_metadata['chunk_id'] = chunk_ids[i]
+                enhanced_metadata.update({
+                    'chunk_id': chunk_ids[i],
+                    'index_name': index_name,
+                    'vector_type': 'context',
+                    'added_at': datetime.now(timezone.utc).isoformat()
+                })
                 context_metadata.append(enhanced_metadata)
             
-            await context_optimizer.add_vectors(
+            # Add context vectors directly to Qdrant
+            context_ids = await self.qdrant_manager.upsert_vectors(
+                collection_name=context_collection,
                 vectors=context_vectors,
-                metadata_list=context_metadata,
-                chunk_ids=chunk_ids
+                payloads=context_metadata,
+                ids=chunk_ids  # QdrantManager handles ID conversion
             )
             
             logger.info(f"Added {len(content_vectors)} validated vectors to index {index_name}")
-            return chunk_ids
+            # Return the actual IDs that were added to Qdrant (converted UUIDs)
+            return content_ids if content_ids else context_ids if context_ids else chunk_ids
             
         except Exception as e:
             logger.error(f"Failed to add vectors to index {index_name}: {e}")
@@ -372,21 +375,27 @@ class VectorStorageManager:
             try:
                 valid_indices = []
                 
-                for i, chunk_id in enumerate(chunk_ids):
+                for i, (chunk_id, metadata) in enumerate(zip(chunk_ids, metadata_list)):
                     try:
-                        # Check if chunk exists and has content
+                        # Get original string chunk_id from metadata (UUIDs won't be in database)
+                        original_chunk_id = metadata.get('chunk_id')
+                        if not original_chunk_id:
+                            logger.debug(f"Skipping chunk at index {i}: no original chunk_id in metadata")
+                            continue
+                        
+                        # Check if chunk exists and has content using original chunk ID
                         chunk = db.query(DocumentChunk).filter(
-                            DocumentChunk.chunk_id == chunk_id
+                            DocumentChunk.chunk_id == original_chunk_id
                         ).first()
                         
                         if chunk and chunk.text and chunk.text.strip():
                             valid_indices.append(i)
                         else:
                             reason = "not found" if not chunk else "empty text"
-                            logger.debug(f"Skipping chunk {chunk_id}: {reason}")
+                            logger.debug(f"Skipping chunk {original_chunk_id} (UUID: {chunk_id}): {reason}")
                     
                     except Exception as e:
-                        logger.warning(f"Error validating chunk {chunk_id}: {e}")
+                        logger.warning(f"Error validating chunk {original_chunk_id} (UUID: {chunk_id}): {e}")
                         continue
                 
                 logger.debug(f"Validated {len(valid_indices)} out of {len(chunk_ids)} chunks")

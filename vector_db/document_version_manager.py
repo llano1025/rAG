@@ -477,6 +477,8 @@ class DocumentVersionManager:
                 
                 vector_metadata.append(metadata)
                 chunk_ids.append(qdrant_point_id)  # Use UUID for Qdrant
+
+            logger.info(f"{chunk_ids}")
             
             # Add vectors to storage
             added_ids = await self.storage_manager.add_vectors(
