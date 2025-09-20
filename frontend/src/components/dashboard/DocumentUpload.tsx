@@ -112,19 +112,39 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
           f.id === uploadFile.id ? { ...f, status: 'uploading' } : f
         ));
 
-        // Add OCR parameters for image files
+        // Add OCR parameters for all file types when specified
         const uploadParams: any = { 
           file: uploadFile.file,
           metadata: { folder_path: folderPath || undefined },
           embedding_model: selectedEmbeddingModel
         };
         
-        // Add OCR settings for image files
-        if (uploadFile.file.type.startsWith('image/')) {
+        // Add OCR settings when OCR method is selected (for any file type)
+        if (ocrMethod && ocrMethod !== 'none') {
+          // Validate OCR method
+          const validOcrMethods = ['tesseract', 'vision_llm'];
+          if (!validOcrMethods.includes(ocrMethod)) {
+            throw new Error(`Invalid OCR method: ${ocrMethod}`);
+          }
+          
           uploadParams.ocr_method = ocrMethod;
-          uploadParams.ocr_language = ocrLanguage;
+          
+          // Add OCR language if specified
+          if (ocrLanguage) {
+            uploadParams.ocr_language = ocrLanguage;
+          }
+          
+          // Add vision provider and model for Vision LLM
           if (ocrMethod === 'vision_llm') {
-            uploadParams.vision_provider = visionProvider;
+            // Validate vision provider if specified
+            if (visionProvider) {
+              const validProviders = ['openai', 'gemini', 'claude'];
+              if (!validProviders.includes(visionProvider)) {
+                throw new Error(`Invalid vision provider: ${visionProvider}`);
+              }
+              uploadParams.vision_provider = visionProvider;
+            }
+            
             if (selectedVisionModel) {
               uploadParams.vision_model = selectedVisionModel;
             }
@@ -325,7 +345,7 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="block text-sm font-medium text-gray-700">
-                OCR Settings (for images)
+                OCR Settings
               </label>
               <button
                 type="button"

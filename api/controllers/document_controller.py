@@ -172,15 +172,42 @@ class DocumentController:
             file_content = await file.read()
             await file.seek(0)  # Reset file pointer
             
-            # Prepare metadata with OCR settings for image files
+            # Prepare metadata with OCR settings for all file types
             enhanced_metadata = metadata or {}
-            if file.content_type and file.content_type.startswith('image/'):
-                enhanced_metadata.update({
-                    'ocr_method': ocr_method or 'tesseract',
-                    'ocr_language': ocr_language or 'eng',
-                    'vision_provider': vision_provider if ocr_method == 'vision_llm' else None,
-                    'requires_ocr': True
-                })
+            
+            # Add OCR parameters when explicitly provided, regardless of file type
+            if ocr_method or ocr_language or vision_provider:
+                ocr_metadata = {}
+                
+                # Validate OCR method
+                if ocr_method:
+                    valid_ocr_methods = ['tesseract', 'vision_llm']
+                    if ocr_method not in valid_ocr_methods:
+                        raise ValueError(f"Invalid OCR method '{ocr_method}'. Valid options: {valid_ocr_methods}")
+                    ocr_metadata['ocr_method'] = ocr_method
+                    
+                # Validate vision provider for Vision LLM
+                if ocr_method == 'vision_llm':
+                    if vision_provider:
+                        valid_providers = ['openai', 'gemini', 'claude']
+                        if vision_provider not in valid_providers:
+                            raise ValueError(f"Invalid vision provider '{vision_provider}'. Valid options: {valid_providers}")
+                        ocr_metadata['vision_provider'] = vision_provider
+                    # If no vision provider specified for vision_llm, let the text extractor choose automatically
+                    
+                # Add OCR language if specified (default to 'eng' for traditional OCR)
+                if ocr_language:
+                    ocr_metadata['ocr_language'] = ocr_language
+                elif ocr_method == 'tesseract':  # Only default for tesseract
+                    ocr_metadata['ocr_language'] = 'eng'
+                    
+                # Mark that OCR processing is requested
+                if ocr_method:
+                    ocr_metadata['requires_ocr'] = True
+                    
+                enhanced_metadata.update(ocr_metadata)
+                
+                logger.info(f"DocumentController: Added OCR metadata for {file.filename}: {ocr_metadata}")
             
             # Process upload using vector controller
             result = await self.vector_controller.upload_document(

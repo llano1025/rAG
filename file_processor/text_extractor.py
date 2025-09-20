@@ -34,6 +34,14 @@ except ImportError:
     BeautifulSoup = None
     BS4_AVAILABLE = False
 
+try:
+    from PIL import Image
+    PIL_AVAILABLE = True
+except ImportError:
+    logging.warning("PIL/Pillow not available, image processing will be limited")
+    Image = None
+    PIL_AVAILABLE = False
+
 # Lazy import for OCR processor
 def _get_ocr_processor():
     """Lazy import of OCRProcessor."""
@@ -85,11 +93,17 @@ class TextExtractor:
             temp_path = temp_file.name
         
         try:
+            # Check if Vision LLM OCR was explicitly requested
+            if ocr_method == "vision_llm":
+                self.logger.info(f"Vision LLM OCR explicitly requested for {filename or 'document'}")
+                return self._extract_with_vision_llm_ocr(temp_path, content_type, vision_provider)
+            
             # For image files, use specified OCR settings
             if content_type and content_type.startswith('image/'):
                 return self._extract_from_image(temp_path, ocr_method, ocr_language, vision_provider)
             else:
                 # Use existing extract method for non-image files
+                # PDF extraction now includes automatic Vision LLM fallback
                 return self.extract(temp_path, content_type)
         finally:
             # Clean up temporary file
@@ -122,10 +136,25 @@ class TextExtractor:
             with fitz.open(str(file_path)) as doc:
                 for page in doc:
                     text.append(page.get_text())
-            return "\n".join(text)
+            result_text = "\n".join(text)
+            
+            # Check if text extraction was successful (more than just whitespace)
+            if result_text and len(result_text.strip()) >= 10:
+                return result_text
+            else:
+                # Fallback to Vision LLM OCR if regular extraction failed
+                self.logger.info(f"Regular PDF text extraction yielded insufficient text, attempting Vision LLM OCR fallback for {file_path}")
+                return self._extract_pdf_with_vision_llm(file_path)
+                
         except Exception as e:
             self.logger.error(f"Failed to extract text from PDF {file_path}: {e}")
-            return f"[Error extracting text from PDF file: {str(e)}]"
+            # Try Vision LLM OCR as fallback
+            try:
+                self.logger.info(f"Attempting Vision LLM OCR fallback after PDF extraction error for {file_path}")
+                return self._extract_pdf_with_vision_llm(file_path)
+            except Exception as fallback_e:
+                self.logger.error(f"Vision LLM OCR fallback also failed: {fallback_e}")
+                return f"[Error extracting text from PDF file: {str(e)}]"
 
     def _extract_from_docx(self, file_path: Union[str, Path]) -> str:
         """Extract text from DOCX files."""
@@ -360,7 +389,7 @@ class TextExtractor:
             self.logger.error(f"Failed to extract text from image {file_path}: {e}")
             return f"[Error extracting text from image file: {str(e)}]"
 
-    def _get_vision_llm_config(self, provider: 'VisionProvider') -> dict:
+    def _get_vision_llm_config(self, provider) -> dict:
         """Get vision LLM configuration for the specified provider."""
         try:
             from config import get_settings
@@ -405,6 +434,255 @@ class TextExtractor:
             self.logger.error(f"Failed to get vision LLM config: {e}")
         
         return None
+
+    def _extract_pdf_with_vision_llm(self, file_path: Union[str, Path]) -> str:
+        """Extract text from PDF by converting pages to images and using Vision LLM OCR."""
+        if not PYMUPDF_AVAILABLE:
+            raise Exception("PyMuPDF is required for PDF to image conversion")
+        
+        if not PIL_AVAILABLE:
+            raise Exception("PIL/Pillow is required for image processing")
+        
+        try:
+            # Get OCR processor if available
+            OCRProcessor = _get_ocr_processor()
+            if not OCRProcessor:
+                raise Exception("OCRProcessor not available for Vision LLM processing")
+            
+            # Import required classes
+            from .ocr_processor import OCRMethod, VisionProvider
+            
+            # Get vision LLM configuration from settings
+            vision_provider = VisionProvider.GEMINI  # Default provider
+            vision_llm_config = self._get_vision_llm_config(vision_provider)
+            
+            if not vision_llm_config:
+                # Try other providers
+                for provider in [VisionProvider.OPENAI, VisionProvider.CLAUDE]:
+                    vision_llm_config = self._get_vision_llm_config(provider)
+                    if vision_llm_config:
+                        vision_provider = provider
+                        break
+            
+            if not vision_llm_config:
+                raise Exception("No Vision LLM provider configured. Please set API keys for OpenAI, Gemini, or Claude.")
+            
+            # Create OCR processor with Vision LLM
+            ocr_processor = OCRProcessor(
+                method=OCRMethod.VISION_LLM,
+                vision_llm_config=vision_llm_config,
+                vision_provider=vision_provider,
+                enable_fallback=True,
+                timeout=60
+            )
+            
+            # Convert PDF pages to images and process with OCR
+            all_text = []
+            with fitz.open(str(file_path)) as doc:
+                for page_num, page in enumerate(doc):
+                    try:
+                        # Convert page to image
+                        pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0))  # 2x scale for better quality
+                        img_data = pix.tobytes("png")
+                        
+                        # Create PIL Image from bytes
+                        from PIL import Image
+                        image = Image.open(BytesIO(img_data))
+                        
+                        # Process with Vision LLM OCR
+                        page_text = ocr_processor.process_image(image, method=OCRMethod.VISION_LLM, vision_provider=vision_provider)
+                        
+                        if page_text and page_text.strip():
+                            all_text.append(f"Page {page_num + 1}:\n{page_text.strip()}")
+                            self.logger.info(f"Successfully extracted text from PDF page {page_num + 1} using Vision LLM")
+                        else:
+                            self.logger.warning(f"No text extracted from PDF page {page_num + 1}")
+                            
+                    except Exception as e:
+                        self.logger.error(f"Failed to process PDF page {page_num + 1} with Vision LLM: {e}")
+                        continue
+            
+            if all_text:
+                result = "\n\n".join(all_text)
+                self.logger.info(f"Vision LLM OCR successfully extracted {len(result)} characters from PDF")
+                return result
+            else:
+                raise Exception("No text could be extracted from any PDF page using Vision LLM")
+                
+        except Exception as e:
+            self.logger.error(f"PDF Vision LLM OCR failed: {e}")
+            raise Exception(f"Vision LLM OCR processing failed: {str(e)}")
+
+    def _convert_document_to_images(self, file_path: Union[str, Path], content_type: str) -> list:
+        """Convert various document types to images for Vision LLM processing."""
+        if not PIL_AVAILABLE:
+            raise Exception("PIL/Pillow is required for document to image conversion")
+        
+        images = []
+        
+        if content_type == 'application/pdf':
+            # Convert PDF pages to images
+            if not PYMUPDF_AVAILABLE:
+                raise Exception("PyMuPDF is required for PDF to image conversion")
+            
+            with fitz.open(str(file_path)) as doc:
+                for page_num, page in enumerate(doc):
+                    pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0))  # 2x scale for quality
+                    img_data = pix.tobytes("png")
+                    from PIL import Image
+                    image = Image.open(BytesIO(img_data))
+                    images.append((page_num + 1, image))
+        
+        elif content_type in ['application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']:
+            # Convert DOC/DOCX to PDF first, then to images
+            try:
+                # Use LibreOffice to convert to PDF
+                import subprocess
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    pdf_path = os.path.join(temp_dir, "converted.pdf")
+                    
+                    # Try common LibreOffice/OpenOffice paths
+                    office_commands = [
+                        'libreoffice',
+                        'soffice',
+                        '/usr/bin/libreoffice',
+                        '/usr/local/bin/libreoffice'
+                    ]
+                    
+                    converted = False
+                    for cmd in office_commands:
+                        try:
+                            result = subprocess.run([
+                                cmd, '--headless', '--convert-to', 'pdf',
+                                '--outdir', temp_dir, str(file_path)
+                            ], capture_output=True, timeout=60, text=True)
+                            
+                            if result.returncode == 0:
+                                # Find the generated PDF
+                                expected_pdf = os.path.join(temp_dir, Path(file_path).stem + '.pdf')
+                                if os.path.exists(expected_pdf):
+                                    # Convert PDF to images
+                                    if PYMUPDF_AVAILABLE:
+                                        with fitz.open(expected_pdf) as doc:
+                                            for page_num, page in enumerate(doc):
+                                                pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0))
+                                                img_data = pix.tobytes("png")
+                                                from PIL import Image
+                                                image = Image.open(BytesIO(img_data))
+                                                images.append((page_num + 1, image))
+                                        converted = True
+                                        break
+                        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
+                            continue
+                    
+                    if not converted:
+                        raise Exception("Could not convert document to PDF using LibreOffice")
+                        
+            except Exception as e:
+                self.logger.error(f"Document to image conversion failed: {e}")
+                raise Exception(f"Could not convert document to images: {str(e)}")
+        
+        else:
+            raise Exception(f"Document to image conversion not supported for content type: {content_type}")
+        
+        return images
+
+    def _extract_with_vision_llm_ocr(self, file_path: Union[str, Path], content_type: str, vision_provider: str = None) -> str:
+        """Extract text from any document type using Vision LLM OCR by converting to images."""
+        try:
+            if content_type == 'application/pdf':
+                # Use the specialized PDF Vision LLM method
+                return self._extract_pdf_with_vision_llm(file_path)
+            
+            elif content_type.startswith('image/'):
+                # Direct image processing
+                return self._extract_from_image(file_path, ocr_method="vision_llm", vision_provider=vision_provider)
+            
+            elif content_type in ['application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document']:
+                # Convert DOC/DOCX to images and process
+                return self._extract_document_with_vision_llm(file_path, content_type, vision_provider)
+            
+            else:
+                # For other document types, skip regular extraction and go directly to Vision LLM
+                return self._extract_document_with_vision_llm(file_path, content_type, vision_provider)
+        
+        except Exception as e:
+            self.logger.error(f"Vision LLM OCR failed for {content_type}: {e}")
+            raise Exception(f"Vision LLM OCR processing failed: {str(e)}")
+
+    def _extract_document_with_vision_llm(self, file_path: Union[str, Path], content_type: str, vision_provider: str = None) -> str:
+        """Extract text from document by converting to images and using Vision LLM OCR."""
+        try:
+            # Get OCR processor
+            OCRProcessor = _get_ocr_processor()
+            if not OCRProcessor:
+                raise Exception("OCRProcessor not available for Vision LLM processing")
+            
+            # Import required classes
+            from .ocr_processor import OCRMethod, VisionProvider
+            
+            # Set up vision provider
+            if vision_provider:
+                try:
+                    provider = VisionProvider(vision_provider)
+                except ValueError:
+                    self.logger.warning(f"Invalid vision provider '{vision_provider}', using Gemini")
+                    provider = VisionProvider.GEMINI
+            else:
+                provider = VisionProvider.GEMINI
+            
+            # Get vision LLM configuration
+            vision_llm_config = self._get_vision_llm_config(provider)
+            if not vision_llm_config:
+                # Try other providers
+                for fallback_provider in [VisionProvider.OPENAI, VisionProvider.CLAUDE]:
+                    vision_llm_config = self._get_vision_llm_config(fallback_provider)
+                    if vision_llm_config:
+                        provider = fallback_provider
+                        break
+            
+            if not vision_llm_config:
+                raise Exception("No Vision LLM provider configured. Please set API keys for OpenAI, Gemini, or Claude.")
+            
+            # Create OCR processor
+            ocr_processor = OCRProcessor(
+                method=OCRMethod.VISION_LLM,
+                vision_llm_config=vision_llm_config,
+                vision_provider=provider,
+                enable_fallback=True,
+                timeout=60
+            )
+            
+            # Convert document to images
+            images = self._convert_document_to_images(file_path, content_type)
+            
+            if not images:
+                raise Exception(f"Could not convert {content_type} document to images")
+            
+            # Process each image with Vision LLM OCR
+            all_text = []
+            for page_num, image in images:
+                try:
+                    page_text = ocr_processor.process_image(image, method=OCRMethod.VISION_LLM, vision_provider=provider)
+                    if page_text and page_text.strip():
+                        all_text.append(f"Page {page_num}:\n{page_text.strip()}")
+                        self.logger.info(f"Successfully extracted text from page {page_num} using Vision LLM")
+                    else:
+                        self.logger.warning(f"No text extracted from page {page_num}")
+                except Exception as e:
+                    self.logger.error(f"Failed to process page {page_num} with Vision LLM: {e}")
+                    continue
+            
+            if all_text:
+                result = "\n\n".join(all_text)
+                self.logger.info(f"Vision LLM OCR successfully extracted {len(result)} characters from {content_type} document")
+                return result
+            else:
+                raise Exception("No text could be extracted from any page using Vision LLM")
+                
+        except Exception as e:
+            self.logger.error(f"Document Vision LLM OCR failed: {e}")
+            raise Exception(f"Vision LLM OCR processing failed: {str(e)}")
 
     def extract_tables_from_pdf(self, file_path: Union[str, Path]) -> list:
         """Extract tables from PDF files."""

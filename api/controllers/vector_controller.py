@@ -146,10 +146,15 @@ class VectorController:
                 vision_provider=vision_provider
             )
             
-            if not extracted_text or len(extracted_text.strip()) < 10:
+            # More lenient validation - allow shorter text for certain document types
+            min_length = 5 if ocr_method == "vision_llm" else 10
+            if not extracted_text or len(extracted_text.strip()) < min_length:
+                # Provide more specific error message
+                extraction_method = "Vision LLM OCR" if ocr_method == "vision_llm" else "regular text extraction"
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Could not extract meaningful text content from file"
+                    detail=f"Could not extract meaningful text content from file using {extraction_method}. "
+                           f"Try using a different OCR method or ensure the document contains readable text."
                 )
             
             # Calculate file hash for storage and deduplication

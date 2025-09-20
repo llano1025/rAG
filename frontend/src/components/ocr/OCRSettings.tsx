@@ -108,24 +108,6 @@ export default function OCRSettings({
     }
   };
 
-  const getQualityColor = (level: string) => {
-    switch (level) {
-      case 'excellent': return 'text-green-600 bg-green-50';
-      case 'good': return 'text-blue-600 bg-blue-50';
-      case 'basic': return 'text-gray-600 bg-gray-50';
-      default: return 'text-gray-600 bg-gray-50';
-    }
-  };
-
-  const getQualityIcon = (level: string) => {
-    switch (level) {
-      case 'excellent': return '🚀';
-      case 'good': return '👍';
-      case 'basic': return '📄';
-      default: return '❓';
-    }
-  };
-
   if (loading) {
     return (
       <div className="p-4 bg-white rounded-lg shadow-sm border border-gray-200">
@@ -175,9 +157,6 @@ export default function OCRSettings({
                   <div className="flex items-center justify-between">
                     <h4 className="font-medium text-gray-900 flex items-center">
                       {method.display_name}
-                      <span className={`ml-2 px-2 py-1 text-xs rounded-full ${getQualityColor(method.quality_level)}`}>
-                        {getQualityIcon(method.quality_level)} {method.quality_level}
-                      </span>
                     </h4>
                   </div>
                   <p className="text-sm text-gray-600 mt-1">{method.description}</p>
@@ -238,68 +217,7 @@ export default function OCRSettings({
           Select the primary language of your documents for better OCR accuracy.
         </p>
       </div>
-
-      {/* Advanced Settings */}
-      {showAdvanced && ocrConfig && (
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-          <h3 className="text-lg font-medium text-gray-900 flex items-center mb-4">
-            <CogIcon className="h-5 w-5 mr-2" />
-            Advanced Settings
-          </h3>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Max File Size
-              </label>
-              <div className="text-sm text-gray-600">
-                {ocrConfig.max_file_size_mb} MB per file
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Batch Upload Limit
-              </label>
-              <div className="text-sm text-gray-600">
-                {ocrConfig.batch_limit} files maximum
-              </div>
-            </div>
-
-            <div className="md:col-span-2">
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Supported Formats
-              </label>
-              <div className="flex flex-wrap gap-2">
-                {ocrConfig.supported_formats.map((format) => (
-                  <span
-                    key={format}
-                    className="px-2 py-1 bg-gray-100 text-gray-700 text-xs rounded"
-                  >
-                    {format}
-                  </span>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-4 p-3 bg-blue-50 rounded-lg">
-            <div className="flex items-start">
-              <InformationCircleIcon className="h-5 w-5 text-blue-400 mt-0.5 mr-2 flex-shrink-0" />
-              <div className="text-sm text-blue-700">
-                <p className="font-medium mb-1">OCR Processing Tips:</p>
-                <ul className="list-disc list-inside space-y-1 text-xs">
-                  <li>Higher resolution images provide better OCR accuracy</li>
-                  <li>Vision LLM works better with complex layouts and handwriting</li>
-                  <li>Tesseract is faster and free for simple printed text</li>
-                  <li>Ensure images are well-lit and text is clearly visible</li>
-                </ul>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
+      
       {/* Current Status */}
       <div className="bg-gray-50 rounded-lg p-4">
         <h4 className="font-medium text-gray-900 mb-2">Current Settings</h4>
