@@ -11,6 +11,7 @@ interface WebSocketMessage {
 
 interface UseWebSocketOptions {
   onDocumentUpdate?: (data: any) => void;
+  onDocumentProgress?: (data: any) => void;
   onSystemAlert?: (data: any) => void;
   onUserUpdate?: (data: any) => void;
 }
@@ -94,6 +95,17 @@ export const useWebSocket = (options: UseWebSocketOptions = {}) => {
     // Search events
     socket.on('search_completed', (data) => {
       setLastMessage({ type: 'search_completed', data, timestamp: new Date().toISOString() });
+    });
+
+    // Document progress events
+    socket.on('document_processing_progress', (data) => {
+      setLastMessage({ type: 'document_processing_progress', data, timestamp: new Date().toISOString() });
+      options.onDocumentProgress?.(data);
+    });
+
+    socket.on('document_processing_complete', (data) => {
+      setLastMessage({ type: 'document_processing_complete', data, timestamp: new Date().toISOString() });
+      options.onDocumentProgress?.(data);
     });
 
     return socket;

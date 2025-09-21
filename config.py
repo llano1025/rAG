@@ -116,7 +116,12 @@ class Settings(BaseSettings):
     
     # Worker settings
     WORKER_CONCURRENCY: int = Field(default=4, env="WORKER_CONCURRENCY")
-    BACKGROUND_TASK_TIMEOUT: int = Field(default=300, env="BACKGROUND_TASK_TIMEOUT")  # 5 minutes
+    BACKGROUND_TASK_TIMEOUT: int = Field(default=900, env="BACKGROUND_TASK_TIMEOUT")  # 15 minutes
+
+    # Document processing timeouts
+    DOCUMENT_PROCESSING_TIMEOUT: int = Field(default=1200, env="DOCUMENT_PROCESSING_TIMEOUT")  # 20 minutes
+    EMBEDDING_GENERATION_TIMEOUT: int = Field(default=900, env="EMBEDDING_GENERATION_TIMEOUT")  # 15 minutes per document
+    DOCUMENT_UPLOAD_TIMEOUT: int = Field(default=600, env="DOCUMENT_UPLOAD_TIMEOUT")  # 10 minutes for upload + initial processing
     
     # Environment and fallback settings
     ENVIRONMENT: str = Field(default="development", env="ENVIRONMENT")

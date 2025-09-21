@@ -6,13 +6,19 @@ import { apiClient } from '@/api/client';
 import TagInput from '@/components/common/TagInput';
 import OCRSettings from '@/components/ocr/OCRSettings';
 import OCRPreview from '@/components/ocr/OCRPreview';
+import { useWebSocket } from '@/hooks/useWebSocket';
 import toast from 'react-hot-toast';
 
 interface UploadFile {
   file: File;
   progress: number;
-  status: 'pending' | 'uploading' | 'completed' | 'failed';
+  status: 'pending' | 'uploading' | 'processing' | 'completed' | 'failed';
   id: string;
+  stage?: string;
+  chunksProcessed?: number;
+  totalChunks?: number;
+  estimatedRemaining?: number;
+  documentId?: number;
 }
 
 interface DocumentUploadProps {
@@ -55,6 +61,13 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
   const [selectedVisionModel, setSelectedVisionModel] = useState<string>('');
   const [showOcrSettings, setShowOcrSettings] = useState(false);
   const [previewFile, setPreviewFile] = useState<File | null>(null);
+
+  // WebSocket for real-time progress updates
+  const { isConnected } = useWebSocket({
+    onDocumentProgress: (data) => {
+      handleDocumentProgress(data);
+    },
+  });
 
   // Load embedding models on component mount
   useEffect(() => {
@@ -110,6 +123,40 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
 
   const removeFile = (id: string) => {
     setFiles(prev => prev.filter(f => f.id !== id));
+  };
+
+  // Handle real-time document progress updates
+  const handleDocumentProgress = (data: any) => {
+    const { filename, document_id, stage, progress, chunks_processed, total_chunks, type } = data;
+
+    setFiles(prev => prev.map(f => {
+      // Match by filename since document_id might be 0 initially
+      if (f.file.name === filename) {
+        const updates: Partial<UploadFile> = {
+          progress: Math.max(f.progress, progress), // Only increase progress
+          stage: stage,
+          chunksProcessed: chunks_processed,
+          totalChunks: total_chunks,
+        };
+
+        // Update document ID when available
+        if (document_id && document_id > 0) {
+          updates.documentId = document_id;
+        }
+
+        // Handle completion
+        if (type === 'document_processing_complete') {
+          updates.status = data.success ? 'completed' : 'failed';
+          updates.progress = data.success ? 100 : f.progress;
+        } else if (progress > 15) {
+          // Switch to processing status once we're past initial upload
+          updates.status = 'processing';
+        }
+
+        return { ...f, ...updates };
+      }
+      return f;
+    }));
   };
 
   const uploadFiles = async () => {
@@ -248,6 +295,28 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
     return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  };
+
+  // Format stage name for display
+  const formatStage = (stage?: string) => {
+    if (!stage) return '';
+
+    const stageMap: Record<string, string> = {
+      'validation': 'Validating file',
+      'uploading': 'Uploading file',
+      'text_extraction': 'Extracting text',
+      'extracting_text': 'Extracting text',
+      'text_extracted': 'Text extracted',
+      'chunking_document': 'Processing content',
+      'chunks_created': 'Content processed',
+      'generating_embeddings': 'Generating embeddings',
+      'generating_content_embeddings': 'Generating content embeddings',
+      'generating_context_embeddings': 'Generating context embeddings',
+      'storing_vectors': 'Storing vectors',
+      'completed': 'Processing complete'
+    };
+
+    return stageMap[stage] || stage.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
   };
 
   return (
@@ -417,15 +486,26 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
                 </p>
                 
                 {/* Progress bar */}
-                {uploadFile.status === 'uploading' && (
+                {(uploadFile.status === 'uploading' || uploadFile.status === 'processing') && (
                   <div className="mt-2">
                     <div className="bg-gray-200 rounded-full h-2">
                       <div
-                        className="bg-primary-600 h-2 rounded-full transition-all duration-300"
+                        className={`h-2 rounded-full transition-all duration-300 ${
+                          uploadFile.status === 'processing' ? 'bg-blue-600' : 'bg-primary-600'
+                        }`}
                         style={{ width: `${uploadFile.progress}%` }}
                       />
                     </div>
-                    <p className="text-xs text-gray-500 mt-1">{uploadFile.progress}%</p>
+                    <div className="flex justify-between items-center mt-1">
+                      <p className="text-xs text-gray-600">
+                        {formatStage(uploadFile.stage)} {uploadFile.progress}%
+                      </p>
+                      {uploadFile.chunksProcessed !== undefined && uploadFile.totalChunks !== undefined && (
+                        <p className="text-xs text-gray-500">
+                          {uploadFile.chunksProcessed}/{uploadFile.totalChunks} chunks
+                        </p>
+                      )}
+                    </div>
                   </div>
                 )}
                 

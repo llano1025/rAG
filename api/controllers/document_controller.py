@@ -28,6 +28,7 @@ from utils.exceptions import (
     ExternalServiceException,
     ConfigurationException
 )
+from utils.websocket import get_websocket_manager
 from api.schemas.responses import StandardResponse, create_success_response, create_paginated_response
 
 logger = logging.getLogger(__name__)
@@ -147,17 +148,49 @@ class DocumentController:
             Dictionary with upload results
         """
         try:
+            # Get WebSocket manager for progress updates
+            websocket_manager = get_websocket_manager()
+            user_id = str(user.id)
+
+            # Emit processing started event
+            await websocket_manager.emit_document_progress(
+                user_id=user_id,
+                document_id=0,  # Will be updated once document is created
+                filename=file.filename,
+                stage="validation",
+                progress=5
+            )
+
             logger.info(f"DocumentController: Starting file validation for {file.filename}")
-            
+
             # Validate file
             try:
                 await self._validate_file(file)
                 logger.info(f"DocumentController: File validation successful for {file.filename}")
+
+                # Emit validation complete
+                await websocket_manager.emit_document_progress(
+                    user_id=user_id,
+                    document_id=0,
+                    filename=file.filename,
+                    stage="uploading",
+                    progress=15
+                )
+
             except Exception as ve:
                 logger.error(f"DocumentController: File validation failed for {file.filename}")
                 logger.error(f"DocumentController: Validation error type: {type(ve).__name__}")
                 logger.error(f"DocumentController: Validation error message: {str(ve)}")
                 logger.exception(f"DocumentController: Full validation exception traceback:")
+
+                # Emit failure event
+                await websocket_manager.emit_document_complete(
+                    user_id=user_id,
+                    document_id=0,
+                    filename=file.filename,
+                    success=False,
+                    error_message=f"File validation failed: {str(ve)}"
+                )
                 raise  # Re-raise the original exception
             
             # Check if vector controller is available
@@ -208,7 +241,16 @@ class DocumentController:
                 enhanced_metadata.update(ocr_metadata)
                 
                 logger.info(f"DocumentController: Added OCR metadata for {file.filename}: {ocr_metadata}")
-            
+
+            # Emit text extraction stage
+            await websocket_manager.emit_document_progress(
+                user_id=user_id,
+                document_id=0,
+                filename=file.filename,
+                stage="text_extraction",
+                progress=25
+            )
+
             # Process upload using vector controller
             result = await self.vector_controller.upload_document(
                 file_content=file_content,
@@ -217,9 +259,19 @@ class DocumentController:
                 metadata=enhanced_metadata,
                 embedding_model=embedding_model,
                 tags=tags,
-                db=db
+                db=db,
+                websocket_manager=websocket_manager,  # Pass websocket manager for progress tracking
+                user_id=user_id  # Pass user_id for progress tracking
             )
             
+            # Emit completion event
+            await websocket_manager.emit_document_complete(
+                user_id=user_id,
+                document_id=result['document_id'],
+                filename=file.filename,
+                success=True
+            )
+
             # Log successful upload
             if self.audit_logger:
                 self.audit_logger.log_event(
@@ -234,14 +286,37 @@ class DocumentController:
                         'content_type': result['content_type']
                     }
                 )
-            
+
             return result
             
-        except (DocumentProcessingException, InvalidFileTypeException, FileTooLargeException, 
+        except (DocumentProcessingException, InvalidFileTypeException, FileTooLargeException,
                 ExternalServiceException) as e:
+            # Emit error event for specific exceptions
+            try:
+                await websocket_manager.emit_document_complete(
+                    user_id=user_id,
+                    document_id=0,
+                    filename=file.filename,
+                    success=False,
+                    error_message=str(e)
+                )
+            except:
+                pass  # Don't fail on WebSocket error
             # Re-raise our unified exceptions
             raise
         except Exception as e:
+            # Emit error event for generic exceptions
+            try:
+                await websocket_manager.emit_document_complete(
+                    user_id=user_id,
+                    document_id=0,
+                    filename=file.filename,
+                    success=False,
+                    error_message=f"Document upload failed: {str(e)}"
+                )
+            except:
+                pass  # Don't fail on WebSocket error
+
             logger.error(f"Document upload failed: {e}")
             raise DocumentProcessingException(
                 message="Document upload failed",

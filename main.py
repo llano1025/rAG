@@ -13,6 +13,7 @@ from utils.monitoring.health_check import HealthChecker
 from utils.caching.redis_manager import RedisManager
 from utils.security.encryption import EncryptionManager, EncryptionConfig
 from utils.security.audit_logger import AuditLogger, AuditLoggerConfig
+from utils.websocket import init_websocket_manager, get_websocket_manager
 from database.connection import create_tables
 from config import get_settings
 
@@ -183,12 +184,17 @@ async def lifespan(app: FastAPI):
         # Initialize model storage and preloader
         await _initialize_model_systems(settings)
 
+        # Initialize WebSocket manager
+        websocket_manager = init_websocket_manager(app)
+        logger.info("WebSocket manager initialized")
+
         # Store instances in app state
         app.state.redis = redis_manager
         app.state.encryption = encryption_manager
         app.state.audit_logger = audit_logger
         app.state.health = health_check
         app.state.settings = settings
+        app.state.websocket = websocket_manager
 
         logger.info("RAG Application startup completed successfully")
         
@@ -366,6 +372,10 @@ def get_health_check() -> HealthChecker:
     """Get the global health check instance."""
     global health_check
     return health_check
+
+def get_websocket_manager_dep():
+    """Get the global WebSocket manager instance for dependency injection."""
+    return get_websocket_manager()
 
 # Create the app instance
 app = create_app()

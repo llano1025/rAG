@@ -131,6 +131,19 @@ export const documentsApi = {
     return apiClient.get(`/api/documents/${id}/content`);
   },
 
+  getChunkContent: async (documentId: string, chunkId: string): Promise<{
+    chunk_id: string;
+    chunk_index: number;
+    text: string;
+    text_length: number;
+    start_char?: number;
+    end_char?: number;
+    context_before?: string;
+    context_after?: string;
+  }> => {
+    return apiClient.get(`/api/documents/${documentId}/content?chunk_id=${chunkId}`);
+  },
+
   downloadExtractedText: async (id: string): Promise<Blob> => {
     return apiClient.downloadBlob(`/api/documents/${id}/download?format=text`);
   },

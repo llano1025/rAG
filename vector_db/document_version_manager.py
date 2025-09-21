@@ -249,7 +249,9 @@ class DocumentVersionManager:
         metadata: Dict = None,
         parent_document_id: int = None,
         embedding_model: str = None,
-        db: Session = None
+        db: Session = None,
+        websocket_manager = None,
+        progress_user_id: str = None
     ) -> Document:
         """
         Create a new document version with automatic chunking and vector indexing.
@@ -318,18 +320,52 @@ class DocumentVersionManager:
             db.add(document)
             db.flush()  # Get the document ID
             
+            # Emit chunking progress
+            if websocket_manager and progress_user_id:
+                await websocket_manager.emit_document_progress(
+                    user_id=progress_user_id,
+                    document_id=document.id,
+                    filename=filename,
+                    stage="chunking_document",
+                    progress=50
+                )
+
             # Process content into chunks
             chunks_data = await self._process_document_chunks(
                 document_id=document.id,
                 content=content,
                 db=db
             )
+
+            # Emit chunking complete
+            if websocket_manager and progress_user_id:
+                await websocket_manager.emit_document_progress(
+                    user_id=progress_user_id,
+                    document_id=document.id,
+                    filename=filename,
+                    stage="chunks_created",
+                    progress=60,
+                    chunks_processed=len(chunks_data),
+                    total_chunks=len(chunks_data)
+                )
             
             # Commit document and chunks to database 
             document.status = DocumentStatusEnum.PROCESSING  # Keep processing until vectors succeed
             db.commit()
             logger.info(f"Document and chunks committed to database: {document.id}")
             
+            # Emit embedding generation progress
+            if websocket_manager and progress_user_id:
+                await websocket_manager.emit_document_progress(
+                    user_id=progress_user_id,
+                    document_id=document.id,
+                    filename=filename,
+                    stage="generating_embeddings",
+                    progress=65,
+                    chunks_processed=0,
+                    total_chunks=len(chunks_data)
+                )
+
             # Create vector index and add embeddings
             index_name = f"doc_{document.id}"
             try:
@@ -338,7 +374,10 @@ class DocumentVersionManager:
                     chunks_data=chunks_data,
                     index_name=index_name,
                     embedding_model=embedding_model,
-                    db=db
+                    db=db,
+                    websocket_manager=websocket_manager,
+                    progress_user_id=progress_user_id,
+                    filename=filename
                 )
                 
                 # Only mark as completed if vector creation succeeds
@@ -427,7 +466,10 @@ class DocumentVersionManager:
         chunks_data: List[Dict],
         index_name: str,
         embedding_model: str = None,
-        db: Session = None
+        db: Session = None,
+        websocket_manager = None,
+        progress_user_id: str = None,
+        filename: str = None
     ):
         """Create vector index and embeddings for document chunks."""
         try:
@@ -438,14 +480,38 @@ class DocumentVersionManager:
             
             # Generate embeddings for all chunks
             texts = [chunk_data['text'] for chunk_data in chunks_data]
-            
+
+            # Update progress - starting content embedding generation
+            if websocket_manager and progress_user_id:
+                await websocket_manager.emit_document_progress(
+                    user_id=progress_user_id,
+                    document_id=document.id,
+                    filename=filename or document.filename,
+                    stage="generating_content_embeddings",
+                    progress=70,
+                    chunks_processed=0,
+                    total_chunks=len(chunks_data)
+                )
+
             # Generate content embeddings
             embedding_manager = self._get_embedding_manager_instance(embedding_model)
             if embedding_manager is None:
                 logger.error("Embedding manager not available for vector generation")
                 raise RuntimeError("Embedding generation service is currently unavailable")
-                
+
             content_embeddings = await embedding_manager.generate_embeddings(texts)
+
+            # Update progress - content embeddings complete
+            if websocket_manager and progress_user_id:
+                await websocket_manager.emit_document_progress(
+                    user_id=progress_user_id,
+                    document_id=document.id,
+                    filename=filename or document.filename,
+                    stage="generating_context_embeddings",
+                    progress=80,
+                    chunks_processed=len(chunks_data),
+                    total_chunks=len(chunks_data)
+                )
             
             # Generate context embeddings (text + context)
             context_texts = []
@@ -455,7 +521,19 @@ class DocumentVersionManager:
                 context_texts.append(context_text)
             
             context_embeddings = await embedding_manager.generate_embeddings(context_texts)
-            
+
+            # Update progress - embeddings generated, starting vector storage
+            if websocket_manager and progress_user_id:
+                await websocket_manager.emit_document_progress(
+                    user_id=progress_user_id,
+                    document_id=document.id,
+                    filename=filename or document.filename,
+                    stage="storing_vectors",
+                    progress=90,
+                    chunks_processed=len(chunks_data),
+                    total_chunks=len(chunks_data)
+                )
+
             # Create vector index
             await self.storage_manager.create_index(
                 index_name=index_name,

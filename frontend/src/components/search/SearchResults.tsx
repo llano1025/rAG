@@ -5,9 +5,11 @@ import {
   EyeIcon,
   ArrowDownTrayIcon,
   StarIcon,
+  DocumentMagnifyingGlassIcon,
 } from '@heroicons/react/24/outline';
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid';
 import { SearchResponse } from '@/types';
+import FullTextViewer from './FullTextViewer';
 
 interface SearchResultsProps {
   response: SearchResponse;
@@ -16,6 +18,7 @@ interface SearchResultsProps {
 
 export default function SearchResults({ response, loading }: SearchResultsProps) {
   const [selectedResult, setSelectedResult] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<'metadata' | 'fulltext'>('metadata');
 
   if (loading) {
     return (
@@ -184,22 +187,50 @@ export default function SearchResults({ response, loading }: SearchResultsProps)
               {/* Actions */}
               <div className="flex items-center space-x-2 ml-4">
                 <button
-                  onClick={() => setSelectedResult(
-                    selectedResult === result.document_id ? null : result.document_id
-                  )}
-                  className="p-2 text-gray-400 hover:text-gray-600 rounded-md hover:bg-gray-100"
-                  title="Preview"
+                  onClick={() => {
+                    if (selectedResult === result.document_id) {
+                      setSelectedResult(null);
+                    } else {
+                      setSelectedResult(result.document_id);
+                      setActiveTab('metadata'); // Default to metadata tab
+                    }
+                  }}
+                  className={`p-2 rounded-md hover:bg-gray-100 ${
+                    selectedResult === result.document_id && activeTab === 'metadata'
+                      ? 'text-blue-600 bg-blue-50'
+                      : 'text-gray-400 hover:text-gray-600'
+                  }`}
+                  title="View Details"
                 >
                   <EyeIcon className="h-4 w-4" />
                 </button>
-                
+
+                <button
+                  onClick={() => {
+                    if (selectedResult === result.document_id && activeTab === 'fulltext') {
+                      setSelectedResult(null);
+                    } else {
+                      setSelectedResult(result.document_id);
+                      setActiveTab('fulltext'); // Switch to full text tab
+                    }
+                  }}
+                  className={`p-2 rounded-md hover:bg-gray-100 ${
+                    selectedResult === result.document_id && activeTab === 'fulltext'
+                      ? 'text-blue-600 bg-blue-50'
+                      : 'text-gray-400 hover:text-gray-600'
+                  }`}
+                  title={result.metadata?.chunk_id ? 'View Full Chunk Text' : 'View Full Text'}
+                >
+                  <DocumentMagnifyingGlassIcon className="h-4 w-4" />
+                </button>
+
                 <button
                   className="p-2 text-gray-400 hover:text-gray-600 rounded-md hover:bg-gray-100"
                   title="Download"
                 >
                   <ArrowDownTrayIcon className="h-4 w-4" />
                 </button>
-                
+
                 <button
                   className="p-2 text-gray-400 hover:text-yellow-500 rounded-md hover:bg-gray-100"
                   title="Bookmark"
@@ -212,49 +243,85 @@ export default function SearchResults({ response, loading }: SearchResultsProps)
             {/* Expanded Details */}
             {selectedResult === result.document_id && (
               <div className="mt-4 pt-4 border-t border-gray-200">
-                <div className="bg-gray-50 rounded-lg p-4">
-                  <h4 className="text-sm font-medium text-gray-900 mb-2">Document Details</h4>
-                  <div className="grid grid-cols-2 gap-4 text-sm">
-                    <div>
-                      <span className="text-gray-500">Document ID:</span>
-                      <span className="ml-2 font-mono text-xs">{result.document_id}</span>
-                    </div>
-                    <div>
-                      <span className="text-gray-500">Final Score:</span>
-                      <span className="ml-2">{result.score.toFixed(4)}</span>
-                    </div>
-                    {result.original_score !== undefined && (
-                      <div>
-                        <span className="text-gray-500">Original Score:</span>
-                        <span className="ml-2">{result.original_score.toFixed(4)}</span>
-                      </div>
-                    )}
-                    {result.rerank_score !== undefined && (
-                      <div>
-                        <span className="text-gray-500">Rerank Score:</span>
-                        <span className="ml-2">{result.rerank_score.toFixed(4)}</span>
-                      </div>
-                    )}
-                    {result.combined_score !== undefined && (
-                      <div>
-                        <span className="text-gray-500">Combined Score:</span>
-                        <span className="ml-2">{result.combined_score.toFixed(4)}</span>
-                      </div>
-                    )}
-                    {result.reranker_model && (
-                      <div>
-                        <span className="text-gray-500">Reranker Model:</span>
-                        <span className="ml-2 font-mono text-xs">{result.reranker_model}</span>
-                      </div>
-                    )}
-                    {result.metadata && Object.entries(result.metadata).map(([key, value]) => (
-                      <div key={key}>
-                        <span className="text-gray-500 capitalize">{key.replace('_', ' ')}:</span>
-                        <span className="ml-2">{String(value)}</span>
-                      </div>
-                    ))}
-                  </div>
+                {/* Tab Navigation */}
+                <div className="flex border-b border-gray-200 mb-4">
+                  <button
+                    onClick={() => setActiveTab('metadata')}
+                    className={`px-4 py-2 text-sm font-medium transition-colors ${
+                      activeTab === 'metadata'
+                        ? 'text-blue-600 border-b-2 border-blue-600'
+                        : 'text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    Document Details
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('fulltext')}
+                    className={`px-4 py-2 text-sm font-medium transition-colors ${
+                      activeTab === 'fulltext'
+                        ? 'text-blue-600 border-b-2 border-blue-600'
+                        : 'text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    {result.metadata?.chunk_id ? 'Full Chunk' : 'Full Text'}
+                  </button>
                 </div>
+
+                {/* Tab Content */}
+                {activeTab === 'metadata' && (
+                  <div className="bg-gray-50 rounded-lg p-4">
+                    <h4 className="text-sm font-medium text-gray-900 mb-2">Document Details</h4>
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div>
+                        <span className="text-gray-500">Document ID:</span>
+                        <span className="ml-2 font-mono text-xs">{result.document_id}</span>
+                      </div>
+                      <div>
+                        <span className="text-gray-500">Final Score:</span>
+                        <span className="ml-2">{result.score.toFixed(4)}</span>
+                      </div>
+                      {result.original_score !== undefined && (
+                        <div>
+                          <span className="text-gray-500">Original Score:</span>
+                          <span className="ml-2">{result.original_score.toFixed(4)}</span>
+                        </div>
+                      )}
+                      {result.rerank_score !== undefined && (
+                        <div>
+                          <span className="text-gray-500">Rerank Score:</span>
+                          <span className="ml-2">{result.rerank_score.toFixed(4)}</span>
+                        </div>
+                      )}
+                      {result.combined_score !== undefined && (
+                        <div>
+                          <span className="text-gray-500">Combined Score:</span>
+                          <span className="ml-2">{result.combined_score.toFixed(4)}</span>
+                        </div>
+                      )}
+                      {result.reranker_model && (
+                        <div>
+                          <span className="text-gray-500">Reranker Model:</span>
+                          <span className="ml-2 font-mono text-xs">{result.reranker_model}</span>
+                        </div>
+                      )}
+                      {result.metadata && Object.entries(result.metadata).map(([key, value]) => (
+                        <div key={key}>
+                          <span className="text-gray-500 capitalize">{key.replace('_', ' ')}:</span>
+                          <span className="ml-2">{String(value)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {activeTab === 'fulltext' && (
+                  <FullTextViewer
+                    documentId={result.document_id}
+                    chunkId={result.metadata?.chunk_id}
+                    filename={result.filename}
+                    searchQuery={response.query}
+                  />
+                )}
               </div>
             )}
           </div>

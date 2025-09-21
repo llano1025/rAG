@@ -8,7 +8,7 @@ class ApiClient {
   constructor() {
     this.client = axios.create({
       baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000',
-      timeout: 30000,
+      timeout: 30000, // Default timeout for most requests
       withCredentials: true,
       headers: {
         'Content-Type': 'application/json',
@@ -105,7 +105,12 @@ class ApiClient {
   }
 
   async upload<T>(url: string, formData: FormData, onProgress?: (progress: number) => void): Promise<T> {
+    // Use extended timeout for document uploads (10 minutes)
+    const isDocumentUpload = url.includes('/documents/upload') || url.includes('/documents/batch-upload');
+    const timeout = isDocumentUpload ? 600000 : 30000; // 10 minutes vs 30 seconds
+
     const response = await this.client.post(url, formData, {
+      timeout,
       headers: {
         'Content-Type': 'multipart/form-data',
       },

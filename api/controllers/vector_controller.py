@@ -83,7 +83,9 @@ class VectorController:
         metadata: Dict[str, Any] = None,
         embedding_model: str = None,
         tags: Optional[List[str]] = None,
-        db: Session = None
+        db: Session = None,
+        websocket_manager = None,
+        user_id: str = None
     ) -> Dict[str, Any]:
         """
         Upload and process a document for a user.
@@ -134,17 +136,37 @@ class VectorController:
                     detail="File size exceeds 50MB limit"
                 )
             
+            # Emit text extraction progress
+            if websocket_manager and user_id:
+                await websocket_manager.emit_document_progress(
+                    user_id=user_id,
+                    document_id=0,
+                    filename=filename,
+                    stage="extracting_text",
+                    progress=30
+                )
+
             # Extract text content with OCR settings from metadata
             ocr_method = metadata.get('ocr_method') if metadata else None
             ocr_language = metadata.get('ocr_language') if metadata else None
             vision_provider = metadata.get('vision_provider') if metadata else None
-            
+
             extracted_text = await self.text_extractor.extract_text(
                 file_content, content_type, filename,
-                ocr_method=ocr_method, 
+                ocr_method=ocr_method,
                 ocr_language=ocr_language,
                 vision_provider=vision_provider
             )
+
+            # Emit text extraction complete
+            if websocket_manager and user_id:
+                await websocket_manager.emit_document_progress(
+                    user_id=user_id,
+                    document_id=0,
+                    filename=filename,
+                    stage="text_extracted",
+                    progress=40
+                )
             
             # More lenient validation - allow shorter text for certain document types
             min_length = 5 if ocr_method == "vision_llm" else 10
@@ -221,6 +243,16 @@ class VectorController:
                     }
                 })
             
+            # Emit chunking and embedding generation progress
+            if websocket_manager and user_id:
+                await websocket_manager.emit_document_progress(
+                    user_id=user_id,
+                    document_id=0,
+                    filename=filename,
+                    stage="generating_embeddings",
+                    progress=45
+                )
+
             # Create document version with vector indexing
             document = await self.version_manager.create_document_version(
                 user_id=user.id,
@@ -230,8 +262,20 @@ class VectorController:
                 file_size=file_size,
                 metadata=combined_metadata,
                 embedding_model=embedding_model,
-                db=db
+                db=db,
+                websocket_manager=websocket_manager,  # Pass websocket manager
+                progress_user_id=user_id  # Pass user_id for progress tracking
             )
+
+            # Emit embedding generation complete
+            if websocket_manager and user_id:
+                await websocket_manager.emit_document_progress(
+                    user_id=user_id,
+                    document_id=document.id,
+                    filename=filename,
+                    stage="storing_vectors",
+                    progress=95
+                )
             
             # Set tags if provided
             if tags:
