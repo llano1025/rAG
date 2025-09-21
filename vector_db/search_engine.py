@@ -288,7 +288,7 @@ class SearchFilter:
         self.min_score: Optional[float] = None
         
         # Reranker settings
-        self.enable_reranking: bool = True
+        self.enable_reranking: bool = False
         self.reranker_model: Optional[str] = None
         self.rerank_score_weight: float = 0.5
         self.min_rerank_score: Optional[float] = None
@@ -447,7 +447,7 @@ class EnhancedSearchEngine:
         db: Session = None,
         use_cache: bool = True,
         # Reranker parameters for chat controller compatibility
-        enable_reranking: bool = True,
+        enable_reranking: bool = False,
         reranker_model: Optional[str] = None,
         rerank_score_weight: float = 0.5,
         min_rerank_score: Optional[float] = None
@@ -719,7 +719,15 @@ class EnhancedSearchEngine:
             # Apply reranking if enabled and configured
             if filters.enable_reranking and self.reranker_config.enabled:
                 results = await self._apply_reranking(query, results, filters, search_type)
-            
+
+            # Apply final minimum score filtering after reranking
+            if filters.min_score is not None and filters.min_score > 0:
+                initial_count = len(results)
+                results = [result for result in results if result.score >= filters.min_score]
+                filtered_count = initial_count - len(results)
+                if filtered_count > 0:
+                    logger.info(f"Filtered {filtered_count} results below min_score threshold ({filters.min_score}) after reranking")
+
             # Log search query and cache results
             search_time = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
             await self._log_search_query(query, user.id, search_type, filters, len(results), search_time, db)

@@ -44,7 +44,7 @@ export default function SearchInterface() {
   });
 
   // Reranker settings
-  const [rerankerEnabled, setRerankerEnabled] = useState(true);
+  const [rerankerEnabled, setRerankerEnabled] = useState(false);
   const [rerankerModel, setRerankerModel] = useState<string | undefined>(undefined);
   const [rerankerScoreWeight, setRerankerScoreWeight] = useState(0.5);
   const [rerankerMinScore, setRerankerMinScore] = useState<number | undefined>(undefined);

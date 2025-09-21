@@ -3,7 +3,7 @@
 
 # Global reranker settings
 default_model: ms-marco-MiniLM-L-6-v2
-enabled: true
+enabled: false
 
 # Cache settings
 cache_size: 3           # Maximum number of models to keep in memory

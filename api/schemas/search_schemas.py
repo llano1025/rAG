@@ -46,7 +46,7 @@ class SearchQuery(BaseModel):
         le=1.0
     )
     # Reranker settings
-    enable_reranking: bool = Field(True, description="Whether to enable reranking of search results")
+    enable_reranking: bool = Field(False, description="Whether to enable reranking of search results")
     reranker_model: Optional[str] = Field(None, description="Reranker model to use (e.g., 'ms-marco-MiniLM-L-6-v2')")
     rerank_score_weight: float = Field(
         0.5, 

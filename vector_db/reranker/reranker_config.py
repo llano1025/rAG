@@ -66,7 +66,7 @@ class RerankerConfig:
     
     # Default model settings
     default_model: str = 'ms-marco-MiniLM-L-6-v2'
-    enabled: bool = True
+    enabled: bool = False
     
     # Cache settings
     cache_size: int = 3

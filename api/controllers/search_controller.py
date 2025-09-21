@@ -68,7 +68,7 @@ class SearchController:
         context_weight: float = 0.3,
         min_score: float = 0.0,
         # Reranker parameters
-        enable_reranking: bool = True,
+        enable_reranking: bool = False,
         reranker_model: Optional[str] = None,
         rerank_score_weight: float = 0.5,
         min_rerank_score: Optional[float] = None,
@@ -971,9 +971,9 @@ def _extract_content_snippet(document, query: str, processed_query=None, max_len
     return snippet
 
 @deprecated("Use EnhancedSearchEngine.search() with SearchType.SEMANTIC instead")
-async def similarity_search(query_text: str, filters=None, top_k: int = 5, 
+async def similarity_search(query_text: str, filters=None, top_k: int = 5,
                           threshold: float = 0.0, user_id: int = None,
-                          enable_reranking: bool = True,
+                          enable_reranking: bool = False,
                           reranker_model: Optional[str] = None,
                           rerank_score_weight: float = 0.5,
                           min_rerank_score: Optional[float] = None):

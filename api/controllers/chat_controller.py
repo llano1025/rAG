@@ -477,7 +477,7 @@ class ChatController:
             "enable_fallback": True,  # Enable text search fallback by default
             "fallback_threshold": 1,  # Minimum number of results before fallback kicks in
             # Reranker settings
-            "enable_reranking": True,
+            "enable_reranking": False,
             "reranker_model": None,  # Use default from config
             "rerank_score_weight": 0.5,
             "min_rerank_score": None
@@ -521,7 +521,7 @@ class ChatController:
             validated_settings["search_type"] = "hybrid"
         
         # Validate reranker settings
-        validated_settings["enable_reranking"] = bool(validated_settings.get("enable_reranking", True))
+        validated_settings["enable_reranking"] = bool(validated_settings.get("enable_reranking", False))
         if validated_settings.get("rerank_score_weight") is not None:
             validated_settings["rerank_score_weight"] = max(0.0, min(1.0, float(validated_settings["rerank_score_weight"])))
         if validated_settings.get("min_rerank_score") is not None:
@@ -958,7 +958,7 @@ class ChatController:
                     user_id=user.id,
                     top_k=settings["top_k_documents"] * 2,  # Get more results for filtering
                     db=db,
-                    enable_reranking=settings.get("enable_reranking", True),
+                    enable_reranking=settings.get("enable_reranking", False),
                     reranker_model=settings.get("reranker_model"),
                     rerank_score_weight=settings.get("rerank_score_weight", 0.5),
                     min_rerank_score=settings.get("min_rerank_score")
@@ -1354,7 +1354,7 @@ class ChatController:
                 user_id=user.id,
                 top_k=settings["top_k_documents"] * 2,
                 db=db,
-                enable_reranking=settings.get("enable_reranking", True),
+                enable_reranking=settings.get("enable_reranking", False),
                 reranker_model=settings.get("reranker_model"),
                 rerank_score_weight=settings.get("rerank_score_weight", 0.5),
                 min_rerank_score=settings.get("min_rerank_score")
