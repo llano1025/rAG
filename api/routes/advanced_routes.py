@@ -14,7 +14,7 @@ from utils.data_quality.duplicate_detector import create_duplicate_detector, Dup
 from utils.integrations.external_sources import external_sources_manager
 from utils.analytics.advanced_analytics import advanced_analytics, AnalyticsQuery, ReportType, TimeRange
 from vector_db.embedding_trainer import CustomEmbeddingTrainer, TrainingConfig, TrainingMethod, TrainingExample
-from utils.backup.enhanced_backup_system import enhanced_backup_system, BackupType
+from utils.backup.backup_system import enhanced_backup_system, BackupType
 
 router = APIRouter(prefix="/api/v1/advanced", tags=["Advanced Features"])
 
