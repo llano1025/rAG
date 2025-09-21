@@ -11,7 +11,8 @@ from ..schemas.search_schemas import (
     convert_search_response_to_api_format,
     convert_api_filters_to_search_filter
 )
-from vector_db.search_engine import EnhancedSearchEngine, SearchType, get_initialized_search_engine
+from vector_db.search_engine import EnhancedSearchEngine, get_initialized_search_engine
+from vector_db.search_types import SearchType
 from vector_db.embedding_manager import EnhancedEmbeddingManager
 from database.connection import get_db
 import warnings

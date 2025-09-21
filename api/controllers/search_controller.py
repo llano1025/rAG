@@ -980,7 +980,8 @@ async def similarity_search(query_text: str, filters=None, top_k: int = 5,
     """Perform semantic similarity search using the enhanced search engine."""
     try:
         from ..schemas.search_schemas import SearchFilters
-        from vector_db.search_engine import EnhancedSearchEngine, SearchFilter, SearchType
+        from vector_db.search_engine import EnhancedSearchEngine
+        from vector_db.search_types import SearchFilter, SearchType
         from vector_db.storage_manager import get_storage_manager
         from vector_db.embedding_manager import EnhancedEmbeddingManager
         from database.connection import get_db

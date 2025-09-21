@@ -251,7 +251,8 @@ class DocumentVersionManager:
         embedding_model: str = None,
         db: Session = None,
         websocket_manager = None,
-        progress_user_id: str = None
+        progress_user_id: str = None,
+        file_path: str = None
     ) -> Document:
         """
         Create a new document version with automatic chunking and vector indexing.
@@ -334,6 +335,8 @@ class DocumentVersionManager:
             chunks_data = await self._process_document_chunks(
                 document_id=document.id,
                 content=content,
+                metadata=metadata,
+                file_path=file_path,
                 db=db
             )
 
@@ -406,13 +409,26 @@ class DocumentVersionManager:
         self,
         document_id: int,
         content: str,
-        db: Session
+        metadata: Dict = None,
+        file_path: str = None,
+        db: Session = None
     ) -> List[Dict]:
         """Process document content into chunks and store in database."""
         try:
-            # Get chunker instance and chunk the content
-            chunker = self._get_chunker_instance()
-            chunks = chunker.chunk_document(content, {})
+            # Determine if we should use table-aware chunking
+            should_use_table_chunking = self._should_use_table_aware_chunking(metadata, file_path)
+
+            if should_use_table_chunking and file_path:
+                # Use table-aware chunking strategy
+                chunks = await self._process_with_table_aware_chunking(
+                    file_path=file_path,
+                    content=content,
+                    metadata=metadata or {}
+                )
+            else:
+                # Use standard adaptive chunking
+                chunker = self._get_chunker_instance()
+                chunks = chunker.chunk_document(content, {})
             
             chunks_data = []
             for i, chunk in enumerate(chunks):
@@ -893,6 +909,100 @@ class DocumentVersionManager:
         if metadata_str:
             return json.loads(metadata_str)
         return {}
+
+    def _should_use_table_aware_chunking(self, metadata: Dict = None, file_path: str = None) -> bool:
+        """
+        Determine if table-aware chunking should be used for this document.
+
+        Args:
+            metadata: Document metadata
+            file_path: Path to original file
+
+        Returns:
+            True if table-aware chunking should be used
+        """
+        if not file_path:
+            return False
+
+        # Use table-aware chunking for PDF files (most likely to contain tables)
+        if metadata and metadata.get('content_type') == 'application/pdf':
+            return True
+
+        # Use for certain image files that might contain tables (when OCR is used)
+        if metadata and metadata.get('content_type', '').startswith('image/'):
+            # Check if OCR was requested, as images with tables need special handling
+            ocr_processing = metadata.get('ocr_processing', {})
+            if ocr_processing.get('method_used'):
+                return True
+
+        # Use for document formats that commonly contain tables
+        content_type = metadata.get('content_type', '') if metadata else ''
+        table_friendly_types = [
+            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',  # .docx
+            'application/msword',  # .doc
+            'text/html',  # HTML documents
+            'text/csv'  # CSV files (which are essentially tables)
+        ]
+
+        return content_type in table_friendly_types
+
+    async def _process_with_table_aware_chunking(
+        self,
+        file_path: str,
+        content: str,
+        metadata: Dict
+    ) -> List:
+        """
+        Process document using table-aware chunking strategy.
+
+        Args:
+            file_path: Path to the original document file
+            content: Extracted text content
+            metadata: Document metadata
+
+        Returns:
+            List of table-aware chunks compatible with existing chunk format
+        """
+        try:
+            # Import table-aware chunking strategy
+            from file_processor.table_chunking_strategy import TableAwareChunkingStrategy
+
+            # Initialize table chunking strategy
+            table_chunker = TableAwareChunkingStrategy()
+
+            # Process document with table awareness
+            table_aware_chunks = table_chunker.chunk_document(
+                file_path=file_path,
+                extracted_text=content,
+                metadata=metadata
+            )
+
+            # Convert TableAwareChunk objects to format compatible with existing code
+            compatible_chunks = []
+            for table_chunk in table_aware_chunks:
+                # Create a compatible chunk object
+                from vector_db.chunking import Chunk
+
+                chunk = Chunk(
+                    text=table_chunk.text,
+                    start_idx=table_chunk.start_idx,
+                    end_idx=table_chunk.end_idx,
+                    metadata=table_chunk.metadata,
+                    context_text=f"{table_chunk.context_before} [CHUNK] {table_chunk.context_after}",
+                    document_id=table_chunk.document_id,
+                    chunk_id=table_chunk.chunk_id
+                )
+
+                compatible_chunks.append(chunk)
+
+            logger.info(f"Table-aware chunking created {len(compatible_chunks)} chunks")
+            return compatible_chunks
+
+        except Exception as e:
+            logger.warning(f"Table-aware chunking failed, falling back to standard chunking: {e}")
+            # Fallback to standard chunking
+            chunker = self._get_chunker_instance()
+            return chunker.chunk_document(content, {})
 
 
 # Global version manager instance

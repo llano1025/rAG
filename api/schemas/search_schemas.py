@@ -219,7 +219,7 @@ def convert_search_response_to_api_format(results: List, query: str,
 
 def convert_api_filters_to_search_filter(api_filters: Optional[SearchFilters]) -> 'SearchFilter':
     """Convert API SearchFilters to SearchEngine SearchFilter with enhanced tag support."""
-    from vector_db.search_engine import SearchFilter, TagMatchMode
+    from vector_db.search_types import SearchFilter, TagMatchMode
     from datetime import datetime
     
     search_filter = SearchFilter()

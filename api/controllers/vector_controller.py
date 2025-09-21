@@ -14,10 +14,12 @@ from dataclasses import asdict
 from database.models import User, Document, DocumentChunk, VectorIndex, DocumentStatusEnum, PermissionEnum
 from vector_db.storage_manager import VectorStorageManager, get_storage_manager, init_storage_manager
 from vector_db.document_version_manager import DocumentVersionManager, get_version_manager
-from vector_db.search_engine import EnhancedSearchEngine, get_search_engine, SearchFilter, SearchType
+from vector_db.search_engine import EnhancedSearchEngine, get_search_engine
+from vector_db.search_types import SearchFilter, SearchType
 from file_processor.text_extractor import TextExtractor
 from file_processor.type_detector import FileTypeDetector
 from file_processor.metadata_extractor import MetadataExtractor
+from file_processor.table_chunking_strategy import TableAwareChunkingStrategy
 from utils.security.audit_logger import AuditLogger
 from utils.file_storage import get_file_manager
 import hashlib
@@ -66,6 +68,7 @@ class VectorController:
         self.text_extractor = TextExtractor()
         self.type_detector = FileTypeDetector()
         self.metadata_extractor = MetadataExtractor()
+        self.table_chunking_strategy = TableAwareChunkingStrategy()
         self.file_manager = get_file_manager()
     
     async def _ensure_initialized(self):
@@ -264,7 +267,8 @@ class VectorController:
                 embedding_model=embedding_model,
                 db=db,
                 websocket_manager=websocket_manager,  # Pass websocket manager
-                progress_user_id=user_id  # Pass user_id for progress tracking
+                progress_user_id=user_id,  # Pass user_id for progress tracking
+                file_path=file_path  # Pass file_path for table-aware chunking
             )
 
             # Emit embedding generation complete

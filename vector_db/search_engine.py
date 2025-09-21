@@ -21,6 +21,8 @@ from .storage_manager import VectorStorageManager, get_storage_manager, get_init
 from .search_context_processor import ContextProcessor
 from .reranker import get_reranker_manager, get_reranker_config, RerankResult
 from .reranker.base_reranker import SearchResult as RerankerSearchResult
+from .search_types import SearchType, SearchFilter, SearchResult, TagMatchMode, TableSearchFilter
+from .table_search_enhancer import TableSearchEnhancer
 # QueryOptimizer removed - using direct Redis caching
 from config import get_settings
 
@@ -37,12 +39,6 @@ def _get_embedding_manager():
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-class SearchType:
-    """Search type constants."""
-    SEMANTIC = "semantic"
-    KEYWORD = "keyword"
-    HYBRID = "hybrid"
-    CONTEXTUAL = "contextual"
 
 class CorpusStatsManager:
     """Manages corpus statistics for BM25 scoring with caching."""
@@ -265,118 +261,6 @@ class CorpusStatsManager:
         
         return [exp_score / total for exp_score in exp_scores]
 
-class TagMatchMode:
-    """Tag matching modes for search filtering."""
-    ANY = "any"  # Document must have ANY of the specified tags (OR logic)
-    ALL = "all"  # Document must have ALL of the specified tags (AND logic)
-    EXACT = "exact"  # Document must have EXACTLY the specified tags (no more, no less)
-
-class SearchFilter:
-    """Search filter class for structured filtering."""
-    
-    def __init__(self):
-        self.user_id: Optional[int] = None
-        self.document_ids: Optional[List[int]] = None
-        self.content_types: Optional[List[str]] = None
-        self.date_range: Optional[Tuple[datetime, datetime]] = None
-        self.file_size_range: Optional[Tuple[int, int]] = None
-        self.tags: Optional[List[str]] = None
-        self.tag_match_mode: str = TagMatchMode.ANY
-        self.exclude_tags: Optional[List[str]] = None  # Tags to exclude (NOT logic)
-        self.language: Optional[str] = None
-        self.is_public: Optional[bool] = None
-        self.min_score: Optional[float] = None
-        
-        # Reranker settings
-        self.enable_reranking: bool = False
-        self.reranker_model: Optional[str] = None
-        self.rerank_score_weight: float = 0.5
-        self.min_rerank_score: Optional[float] = None
-        self.max_results_to_rerank: int = 100
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert filter to dictionary for serialization."""
-        return {
-            'user_id': self.user_id,
-            'document_ids': self.document_ids,
-            'content_types': self.content_types,
-            'date_range': [dt.isoformat() for dt in self.date_range] if self.date_range else None,
-            'file_size_range': self.file_size_range,
-            'tags': self.tags,
-            'tag_match_mode': self.tag_match_mode,
-            'exclude_tags': self.exclude_tags,
-            'language': self.language,
-            'is_public': self.is_public,
-            'min_score': self.min_score,
-            'enable_reranking': self.enable_reranking,
-            'reranker_model': self.reranker_model,
-            'rerank_score_weight': self.rerank_score_weight,
-            'min_rerank_score': self.min_rerank_score,
-            'max_results_to_rerank': self.max_results_to_rerank
-        }
-    
-    def normalize_tags(self, tags: List[str]) -> List[str]:
-        """Normalize tags for consistent matching (lowercase, strip whitespace)."""
-        if not tags:
-            return []
-        
-        normalized = []
-        for tag in tags:
-            if isinstance(tag, str) and tag.strip():
-                normalized_tag = tag.strip().lower()
-                if normalized_tag not in normalized:  # Remove duplicates
-                    normalized.append(normalized_tag)
-        
-        return normalized
-    
-    def set_tags(self, tags: Optional[List[str]]):
-        """Set tags with automatic normalization."""
-        if tags:
-            self.tags = self.normalize_tags(tags)
-        else:
-            self.tags = None
-    
-    def set_exclude_tags(self, exclude_tags: Optional[List[str]]):
-        """Set exclude tags with automatic normalization.""" 
-        if exclude_tags:
-            self.exclude_tags = self.normalize_tags(exclude_tags)
-        else:
-            self.exclude_tags = None
-
-class SearchResult:
-    """Enhanced search result with metadata and access control."""
-    
-    def __init__(
-        self,
-        chunk_id: str,
-        document_id: int,
-        text: str,
-        score: float,
-        metadata: Dict[str, Any],
-        document_metadata: Dict[str, Any] = None,
-        highlight: str = None
-    ):
-        self.chunk_id = chunk_id
-        self.document_id = document_id
-        self.text = text
-        self.score = score
-        self.metadata = metadata
-        self.document_metadata = document_metadata or {}
-        self.highlight = highlight
-        self.timestamp = datetime.now(timezone.utc)
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert result to dictionary."""
-        return {
-            'chunk_id': self.chunk_id,
-            'document_id': self.document_id,
-            'text': self.text,
-            'score': self.score,
-            'metadata': self.metadata,
-            'document_metadata': self.document_metadata,
-            'highlight': self.highlight,
-            'timestamp': self.timestamp.isoformat()
-        }
 
 class EnhancedSearchEngine:
     """
@@ -406,7 +290,10 @@ class EnhancedSearchEngine:
         
         # BM25 corpus statistics manager
         self.corpus_stats_manager = CorpusStatsManager()
-        
+
+        # Table search enhancer
+        self.table_search_enhancer = TableSearchEnhancer()
+
         # Redis cache manager for caching and performance
         from utils.caching.redis_manager import RedisManager
         self.redis_manager = RedisManager()
@@ -598,9 +485,10 @@ class EnhancedSearchEngine:
         filters = filters or SearchFilter()
         
         # Only initialize storage for vector-based search types
-        vector_search_types = {SearchType.SEMANTIC, SearchType.HYBRID, SearchType.CONTEXTUAL}
-        database_only_search_types = {SearchType.KEYWORD, "basic"}  # Include "basic" alias for keyword
-        
+        vector_search_types = {SearchType.SEMANTIC, SearchType.HYBRID, SearchType.CONTEXTUAL,
+                             SearchType.TABLE_CONTENT, SearchType.TABLE_HYBRID}
+        database_only_search_types = {SearchType.KEYWORD, SearchType.TABLE_HEADERS, SearchType.TABLE_CONTEXT, "basic"}  # Include "basic" alias for keyword
+
         if search_type in vector_search_types:
             await self._ensure_storage_initialized()
         elif search_type in database_only_search_types:
@@ -713,8 +601,26 @@ class EnhancedSearchEngine:
                 results = await self._hybrid_search(query, filters, limit, db)
             elif search_type == SearchType.CONTEXTUAL:
                 results = await self._contextual_search(query, filters, limit, db)
+            elif search_type == SearchType.TABLE_CONTENT:
+                results = await self._table_content_search(query, filters, limit, db)
+            elif search_type == SearchType.TABLE_HEADERS:
+                results = await self._table_headers_search(query, filters, limit, db)
+            elif search_type == SearchType.TABLE_CONTEXT:
+                results = await self._table_context_search(query, filters, limit, db)
+            elif search_type == SearchType.TABLE_HYBRID:
+                results = await self._table_hybrid_search(query, filters, limit, db)
             else:
                 raise ValueError(f"Unknown search type: {search_type}")
+
+            # Apply table-aware enhancements for table-related queries
+            table_search_types = {SearchType.TABLE_CONTENT, SearchType.TABLE_HEADERS,
+                                SearchType.TABLE_CONTEXT, SearchType.TABLE_HYBRID}
+            if search_type in table_search_types or self.table_search_enhancer.analyze_query_for_tables(query)['is_table_related']:
+                # Convert filters to TableSearchFilter if needed
+                table_filter = filters if isinstance(filters, TableSearchFilter) else TableSearchFilter(**filters.to_dict())
+                results = await self.table_search_enhancer.enhance_table_search_results(
+                    results, query, table_filter, db
+                )
             
             # Apply reranking if enabled and configured
             if filters.enable_reranking and self.reranker_config.enabled:
@@ -1699,6 +1605,166 @@ class EnhancedSearchEngine:
             search_results.append(search_result)
         
         return search_results
+
+    async def _table_content_search(
+        self,
+        query: str,
+        filters: SearchFilter,
+        limit: int,
+        db: Session
+    ) -> List[SearchResult]:
+        """Search specifically within table content using semantic similarity."""
+        # Apply table-specific filters
+        table_filters = filters.copy() if hasattr(filters, 'copy') else SearchFilter(**filters.to_dict())
+
+        # Add metadata filter for table chunks
+        if not hasattr(table_filters, 'metadata_filters'):
+            table_filters.metadata_filters = {}
+        table_filters.metadata_filters['chunk_type'] = 'table'
+
+        # Use semantic search on table chunks
+        results = await self._semantic_search(query, table_filters, limit, db)
+
+        # Boost scores for table-specific content
+        for result in results:
+            result.score *= 1.2  # Boost table content matches
+
+        return results
+
+    async def _table_headers_search(
+        self,
+        query: str,
+        filters: SearchFilter,
+        limit: int,
+        db: Session
+    ) -> List[SearchResult]:
+        """Search within table headers and column names."""
+        results = []
+
+        # Get accessible documents
+        accessible_doc_ids = filters.document_ids or await self._get_accessible_documents(
+            user=None, db=db, filters=filters  # User filtering already applied
+        )
+
+        # Search for table header patterns in chunk metadata
+        chunks = db.query(DocumentChunk).join(Document).filter(
+            Document.id.in_(accessible_doc_ids),
+            Document.is_deleted == False,
+            or_(
+                DocumentChunk.metadata.ilike(f'%"chunk_type": "table"%'),
+                DocumentChunk.metadata.ilike(f'%"table_references"%'),
+                DocumentChunk.text.ilike(f'%{query}%')  # Fallback to text search
+            )
+        ).limit(limit * 2).all()  # Get more to filter
+
+        query_terms = set(query.lower().split())
+
+        for chunk in chunks:
+            score = 0.0
+            metadata = chunk.get_metadata_dict() if hasattr(chunk, 'get_metadata_dict') else {}
+
+            # Check if chunk contains table headers matching query
+            if metadata.get('chunk_type') == 'table':
+                # Look for query terms in chunk text (which should contain headers)
+                text_lower = chunk.text.lower()
+                header_matches = sum(1 for term in query_terms if term in text_lower)
+                if header_matches > 0:
+                    score = 0.8 * (header_matches / len(query_terms))
+
+                    result = SearchResult(
+                        chunk_id=chunk.chunk_id,
+                        document_id=chunk.document_id,
+                        text=chunk.text[:500],  # Limit text preview
+                        score=score,
+                        metadata={'chunk_type': metadata.get('chunk_type', 'unknown')},
+                        document_metadata={}
+                    )
+                    results.append(result)
+
+        # Sort by score and limit results
+        results.sort(key=lambda r: r.score, reverse=True)
+        return results[:limit]
+
+    async def _table_context_search(
+        self,
+        query: str,
+        filters: SearchFilter,
+        limit: int,
+        db: Session
+    ) -> List[SearchResult]:
+        """Search in text surrounding tables."""
+        # Use keyword search but filter for chunks near tables
+        results = await self._keyword_search(query, filters, limit * 2, db)
+
+        # Filter for chunks that are likely to be near tables
+        table_context_results = []
+
+        for result in results:
+            chunk = db.query(DocumentChunk).filter(
+                DocumentChunk.chunk_id == result.chunk_id
+            ).first()
+
+            if chunk:
+                # Check if this chunk or nearby chunks contain tables
+                nearby_chunks = db.query(DocumentChunk).filter(
+                    DocumentChunk.document_id == chunk.document_id,
+                    DocumentChunk.chunk_index.between(
+                        max(0, chunk.chunk_index - 2),
+                        chunk.chunk_index + 2
+                    )
+                ).all()
+
+                has_nearby_table = any(
+                    'table' in c.metadata or '' if c.metadata else False
+                    for c in nearby_chunks
+                )
+
+                if has_nearby_table:
+                    result.score *= 1.1  # Slight boost for table context
+                    table_context_results.append(result)
+
+        return table_context_results[:limit]
+
+    async def _table_hybrid_search(
+        self,
+        query: str,
+        filters: SearchFilter,
+        limit: int,
+        db: Session
+    ) -> List[SearchResult]:
+        """Hybrid search combining table content, headers, and context."""
+        # Run multiple search types and combine results
+        content_results = await self._table_content_search(query, filters, limit // 2, db)
+        header_results = await self._table_headers_search(query, filters, limit // 4, db)
+        context_results = await self._table_context_search(query, filters, limit // 4, db)
+
+        # Combine and deduplicate results
+        seen_chunks = set()
+        combined_results = []
+
+        # Prioritize content results
+        for result in content_results:
+            if result.chunk_id not in seen_chunks:
+                result.score *= 1.3  # Boost content matches
+                combined_results.append(result)
+                seen_chunks.add(result.chunk_id)
+
+        # Add header results
+        for result in header_results:
+            if result.chunk_id not in seen_chunks:
+                result.score *= 1.2  # Boost header matches
+                combined_results.append(result)
+                seen_chunks.add(result.chunk_id)
+
+        # Add context results
+        for result in context_results:
+            if result.chunk_id not in seen_chunks:
+                combined_results.append(result)
+                seen_chunks.add(result.chunk_id)
+
+        # Sort by enhanced scores
+        combined_results.sort(key=lambda r: r.score, reverse=True)
+        return combined_results[:limit]
 
     async def get_search_suggestions(self, query: str, user: User, limit: int = 5, 
                                    db: Session = None) -> List[Dict[str, Any]]:

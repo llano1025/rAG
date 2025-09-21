@@ -53,7 +53,7 @@ export default function SearchInterface() {
   const [selectedEmbeddingModel, setSelectedEmbeddingModel] = useState<string | undefined>(undefined);
 
   // Search parameters
-  const [maxResults, setMaxResults] = useState(10);
+  const [maxResults, setMaxResults] = useState(20);
   const [minScore, setMinScore] = useState(0.1);
 
   const {

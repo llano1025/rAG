@@ -310,13 +310,42 @@ class FileStorageManager:
             logger.exception("Full exception traceback:")
             return None
     
+    def get_absolute_path(self, file_path: str) -> Optional[str]:
+        """
+        Get absolute file path from relative storage path.
+
+        Args:
+            file_path: Relative file path from database
+
+        Returns:
+            Absolute file path if file exists, None otherwise
+        """
+        try:
+            full_path = self.storage_root / file_path
+
+            # Check if file exists
+            if not full_path.exists():
+                logger.warning(f"File not found for absolute path resolution: {full_path}")
+                return None
+
+            # Security check: ensure path is within storage root
+            if not self._is_safe_path(full_path):
+                logger.error(f"Unsafe file path access attempt: {full_path}")
+                return None
+
+            return str(full_path.absolute())
+
+        except Exception as e:
+            logger.error(f"Failed to resolve absolute path for {file_path}: {e}")
+            return None
+
     def file_exists(self, file_path: str) -> bool:
         """
         Check if file exists in storage.
-        
+
         Args:
             file_path: Relative file path from database
-            
+
         Returns:
             True if file exists, False otherwise
         """
