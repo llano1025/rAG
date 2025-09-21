@@ -503,12 +503,15 @@ class DocumentVersionManager:
                 chunk_ids=chunk_ids
             )
             
+            # Get the actual model name used for embeddings
+            actual_model_name = self._get_actual_model_name(embedding_model)
+            
             # Update chunks with embedding IDs
             for i, chunk_data in enumerate(chunks_data):
                 chunk = chunk_data['chunk']
                 chunk.content_embedding_id = added_ids[i] if i < len(added_ids) else None
                 chunk.context_embedding_id = added_ids[i] if i < len(added_ids) else None
-                chunk.embedding_model = "sentence-transformers/all-MiniLM-L6-v2"  # Default model
+                chunk.embedding_model = actual_model_name
             
             logger.info(f"Created vector index {index_name} with {len(added_ids)} embeddings")
             
@@ -777,6 +780,29 @@ class DocumentVersionManager:
         except Exception as e:
             logger.error(f"Failed to get version diff: {e}")
             return {'error': str(e)}
+    
+    def _get_actual_model_name(self, embedding_model: str = None) -> str:
+        """Get the actual model name used for embeddings."""
+        if embedding_model is None:
+            # Default fallback model
+            return "sentence-transformers/all-MiniLM-L6-v2"
+        
+        try:
+            # Get the model registry
+            from .embedding_model_registry import get_embedding_model_registry
+            registry = get_embedding_model_registry()
+            
+            # Get model metadata
+            model_metadata = registry.get_model(embedding_model)
+            if model_metadata is not None:
+                return model_metadata.model_name
+            else:
+                logger.warning(f"Model {embedding_model} not found in registry, using default")
+                return "sentence-transformers/all-MiniLM-L6-v2"
+                
+        except Exception as e:
+            logger.error(f"Error getting model name for {embedding_model}: {e}")
+            return "sentence-transformers/all-MiniLM-L6-v2"
     
     def _serialize_metadata(self, metadata: Dict) -> str:
         """Serialize metadata dictionary to JSON string."""

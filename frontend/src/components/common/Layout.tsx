@@ -83,7 +83,7 @@ export default function Layout({ children }: LayoutProps) {
           <div className="mt-8 flex-grow flex flex-col overflow-hidden">
             <nav className="flex-1 px-2 space-y-1 overflow-y-auto">
               {navigation.map((item) => {
-                const isActive = router.pathname === item.href;
+                const isActive = isActiveRoute(item);
                 return (
                   <Link
                     key={item.name}

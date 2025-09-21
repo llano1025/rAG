@@ -1,18 +1,15 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/router';
 import { useAuth } from '@/hooks/useAuth';
+import Dashboard from './dashboard';
 
 export default function Home() {
   const { isAuthenticated, isLoading } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
-    if (!isLoading) {
-      if (isAuthenticated) {
-        router.replace('/dashboard');
-      } else {
-        router.replace('/auth/login');
-      }
+    if (!isLoading && !isAuthenticated) {
+      router.replace('/auth/login');
     }
   }, [isAuthenticated, isLoading, router]);
 
@@ -24,5 +21,10 @@ export default function Home() {
     );
   }
 
-  return null;
+  if (!isAuthenticated) {
+    return null; // Will redirect to login via useEffect
+  }
+
+  // Render dashboard directly for authenticated users
+  return <Dashboard />;
 }

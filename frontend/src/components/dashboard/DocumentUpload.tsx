@@ -61,7 +61,20 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
     const loadEmbeddingModels = async () => {
       try {
         const data: any = await apiClient.get('/api/chat/models');
-        setEmbeddingModels(data.embedding_models || []);
+        
+        // Map backend response to frontend interface
+        const mappedModels = (data.embedding_models || []).map((model: any) => ({
+          id: model.model_id, // Map model_id to id
+          name: model.model_name,
+          display_name: model.display_name,
+          provider: model.provider,
+          description: model.description,
+          embedding_dimension: model.embedding_dimension,
+          performance_tier: model.performance_tier,
+          quality_score: model.quality_score
+        }));
+        
+        setEmbeddingModels(mappedModels);
       } catch (error) {
         console.error('Failed to load embedding models:', error);
         toast.error('Failed to load embedding models');
