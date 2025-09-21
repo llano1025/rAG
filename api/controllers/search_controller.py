@@ -10,7 +10,7 @@ from functools import wraps
 
 from vector_db.embedding_manager import EmbeddingManager
 from vector_db.search_optimizer import SearchOptimizer, SearchError
-from vector_db.context_processor import ContextProcessor
+from vector_db.search_context_processor import ContextProcessor
 from vector_db.chunking import Chunk
 from database.models import User, SearchQuery, Document, SavedSearch
 from utils.security.audit_logger import AuditLogger

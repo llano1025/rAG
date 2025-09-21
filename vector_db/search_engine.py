@@ -18,7 +18,7 @@ from sqlalchemy import and_, or_
 
 from database.models import Document, DocumentChunk, User, SearchQuery, VectorIndex
 from .storage_manager import VectorStorageManager, get_storage_manager, get_initialized_storage_manager
-from .context_processor import ContextProcessor
+from .search_context_processor import ContextProcessor
 from .reranker import get_reranker_manager, get_reranker_config, RerankResult
 from .reranker.base_reranker import SearchResult as RerankerSearchResult
 # QueryOptimizer removed - using direct Redis caching

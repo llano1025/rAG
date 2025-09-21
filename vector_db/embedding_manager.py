@@ -471,7 +471,7 @@ class EnhancedEmbeddingManager:
             # Check if model is available in local storage
             storage_path = None
             if use_local_storage:
-                from .model_storage_manager import get_model_storage_manager
+                from .embedding_storage_manager import get_model_storage_manager
                 from .embedding_model_registry import get_embedding_model_registry
 
                 registry = get_embedding_model_registry()

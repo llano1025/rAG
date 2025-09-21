@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from enum import Enum
 
 from .embedding_model_registry import get_embedding_model_registry, EmbeddingModelRegistry, ModelMetadata
-from .model_storage_manager import get_model_storage_manager, ModelStorageManager
+from .embedding_storage_manager import get_model_storage_manager, ModelStorageManager
 
 logger = logging.getLogger(__name__)
 

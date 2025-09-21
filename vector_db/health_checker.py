@@ -1,6 +1,6 @@
 """
 Vector database health checker with comprehensive monitoring.
-Provides health checks for FAISS indices, Qdrant collections, and database connectivity.
+Provides health checks for Qdrant collections, and database connectivity.
 """
 
 import logging
@@ -205,7 +205,6 @@ class VectorHealthChecker:
                     'server_status': 'offline'
                 }
             }
-    
     
     async def _check_storage_manager(self, db: Session) -> Dict[str, Any]:
         """Check storage manager functionality with a test operation."""

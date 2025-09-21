@@ -61,8 +61,8 @@ async def _initialize_model_systems(settings):
         logger.info("Initializing model storage and preloader systems...")
 
         # Import here to avoid circular imports
-        from vector_db.model_storage_manager import ModelStorageManager
-        from vector_db.model_preloader import ModelPreloader, PreloadPolicy
+        from vector_db.embedding_storage_manager import ModelStorageManager
+        from vector_db.embedding_model_preloader import ModelPreloader, PreloadPolicy
 
         # Initialize model storage manager with settings
         storage_manager = ModelStorageManager(
