@@ -452,10 +452,20 @@ class VectorStorageManager:
         try:
             optimizer_key = f"{index_name}_{vector_type}"
             optimizer = self.search_optimizers.get(optimizer_key)
-            
+
             if not optimizer:
                 available = list(self.search_optimizers.keys())
-                raise ValueError(f"Search optimizer '{optimizer_key}' not found. Available: {available}")
+
+                # Provide specific error messages for common cases
+                if vector_type == "context":
+                    content_key = f"{index_name}_content"
+                    if content_key in self.search_optimizers:
+                        logger.warning(f"Context vectors not available for index '{index_name}'. This may indicate the document was processed without context embeddings.")
+                        return []  # Return empty instead of raising error for missing context
+                    else:
+                        raise ValueError(f"Neither content nor context vectors found for index '{index_name}'. Available optimizers: {available}")
+                else:
+                    raise ValueError(f"Search optimizer '{optimizer_key}' not found. Available: {available}")
             
             # Use Qdrant search
             results = await optimizer.search(
@@ -557,7 +567,7 @@ class VectorStorageManager:
     ) -> List[Dict[str, Any]]:
         """
         Perform contextual search combining content and context vectors.
-        
+
         Args:
             index_name: Name of the index to search
             query_vector: Query vector for similarity search
@@ -566,10 +576,14 @@ class VectorStorageManager:
             context_weight: Weight for context similarity scores
             score_threshold: Minimum combined score threshold
             metadata_filters: Filters to apply to metadata
-            
+
         Returns:
             List of search results with combined scores
         """
+        logger.info(f"Starting contextual search for index: {index_name}, limit: {limit}")
+        logger.debug(f"Available search optimizers: {list(self.search_optimizers.keys())}")
+        logger.debug(f"Content weight: {content_weight}, Context weight: {context_weight}")
+
         try:
             # Search both content and context vectors
             content_results = await self.search_vectors(
@@ -579,7 +593,8 @@ class VectorStorageManager:
                 limit=limit * 2,  # Get more results for better combination
                 metadata_filters=metadata_filters
             )
-            
+            logger.info(f"Content search returned {len(content_results)} results")
+
             context_results = await self.search_vectors(
                 index_name=index_name,
                 query_vector=query_vector,
@@ -587,10 +602,12 @@ class VectorStorageManager:
                 limit=limit * 2,
                 metadata_filters=metadata_filters
             )
+            logger.info(f"Context search returned {len(context_results)} results")
             
             # Combine results by chunk_id
             combined_scores = {}
-            
+            logger.debug(f"Combining {len(content_results)} content and {len(context_results)} context results")
+
             # Process content results
             for result in content_results:
                 chunk_id = result["metadata"].get("chunk_id")
@@ -600,7 +617,9 @@ class VectorStorageManager:
                         "context_score": 0.0,
                         "result": result
                     }
-            
+                else:
+                    logger.warning(f"Content result missing chunk_id: {result}")
+
             # Process context results
             for result in context_results:
                 chunk_id = result["metadata"].get("chunk_id")
@@ -613,28 +632,41 @@ class VectorStorageManager:
                             "context_score": result["score"],
                             "result": result
                         }
+                else:
+                    logger.warning(f"Context result missing chunk_id: {result}")
             
             # Calculate combined scores
             final_results = []
+            filtered_count = 0
             for chunk_id, scores in combined_scores.items():
                 combined_score = (
                     scores["content_score"] * content_weight +
                     scores["context_score"] * context_weight
                 )
-                
+
+                logger.debug(f"Chunk {chunk_id}: content={scores['content_score']:.3f}, context={scores['context_score']:.3f}, combined={combined_score:.3f}")
+
                 if score_threshold is None or combined_score >= score_threshold:
                     result = scores["result"].copy()
                     result["score"] = combined_score
                     result["content_score"] = scores["content_score"]
                     result["context_score"] = scores["context_score"]
                     final_results.append(result)
-            
+                else:
+                    filtered_count += 1
+
+            if filtered_count > 0:
+                logger.info(f"Filtered {filtered_count} results below score threshold {score_threshold}")
+
             # Sort by combined score and return top results
             final_results.sort(key=lambda x: x["score"], reverse=True)
-            return final_results[:limit]
-            
+            top_results = final_results[:limit]
+
+            logger.info(f"Contextual search completed: returning {len(top_results)} results (from {len(final_results)} qualifying)")
+            return top_results
+
         except Exception as e:
-            logger.error(f"Failed to perform contextual search in index {index_name}: {e}")
+            logger.error(f"Failed to perform contextual search in index {index_name}: {e}", exc_info=True)
             return []
     
     async def delete_index(self, index_name: str, db: Session = None) -> bool:
@@ -781,7 +813,7 @@ class VectorStorageManager:
         except Exception as e:
             logger.error(f"Failed to get stats for index {index_name}: {e}")
             return {"error": str(e)}
-    
+        
     async def get_performance_stats(self) -> Dict[str, Any]:
         """Get performance statistics for health monitoring."""
         try:
@@ -789,7 +821,7 @@ class VectorStorageManager:
                 'storage_type': 'qdrant_only',
                 'search_optimizers_count': len(self.search_optimizers),
             }
-            
+
             # Add Qdrant connection status
             if self.qdrant_manager:
                 stats['qdrant_connected'] = await self.qdrant_manager.is_connected()
@@ -797,9 +829,9 @@ class VectorStorageManager:
             else:
                 stats['qdrant_connected'] = False
                 stats['qdrant_collections'] = 0
-            
+
             return stats
-            
+
         except Exception as e:
             logger.error(f"Failed to get performance stats: {e}")
             return {'error': str(e)}
@@ -817,7 +849,8 @@ class VectorStorageManager:
             context_key = f"{index_name}_context"
             
             # Check if collections exist in Qdrant
-            if await self.qdrant_manager.collection_exists(content_collection):
+            content_info = await self.qdrant_manager.get_collection_info(content_collection)
+            if content_info:
                 if content_key not in self.search_optimizers:
                     content_config = SearchConfig(
                         dimension=embedding_dimension,
@@ -826,8 +859,9 @@ class VectorStorageManager:
                     content_optimizer = QdrantSearchOptimizer(content_config, self.qdrant_manager)
                     self.search_optimizers[content_key] = content_optimizer
                     logger.info(f"Added search optimizer for content collection: {content_collection}")
-            
-            if await self.qdrant_manager.collection_exists(context_collection):
+
+            context_info = await self.qdrant_manager.get_collection_info(context_collection)
+            if context_info:
                 if context_key not in self.search_optimizers:
                     context_config = SearchConfig(
                         dimension=embedding_dimension,

@@ -1093,10 +1093,15 @@ class EnhancedSearchEngine:
                 )
                 
                 # Convert to SearchResult objects
+                logger.debug(f"Converting {len(results)} contextual search results from {index_name}")
+                converted_count = 0
                 for result in results:
                     search_result = await self._create_search_result_from_contextual(result, db)
                     if search_result:
                         all_results.append(search_result)
+                        converted_count += 1
+
+                logger.info(f"Successfully converted {converted_count}/{len(results)} contextual results from {index_name}")
             
             # Sort by combined score and return top results
             all_results.sort(key=lambda x: x.score, reverse=True)
@@ -1356,24 +1361,30 @@ class EnhancedSearchEngine:
     async def _create_search_result_from_contextual(self, contextual_result: Dict, db: Session) -> Optional[SearchResult]:
         """Create SearchResult from contextual search result."""
         try:
-            chunk_id = contextual_result.get('chunk_id')
-            
+            # Extract chunk_id from metadata (storage manager puts it there)
+            chunk_id = contextual_result.get('metadata', {}).get('chunk_id')
+
             if not chunk_id:
+                logger.warning(f"Contextual search result missing chunk_id: {contextual_result}")
                 return None
-            
+
             # Get chunk from database
             chunk = db.query(DocumentChunk).filter(
                 DocumentChunk.chunk_id == chunk_id
             ).first()
-            
+
             if not chunk:
+                logger.warning(f"Chunk not found in database: {chunk_id}")
                 return None
-            
+
             # Get document metadata
             document = db.query(Document).filter(Document.id == chunk.document_id).first()
-            
+
             if not document:
+                logger.warning(f"Document not found for chunk {chunk_id}, document_id: {chunk.document_id}")
                 return None
+
+            logger.debug(f"Successfully created SearchResult for chunk {chunk_id} with score {contextual_result.get('score', 0.0):.3f}")
             
             return SearchResult(
                 chunk_id=chunk.chunk_id,
