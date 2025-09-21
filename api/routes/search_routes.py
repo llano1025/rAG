@@ -75,7 +75,9 @@ async def unified_search(
             search_filters.rerank_score_weight = request.rerank_score_weight
         if hasattr(request, 'min_rerank_score'):
             search_filters.min_rerank_score = request.min_rerank_score
-        
+        if hasattr(request, 'embedding_model'):
+            search_filters.embedding_model = request.embedding_model
+
         # Execute unified search
         results = await search_engine.search(
             query=request.query,

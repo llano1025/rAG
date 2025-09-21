@@ -817,3 +817,71 @@ async def get_model_tests(
     except Exception as e:
         logger.error(f"Error getting tests for model {model_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to get tests: {str(e)}")
+
+# Embedding Models Endpoints
+
+class EmbeddingModel(BaseModel):
+    """Schema for embedding model information."""
+    name: str = Field(..., description="Model name/identifier")
+    display_name: str = Field(..., description="Human-readable model name")
+    description: str = Field(..., description="Model description")
+    dimension: int = Field(..., description="Embedding dimension")
+    provider: str = Field(..., description="Model provider")
+    max_length: Optional[int] = Field(None, description="Maximum input length")
+
+@router.get("/embedding", response_model=List[EmbeddingModel])
+async def get_available_embedding_models(
+    current_user = Depends(get_current_active_user)
+):
+    """Get list of available embedding models."""
+    try:
+        # Define commonly available embedding models
+        # This could be expanded to dynamically discover models from providers
+        available_models = [
+            EmbeddingModel(
+                name="sentence-transformers/all-MiniLM-L6-v2",
+                display_name="All-MiniLM-L6-v2",
+                description="Fast and efficient sentence transformer model, 384 dimensions",
+                dimension=384,
+                provider="sentence-transformers",
+                max_length=512
+            ),
+            EmbeddingModel(
+                name="sentence-transformers/all-mpnet-base-v2",
+                display_name="All-MPNet-Base-v2",
+                description="High quality sentence transformer model, 768 dimensions",
+                dimension=768,
+                provider="sentence-transformers",
+                max_length=514
+            ),
+            EmbeddingModel(
+                name="intfloat/multilingual-e5-large-instruct",
+                display_name="E5-Large-Instruct",
+                description="Multilingual instruction-tuned embedding model, 1024 dimensions",
+                dimension=1024,
+                provider="sentence-transformers",
+                max_length=512
+            ),
+            EmbeddingModel(
+                name="BAAI/bge-m3",
+                display_name="BGE-M3",
+                description="Multilingual embedding model with strong performance, 1024 dimensions",
+                dimension=1024,
+                provider="sentence-transformers",
+                max_length=8192
+            ),
+            EmbeddingModel(
+                name="Qwen/Qwen3-Embedding-0.6B",
+                display_name="Qwen3-Embedding",
+                description="Qwen3 embedding model, 768 dimensions",
+                dimension=768,
+                provider="sentence-transformers",
+                max_length=8192
+            )
+        ]
+
+        return available_models
+
+    except Exception as e:
+        logger.error(f"Error getting available embedding models: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get embedding models: {str(e)}")

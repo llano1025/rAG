@@ -11,6 +11,7 @@ import { SearchQuery, SearchResponse, SearchFilters as SearchFiltersType } from 
 import SearchResults from './SearchResults';
 import SearchFilters from './SearchFilters';
 import RerankerModelSelector from '../models/RerankerModelSelector';
+import EmbeddingModelSelector from '../models/EmbeddingModelSelector';
 import toast from 'react-hot-toast';
 
 interface SearchForm {
@@ -39,6 +40,7 @@ export default function SearchInterface() {
     file_size_range: null as [number, number] | null,
     language: '',
     is_public: undefined as boolean | undefined,
+    embedding_model: undefined as string | undefined,
   });
 
   // Reranker settings
@@ -46,6 +48,9 @@ export default function SearchInterface() {
   const [rerankerModel, setRerankerModel] = useState<string | undefined>(undefined);
   const [rerankerScoreWeight, setRerankerScoreWeight] = useState(0.5);
   const [rerankerMinScore, setRerankerMinScore] = useState<number | undefined>(undefined);
+
+  // Embedding model settings
+  const [selectedEmbeddingModel, setSelectedEmbeddingModel] = useState<string | undefined>(undefined);
 
   // Search parameters
   const [maxResults, setMaxResults] = useState(10);
@@ -190,6 +195,8 @@ export default function SearchInterface() {
         reranker_model: rerankerModel,
         rerank_score_weight: rerankerScoreWeight,
         min_rerank_score: rerankerMinScore,
+        // Embedding model selection
+        embedding_model: selectedEmbeddingModel,
       };
 
       let response: SearchResponse;
@@ -292,6 +299,8 @@ export default function SearchInterface() {
         reranker_model: rerankerModel,
         rerank_score_weight: rerankerScoreWeight,
         min_rerank_score: rerankerMinScore,
+        // Embedding model selection
+        embedding_model: selectedEmbeddingModel,
       };
 
       await searchApi.saveSearch(searchQuery, name);
@@ -305,7 +314,7 @@ export default function SearchInterface() {
   const loadSavedSearch = (savedSearch: SavedSearch) => {
     setValue('query', savedSearch.query_text);
     setValue('searchType', savedSearch.search_type as 'basic' | 'semantic' | 'hybrid' | 'contextual');
-    
+
     // Load filters if available
     if (savedSearch.filters) {
       const searchFilters = savedSearch.filters;
@@ -319,6 +328,7 @@ export default function SearchInterface() {
         file_size_range: searchFilters.file_size_range || null,
         language: searchFilters.language || '',
         is_public: searchFilters.is_public,
+        embedding_model: searchFilters.embedding_model,
         date_range: searchFilters.date_range ? {
           start: searchFilters.date_range[0],
           end: searchFilters.date_range[1]
@@ -327,14 +337,15 @@ export default function SearchInterface() {
       });
     }
 
-    // Load reranker settings if available (from the saved search query)
+    // Load reranker and embedding model settings if available (from the saved search query)
     if (savedSearch.filters) {
       const query = savedSearch.filters as any;
       setRerankerEnabled(query.enable_reranking ?? true);
       setRerankerModel(query.reranker_model);
       setRerankerScoreWeight(query.rerank_score_weight ?? 0.5);
       setRerankerMinScore(query.min_rerank_score);
-      
+      setSelectedEmbeddingModel(query.embedding_model);
+
       // Load search parameters
       setMaxResults(query.top_k ?? query.page_size ?? 20);
       setMinScore(query.similarity_threshold ?? 0.0);
@@ -346,7 +357,7 @@ export default function SearchInterface() {
   const loadHistorySearch = (historyItem: RecentSearch) => {
     setValue('query', historyItem.query_text);
     setValue('searchType', historyItem.query_type as 'basic' | 'semantic' | 'hybrid' | 'contextual');
-    
+
     // Load filters if available
     if (historyItem.filters) {
       const searchFilters = historyItem.filters;
@@ -360,6 +371,7 @@ export default function SearchInterface() {
         file_size_range: searchFilters.file_size_range || null,
         language: searchFilters.language || '',
         is_public: searchFilters.is_public,
+        embedding_model: searchFilters.embedding_model,
         date_range: searchFilters.date_range ? {
           start: searchFilters.date_range[0],
           end: searchFilters.date_range[1]
@@ -367,13 +379,14 @@ export default function SearchInterface() {
         owner: searchFilters.metadata_filters?.owner || '',
       });
 
-      // Load reranker settings if available (from the history item query)
+      // Load reranker and embedding model settings if available (from the history item query)
       const query = historyItem.filters as any;
       setRerankerEnabled(query.enable_reranking ?? true);
       setRerankerModel(query.reranker_model);
       setRerankerScoreWeight(query.rerank_score_weight ?? 0.5);
       setRerankerMinScore(query.min_rerank_score);
-      
+      setSelectedEmbeddingModel(query.embedding_model);
+
       // Load search parameters
       setMaxResults(query.top_k ?? query.page_size ?? 20);
       setMinScore(query.similarity_threshold ?? 0.0);
@@ -519,65 +532,21 @@ export default function SearchInterface() {
               <SearchFilters
                 filters={filters}
                 onFiltersChange={setFilters}
+                selectedEmbeddingModel={selectedEmbeddingModel}
+                onEmbeddingModelChange={setSelectedEmbeddingModel}
+                rerankerEnabled={rerankerEnabled}
+                onRerankerEnabledChange={setRerankerEnabled}
+                rerankerModel={rerankerModel}
+                onRerankerModelChange={setRerankerModel}
+                rerankerScoreWeight={rerankerScoreWeight}
+                onRerankerScoreWeightChange={setRerankerScoreWeight}
+                rerankerMinScore={rerankerMinScore}
+                onRerankerMinScoreChange={setRerankerMinScore}
+                maxResults={maxResults}
+                onMaxResultsChange={setMaxResults}
+                minScore={minScore}
+                onMinScoreChange={setMinScore}
               />
-              
-              {/* Reranker Settings */}
-              <div className="border-t border-gray-200 pt-6">
-                <RerankerModelSelector
-                  selectedModel={rerankerModel}
-                  onModelChange={setRerankerModel}
-                  enabled={rerankerEnabled}
-                  onEnabledChange={setRerankerEnabled}
-                  scoreWeight={rerankerScoreWeight}
-                  onScoreWeightChange={setRerankerScoreWeight}
-                  minScore={rerankerMinScore}
-                  onMinScoreChange={setRerankerMinScore}
-                  compact={true}
-                />
-              </div>
-              
-              {/* Search Parameters */}
-              <div className="border-t border-gray-200 pt-6">
-                <h3 className="text-sm font-medium text-gray-900 mb-4">Search Parameters</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label htmlFor="maxResults" className="block text-sm font-medium text-gray-700 mb-2">
-                      Max Results (k)
-                      <span className="ml-1 text-xs text-gray-500" title="Maximum number of results to return">ℹ️</span>
-                    </label>
-                    <input
-                      id="maxResults"
-                      type="number"
-                      min="1"
-                      max="100"
-                      value={maxResults}
-                      onChange={(e) => setMaxResults(Math.min(100, Math.max(1, parseInt(e.target.value) || 20)))}
-                      className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
-                      placeholder="20"
-                    />
-                    <p className="mt-1 text-xs text-gray-500">Number of results to return (1-100)</p>
-                  </div>
-                  
-                  <div>
-                    <label htmlFor="minScore" className="block text-sm font-medium text-gray-700 mb-2">
-                      Min Score
-                      <span className="ml-1 text-xs text-gray-500" title="Minimum relevance score threshold (0.0-1.0)">ℹ️</span>
-                    </label>
-                    <input
-                      id="minScore"
-                      type="number"
-                      min="0.0"
-                      max="1.0"
-                      step="0.1"
-                      value={minScore}
-                      onChange={(e) => setMinScore(Math.min(1.0, Math.max(0.0, parseFloat(e.target.value) || 0.0)))}
-                      className="block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500 sm:text-sm"
-                      placeholder="0.0"
-                    />
-                    <p className="mt-1 text-xs text-gray-500">Minimum relevance score (0.0-1.0)</p>
-                  </div>
-                </div>
-              </div>
             </div>
           )}
         </div>

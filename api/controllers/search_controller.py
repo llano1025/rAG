@@ -72,6 +72,8 @@ class SearchController:
         reranker_model: Optional[str] = None,
         rerank_score_weight: float = 0.5,
         min_rerank_score: Optional[float] = None,
+        # Embedding model parameter
+        embedding_model: Optional[str] = None,
         ip_address: Optional[str] = None,
         user_agent: Optional[str] = None
     ) -> List[Dict]:
@@ -99,10 +101,21 @@ class SearchController:
                 query, query_context
             )
             
-            # Generate embeddings
-            query_emb, context_emb = await self.embedding_manager.generate_query_embeddings(
-                query, processed_context
-            )
+            # Generate embeddings with specified model or default
+            if embedding_model:
+                # Create temporary embedding manager with specified model
+                from vector_db.embedding_manager import EnhancedEmbeddingManager
+                temp_manager = EnhancedEmbeddingManager.create_default_manager(
+                    model_name=embedding_model
+                )
+                query_emb, context_emb = await temp_manager.generate_query_embeddings(
+                    query, processed_context
+                )
+            else:
+                # Use default embedding manager
+                query_emb, context_emb = await self.embedding_manager.generate_query_embeddings(
+                    query, processed_context
+                )
             
             # Add user access control filters
             user_filters = await self._add_user_access_filters(filters, user)

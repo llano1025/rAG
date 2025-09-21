@@ -16,6 +16,7 @@ class SearchFilters(BaseModel):
     language: Optional[str] = Field(None, description="Filter by document language")
     is_public: Optional[bool] = Field(None, description="Filter by public/private status")
     metadata_filters: Optional[dict] = Field(None, description="Filter by custom metadata")
+    embedding_model: Optional[str] = Field(None, description="Filter by embedding model used to index documents")
     
     class Config:
         json_schema_extra = {
@@ -27,7 +28,8 @@ class SearchFilters(BaseModel):
                 "date_range": ["2024-01-01T00:00:00Z", "2024-12-31T23:59:59Z"],
                 "file_size_range": [1024, 10485760],
                 "language": "en",
-                "is_public": False
+                "is_public": False,
+                "embedding_model": "all-MiniLM-L6-v2"
             }
         }
 
@@ -58,6 +60,8 @@ class SearchQuery(BaseModel):
         ge=0.0,
         le=1.0
     )
+    # Embedding model selection
+    embedding_model: Optional[str] = Field(None, description="Embedding model to use for query encoding (e.g., 'all-MiniLM-L6-v2')")
     # Pagination fields
     page: int = Field(1, description="Page number for pagination", ge=1)
     page_size: int = Field(10, description="Number of results per page", ge=1, le=100)

@@ -69,6 +69,7 @@ export interface SearchFilters {
   language?: string;  // New language filtering
   is_public?: boolean;  // New public/private filtering
   metadata_filters?: Record<string, any>;
+  embedding_model?: string;  // Filter by embedding model used
 }
 
 export interface SearchQuery {
@@ -86,6 +87,8 @@ export interface SearchQuery {
   reranker_model?: string;
   rerank_score_weight?: number;
   min_rerank_score?: number;
+  // Embedding model selection
+  embedding_model?: string;
 }
 
 export interface SearchResult {
@@ -170,4 +173,14 @@ export interface RerankerHealth {
   response_time_ms?: number;
   message?: string;
   timestamp: string;
+}
+
+// Embedding Model types
+export interface EmbeddingModel {
+  name: string;
+  display_name: string;
+  description: string;
+  dimension: number;
+  provider: string;
+  max_length?: number;
 }
