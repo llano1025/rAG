@@ -1,6 +1,7 @@
 """
 External Document Sources Integration Manager
 Manages connections and synchronization with external document sources.
+Note: Plugin system has been removed - this is a simplified version.
 """
 
 import asyncio
@@ -13,7 +14,6 @@ import json
 from pathlib import Path
 import aiofiles
 
-from plugins.plugin_system import plugin_manager, PluginType, DataSourcePlugin
 from database.models import Document, User
 from file_processor.text_extractor import TextExtractor
 from vector_db.embedding_manager import EmbeddingManager
@@ -35,7 +35,7 @@ class SyncStatus(Enum):
 class SyncConfiguration:
     """Configuration for document source synchronization"""
     source_name: str
-    plugin_name: str
+    source_type: str  # "confluence", "google_drive", "sharepoint", etc.
     config: Dict
     sync_interval: int = 3600  # seconds
     enabled: bool = True
@@ -153,38 +153,37 @@ class ExternalSourcesManager:
         except Exception as e:
             logger.error(f"Error saving external source configurations: {e}")
     
-    async def add_source(self, source_name: str, plugin_name: str, config: Dict, 
+    async def add_source(self, source_name: str, source_type: str, config: Dict,
                         sync_interval: int = 3600, auto_sync: bool = True) -> bool:
         """Add a new external document source"""
         try:
-            # Validate plugin exists
-            plugins = await plugin_manager.get_plugins_by_type(PluginType.DATA_SOURCE)
-            plugin_names = [p.metadata.name for p in plugins]
-            
-            if plugin_name not in plugin_names:
-                raise ValueError(f"Plugin {plugin_name} not found or not a data source plugin")
-            
+            # Validate source type (simplified without plugin system)
+            supported_types = ["confluence", "google_drive", "sharepoint", "notion", "custom"]
+
+            if source_type not in supported_types:
+                raise ValueError(f"Source type {source_type} not supported. Supported types: {supported_types}")
+
             # Create sync configuration
             sync_config = SyncConfiguration(
                 source_name=source_name,
-                plugin_name=plugin_name,
+                source_type=source_type,
                 config=config,
                 sync_interval=sync_interval,
                 auto_sync=auto_sync
             )
-            
-            # Validate configuration
-            plugin_instance = next(p for p in plugins if p.metadata.name == plugin_name)
-            if plugin_instance.instance and hasattr(plugin_instance.instance, 'validate_config'):
-                if not plugin_instance.instance.validate_config(config):
-                    raise ValueError("Invalid plugin configuration")
-            
+
+            # Basic configuration validation
+            required_keys = ["url"] if source_type in ["confluence", "sharepoint"] else ["credentials"]
+            for key in required_keys:
+                if key not in config:
+                    logger.warning(f"Missing recommended config key '{key}' for {source_type}")
+
             self.sync_configs[source_name] = sync_config
             await self._save_configurations()
-            
-            logger.info(f"Added external source: {source_name}")
+
+            logger.info(f"Added external source: {source_name} (type: {source_type})")
             return True
-            
+
         except Exception as e:
             logger.error(f"Error adding external source {source_name}: {e}")
             return False
@@ -247,23 +246,17 @@ class ExternalSourcesManager:
             config.sync_status = SyncStatus.RUNNING
             await self._save_configurations()
             
-            # Get plugin instance
-            plugins = await plugin_manager.get_plugins_by_type(PluginType.DATA_SOURCE)
-            plugin_instance = next((p for p in plugins if p.metadata.name == config.plugin_name), None)
-            
-            if not plugin_instance or not plugin_instance.instance:
-                raise ValueError(f"Plugin {config.plugin_name} not available")
-            
-            plugin: DataSourcePlugin = plugin_instance.instance
-            
-            # Fetch documents
-            if config.last_sync:
-                # Incremental sync
-                documents = await plugin.sync_documents(config.last_sync)
-            else:
-                # Full sync
-                documents = await plugin.fetch_documents(config.config)
-            
+            # Simplified document fetching (plugin system removed)
+            # This is now a placeholder - external source integration would need
+            # to be implemented directly based on source_type
+
+            logger.warning(f"External source sync for {config.source_type} is not implemented in simplified version")
+            logger.info(f"Sync configuration: {config.source_name} (type: {config.source_type})")
+
+            # Placeholder - in a real implementation, you would add specific
+            # integration code for each source_type (confluence, google_drive, etc.)
+            documents = []  # No documents fetched in simplified version
+
             result.documents_fetched = len(documents)
             
             # Process each document

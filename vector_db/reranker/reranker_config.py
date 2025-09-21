@@ -257,9 +257,6 @@ class RerankerConfig:
 # Default configuration file path
 DEFAULT_CONFIG_PATH = os.path.join(
     os.path.dirname(__file__),
-    '..',
-    '..',
-    'config',
     'reranker_config.yaml'
 )
 

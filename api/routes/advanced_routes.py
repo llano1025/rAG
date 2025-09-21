@@ -11,7 +11,6 @@ import json
 from api.middleware.auth import get_current_active_user, verify_admin
 from database.models import User
 from utils.data_quality.duplicate_detector import create_duplicate_detector, DuplicateType
-from plugins.plugin_system import plugin_manager, PluginType
 from utils.integrations.external_sources import external_sources_manager
 from utils.analytics.advanced_analytics import advanced_analytics, AnalyticsQuery, ReportType, TimeRange
 from vector_db.embedding_trainer import CustomEmbeddingTrainer, TrainingConfig, TrainingMethod, TrainingExample
@@ -83,74 +82,12 @@ async def get_duplicate_statistics(
         raise HTTPException(status_code=500, detail=f"Error getting statistics: {e}")
 
 
-# Plugin Management Endpoints
-@router.get("/plugins/status")
-async def get_plugin_status(
-    current_user: User = Depends(verify_admin)
-):
-    """Get status of all plugins"""
-    try:
-        status = await plugin_manager.get_plugin_status()
-        return {
-            "status": "success",
-            "plugin_status": status
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error getting plugin status: {e}")
-
-
-@router.get("/plugins/types/{plugin_type}")
-async def get_plugins_by_type(
-    plugin_type: str,
-    current_user: User = Depends(verify_admin)
-):
-    """Get plugins by type"""
-    try:
-        plugin_type_enum = PluginType(plugin_type)
-        plugins = await plugin_manager.get_plugins_by_type(plugin_type_enum)
-        
-        plugin_list = []
-        for plugin in plugins:
-            plugin_list.append({
-                "name": plugin.metadata.name,
-                "version": plugin.metadata.version,
-                "description": plugin.metadata.description,
-                "author": plugin.metadata.author,
-                "status": plugin.status.value,
-                "load_time": plugin.load_time.isoformat()
-            })
-        
-        return {
-            "status": "success",
-            "plugins": plugin_list
-        }
-        
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid plugin type")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error getting plugins: {e}")
-
-
-@router.post("/plugins/{plugin_name}/reload")
-async def reload_plugin(
-    plugin_name: str,
-    current_user: User = Depends(verify_admin)
-):
-    """Reload a specific plugin"""
-    try:
-        await plugin_manager.reload_plugin(plugin_name)
-        return {"status": "success", "message": f"Plugin {plugin_name} reloaded"}
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error reloading plugin: {e}")
-
 
 # External Sources Endpoints
 @router.post("/external-sources/add")
 async def add_external_source(
     source_name: str,
-    plugin_name: str,
+    source_type: str,
     config: Dict,
     sync_interval: int = 3600,
     auto_sync: bool = True,
@@ -159,7 +96,7 @@ async def add_external_source(
     """Add a new external document source"""
     try:
         success = await external_sources_manager.add_source(
-            source_name, plugin_name, config, sync_interval, auto_sync
+            source_name, source_type, config, sync_interval, auto_sync
         )
         
         if success:
