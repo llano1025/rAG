@@ -509,6 +509,12 @@ class VectorController:
             # Format documents
             documents_data = []
             for doc in documents:
+                # Get embedding model from first chunk (all chunks should use same model)
+                embedding_model = None
+                if doc.chunks:
+                    # Get the first chunk's embedding model
+                    embedding_model = doc.chunks[0].embedding_model
+
                 doc_data = {
                     'id': doc.id,
                     'filename': doc.filename,
@@ -525,7 +531,8 @@ class VectorController:
                     'processed_at': doc.processed_at.isoformat() if doc.processed_at else None,
                     'language': doc.language,
                     'tags': doc.get_tag_list(),
-                    'chunks_count': len(doc.chunks)
+                    'chunks_count': len(doc.chunks),
+                    'embedding_model': embedding_model
                 }
                 documents_data.append(doc_data)
             

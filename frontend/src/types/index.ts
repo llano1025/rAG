@@ -48,6 +48,7 @@ export interface Document {
   language?: string;
   tags: string[];
   chunks_count: number;
+  embedding_model?: string;
 }
 
 export interface DocumentUpload {

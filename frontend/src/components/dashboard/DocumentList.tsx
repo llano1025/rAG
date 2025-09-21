@@ -296,6 +296,24 @@ export default function DocumentList({ refreshTrigger }: DocumentListProps) {
     );
   };
 
+  const getEmbeddingModelBadge = (embeddingModel?: string) => {
+    if (!embeddingModel) return null;
+
+    // Shorten long model names for display
+    const displayName = embeddingModel.length > 20
+      ? embeddingModel.substring(0, 20) + '...'
+      : embeddingModel;
+
+    return (
+      <span
+        className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-50 text-purple-700"
+        title={embeddingModel} // Show full name on hover
+      >
+        {displayName}
+      </span>
+    );
+  };
+
   const renderTags = (doc: Document) => {
     const { tags = [], id } = doc;
     const isEditing = editingTags[id];
@@ -558,8 +576,9 @@ export default function DocumentList({ refreshTrigger }: DocumentListProps) {
                     <p className="text-xs text-gray-500 mt-1">
                       {formatFileSize(doc.file_size)} • {doc.created_at ? format(new Date(doc.created_at), 'MMM d, yyyy') : 'Unknown date'}
                     </p>
-                    <div className="mt-2">
+                    <div className="mt-2 flex items-center gap-2 flex-wrap">
                       {getStatusBadge(doc.status)}
+                      {getEmbeddingModelBadge(doc.embedding_model)}
                     </div>
                     {renderTags(doc)}
                   </div>
