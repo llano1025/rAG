@@ -2,15 +2,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from contextlib import asynccontextmanager
+import asyncio
 import logging
 import os
-from typing import Dict, Any
 from pathlib import Path
 
 from api.routes import document_routes, search_routes, vector_routes, library_routes, user_routes, auth_routes, health_routes, admin_routes, advanced_routes, analytics_routes, chat_routes, ocr_routes, model_routes
-from api.middleware.auth import AuthMiddleware
 from api.middleware.error_handler import ErrorHandler
-from api.middleware.rate_limiter import RateLimiter
 from utils.monitoring.health_check import HealthChecker
 from utils.caching.redis_manager import RedisManager
 from utils.security.encryption import EncryptionManager, EncryptionConfig
@@ -56,6 +54,80 @@ redis_manager = None
 encryption_manager = None
 audit_logger = None
 settings = None
+
+async def _initialize_model_systems(settings):
+    """Initialize model storage and preloading systems."""
+    try:
+        logger.info("Initializing model storage and preloader systems...")
+
+        # Import here to avoid circular imports
+        from vector_db.model_storage_manager import ModelStorageManager
+        from vector_db.model_preloader import ModelPreloader, PreloadPolicy
+
+        # Initialize model storage manager with settings
+        storage_manager = ModelStorageManager(
+            storage_base_path=settings.MODEL_STORAGE_BASE_PATH,
+            enable_auto_download=settings.MODEL_STORAGE_ENABLE_AUTO_DOWNLOAD,
+            max_concurrent_downloads=settings.MODEL_STORAGE_MAX_CONCURRENT_DOWNLOADS,
+            storage_limit_gb=settings.MODEL_STORAGE_LIMIT_GB
+        )
+
+        # Parse preload policy
+        policy_mapping = {
+            "none": PreloadPolicy.NONE,
+            "essential": PreloadPolicy.ESSENTIAL,
+            "all": PreloadPolicy.ALL,
+            "selective": PreloadPolicy.SELECTIVE
+        }
+        preload_policy = policy_mapping.get(
+            settings.MODEL_PRELOAD_POLICY.lower(),
+            PreloadPolicy.ALL  # Default to ALL
+        )
+
+        # Initialize model preloader
+        preloader = ModelPreloader(
+            storage_manager=storage_manager,
+            preload_policy=preload_policy,
+            max_concurrent_downloads=settings.MODEL_STORAGE_MAX_CONCURRENT_DOWNLOADS,
+            download_timeout_minutes=settings.MODEL_PRELOAD_TIMEOUT_MINUTES
+        )
+
+        # Get startup summary
+        startup_summary = await preloader.get_startup_summary()
+
+        # Perform model preloading if enabled
+        if settings.MODEL_PRELOAD_ON_STARTUP:
+            if settings.MODEL_PRELOAD_BACKGROUND:
+                # Start preloading in background
+                logger.info("Starting background model preloading...")
+                asyncio.create_task(_background_model_preload(preloader))
+            else:
+                # Preload synchronously (blocks startup)
+                logger.info("Starting synchronous model preloading...")
+                result = await preloader.preload_models()
+                logger.info(f"Model preloading completed: {result.successfully_downloaded} downloaded, "
+                           f"{result.already_available} already available, {result.failed_downloads} failed")
+
+        logger.info("Model systems initialized successfully")
+
+    except Exception as e:
+        logger.error(f"Failed to initialize model systems: {e}")
+        # Don't fail startup if model systems fail
+        logger.warning("Continuing startup without model preloading")
+
+async def _background_model_preload(preloader):
+    """Background task for model preloading."""
+    try:
+        logger.info("Background model preloading started")
+        result = await preloader.preload_models()
+        logger.info(f"Background model preloading completed: {result.successfully_downloaded} downloaded, "
+                   f"{result.already_available} already available, {result.failed_downloads} failed")
+
+        if result.errors:
+            logger.warning(f"Model preloading errors: {result.errors}")
+
+    except Exception as e:
+        logger.error(f"Background model preloading failed: {e}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -107,14 +179,17 @@ async def lifespan(app: FastAPI):
         # Initialize health check
         health_check = HealthChecker()
         logger.info("Health check system initialized")
-        
+
+        # Initialize model storage and preloader
+        await _initialize_model_systems(settings)
+
         # Store instances in app state
         app.state.redis = redis_manager
         app.state.encryption = encryption_manager
         app.state.audit_logger = audit_logger
         app.state.health = health_check
         app.state.settings = settings
-        
+
         logger.info("RAG Application startup completed successfully")
         
         # Print startup success message to console

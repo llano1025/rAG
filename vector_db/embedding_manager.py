@@ -51,13 +51,15 @@ class BaseEmbeddingProvider(ABC):
         pass
 
 class HuggingFaceEmbeddingProvider(BaseEmbeddingProvider):
-    """HuggingFace transformers-based embedding provider."""
-    
+    """HuggingFace transformers-based embedding provider with persistent storage support."""
+
     def __init__(
         self,
         model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
         device: str = None,
-        batch_size: int = 32
+        batch_size: int = 32,
+        use_local_storage: bool = True,
+        storage_path: Optional[str] = None
     ):
         if not TORCH_AVAILABLE:
             raise EmbeddingError("PyTorch and transformers are required for HuggingFace embeddings. Please install: pip install torch transformers sentence-transformers")
@@ -72,31 +74,100 @@ class HuggingFaceEmbeddingProvider(BaseEmbeddingProvider):
         self.model_name = model_name
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.batch_size = min(batch_size, 64)  # Cap batch size for stability
-        
+        self.use_local_storage = use_local_storage
+        self.storage_path = storage_path
+
         try:
             logging.info(f"Initializing HuggingFace model {model_name} on {self.device}")
-            
+
+            # Determine model path - use local storage if available
+            model_path = self._get_model_path()
+            is_local_path = str(model_path) != model_name
+
             # Try sentence-transformers first for better performance
             if "sentence-transformers" in model_name:
-                self.model = SentenceTransformer(model_name, device=self.device)
-                self.model_type = "sentence_transformer"
-                self.embedding_dim = self.model.get_sentence_embedding_dimension()
-                logging.info(f"Successfully loaded sentence-transformer model with {self.embedding_dim} dimensions")
+                try:
+                    self.model = SentenceTransformer(model_path, device=self.device)
+                    self.model_type = "sentence_transformer"
+                    self.embedding_dim = self.model.get_sentence_embedding_dimension()
+                    logging.info(f"Successfully loaded sentence-transformer model with {self.embedding_dim} dimensions from {model_path}")
+                except Exception as st_error:
+                    if is_local_path:
+                        logging.warning(f"Failed to load from local path {model_path}: {st_error}")
+                        logging.info(f"Attempting fallback to HuggingFace for {model_name}")
+                        # Try again with original model name
+                        self.model = SentenceTransformer(model_name, device=self.device)
+                        self.model_type = "sentence_transformer"
+                        self.embedding_dim = self.model.get_sentence_embedding_dimension()
+                        logging.info(f"Successfully loaded sentence-transformer model from HuggingFace with {self.embedding_dim} dimensions")
+                    else:
+                        raise st_error
             else:
                 # Fallback to raw transformers
-                self.model = AutoModel.from_pretrained(model_name)
-                self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-                self.model.to(self.device)
-                self.model.eval()
-                self.model_type = "transformer"
-                # Estimate embedding dimension (common values)
-                self.embedding_dim = self.model.config.hidden_size
-                logging.info(f"Successfully loaded transformer model with {self.embedding_dim} dimensions")
-                
+                try:
+                    self.model = AutoModel.from_pretrained(model_path)
+                    self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+                    self.model.to(self.device)
+                    self.model.eval()
+                    self.model_type = "transformer"
+                    # Estimate embedding dimension (common values)
+                    self.embedding_dim = self.model.config.hidden_size
+                    logging.info(f"Successfully loaded transformer model with {self.embedding_dim} dimensions from {model_path}")
+                except Exception as t_error:
+                    if is_local_path:
+                        logging.warning(f"Failed to load transformer from local path {model_path}: {t_error}")
+                        logging.info(f"Attempting fallback to HuggingFace for {model_name}")
+                        # Try again with original model name
+                        self.model = AutoModel.from_pretrained(model_name)
+                        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+                        self.model.to(self.device)
+                        self.model.eval()
+                        self.model_type = "transformer"
+                        self.embedding_dim = self.model.config.hidden_size
+                        logging.info(f"Successfully loaded transformer model from HuggingFace with {self.embedding_dim} dimensions")
+                    else:
+                        raise t_error
+
         except Exception as e:
             error_msg = f"Failed to initialize HuggingFace model {model_name}: {e}"
             logging.error(error_msg)
             raise EmbeddingError(error_msg) from e
+
+    def _get_model_path(self) -> str:
+        """Get the path to load the model from (local storage or HuggingFace)."""
+        if self.use_local_storage and self.storage_path:
+            from pathlib import Path
+            local_path = Path(self.storage_path)
+
+            logging.debug(f"Checking local storage path: {local_path}")
+            logging.debug(f"Path exists: {local_path.exists()}")
+
+            if local_path.exists():
+                # Verify model structure
+                essential_files = [
+                    "config.json",
+                    "config_sentence_transformers.json",
+                    "pytorch_model.bin",
+                    "model.safetensors"
+                ]
+
+                existing_files = [f for f in essential_files if (local_path / f).exists()]
+                logging.debug(f"Found essential files: {existing_files}")
+
+                # Check if we have at least a config file
+                has_config = any(f in existing_files for f in ["config.json", "config_sentence_transformers.json"])
+
+                if has_config:
+                    logging.info(f"Using local storage for model {self.model_name}: {local_path}")
+                    return str(local_path)
+                else:
+                    logging.warning(f"Local model missing essential config files, falling back to HuggingFace: {local_path}")
+            else:
+                logging.warning(f"Local storage path does not exist: {local_path}, falling back to HuggingFace")
+
+        # Fall back to downloading from HuggingFace
+        logging.info(f"Loading model from HuggingFace: {self.model_name}")
+        return self.model_name
 
     async def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings using HuggingFace models."""
@@ -392,15 +463,37 @@ class EnhancedEmbeddingManager:
         cls,
         model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
         device: str = None,
-        batch_size: int = 32
+        batch_size: int = 32,
+        use_local_storage: bool = True
     ):
         """Create manager with HuggingFace provider."""
         try:
-            provider = HuggingFaceEmbeddingProvider(model_name, device, batch_size)
+            # Check if model is available in local storage
+            storage_path = None
+            if use_local_storage:
+                from .model_storage_manager import get_model_storage_manager
+                from .embedding_model_registry import get_embedding_model_registry
+
+                registry = get_embedding_model_registry()
+                storage_manager = get_model_storage_manager()
+
+                # Find model in registry by name
+                matching_models = [m for m in registry.list_models() if m.model_name == model_name]
+                if matching_models:
+                    model = matching_models[0]
+                    if storage_manager.is_model_stored(model.model_id):
+                        stored_info = storage_manager.get_stored_model_info(model.model_id)
+                        if stored_info and stored_info.status == "available":
+                            storage_path = stored_info.storage_path
+                            logging.info(f"Using locally stored model: {model_name}")
+
+            provider = HuggingFaceEmbeddingProvider(
+                model_name, device, batch_size, use_local_storage, storage_path
+            )
             return cls(provider)
         except Exception as e:
             logging.error(f"Failed to create HuggingFace embedding manager: {e}")
-            raise EmbeddingError(f"HuggingFace embedding manager creation failed: {e}")from e
+            raise EmbeddingError(f"HuggingFace embedding manager creation failed: {e}") from e
     
     @classmethod
     def create_ollama_manager(

@@ -10,7 +10,7 @@ Provides endpoints for:
 from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from typing import List, Dict, Optional, Any
 from sqlalchemy.orm import Session
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 import logging
 
 from database.connection import get_db
@@ -29,6 +29,8 @@ class ModelDiscoveryRequest(BaseModel):
     base_url: Optional[str] = Field(None, description="Custom base URL for local providers")
 
 class ModelRegistrationRequest(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
     name: str = Field(..., min_length=1, max_length=100, description="User-defined model name")
     display_name: Optional[str] = Field(None, max_length=200, description="Display name for the model")
     description: Optional[str] = Field(None, description="Model description")
@@ -55,6 +57,8 @@ class ModelTestRequest(BaseModel):
     timeout_seconds: int = Field(30, ge=5, le=300, description="Test timeout in seconds")
 
 class RegisteredModelResponse(BaseModel):
+    model_config = ConfigDict(protected_namespaces=(), from_attributes=True)
+
     id: int
     name: str
     display_name: Optional[str]
@@ -68,9 +72,6 @@ class RegisteredModelResponse(BaseModel):
     average_response_time: Optional[float]
     created_at: str
     updated_at: str
-
-    class Config:
-        from_attributes = True
 
 class ModelTestResponse(BaseModel):
     id: int

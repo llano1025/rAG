@@ -38,6 +38,16 @@ class ModelMetadata:
     license: Optional[str] = None
     created_at: datetime = None
     last_updated: datetime = None
+    # Storage tracking fields
+    is_stored_locally: bool = False
+    local_storage_path: Optional[str] = None
+    download_status: str = "not_downloaded"  # "not_downloaded", "downloading", "available", "error"
+    last_download_attempt: Optional[datetime] = None
+    storage_checksum: Optional[str] = None
+    auto_download_enabled: bool = True
+    # Download configuration fields
+    requires_trust_remote_code: bool = False
+    download_kwargs: Optional[Dict[str, Any]] = None
 
     def __post_init__(self):
         if self.created_at is None:
@@ -151,22 +161,6 @@ class EmbeddingModelRegistry:
                 model_size_mb=600,
                 quality_score=0.92,
                 memory_requirements_mb=2048,
-                license="Apache 2.0"
-            ),
-            ModelMetadata(
-                model_id="hf-jina-v3",
-                provider=EmbeddingProvider.HUGGINGFACE,
-                model_name="jinaai/jina-embeddings-v3",
-                display_name="Jina Embeddings v3",
-                description="Frontier multilingual embedding model with task-specific LoRA adapters and flexible dimensions",
-                embedding_dimension=1024,
-                max_input_length=8192,
-                performance_tier="quality",
-                use_cases=["multilingual", "query_document_retrieval", "clustering", "classification", "text_matching"],
-                language_support=["en", "zh", "es", "fr", "de", "it", "ja", "ko", "ru", "ar", "multilingual"],
-                model_size_mb=570,
-                quality_score=0.94,
-                memory_requirements_mb=3072,
                 license="Apache 2.0"
             ),
             ModelMetadata(
@@ -448,6 +442,87 @@ class EmbeddingModelRegistry:
                 })
         
         return health_status
+
+    def update_storage_status(
+        self,
+        model_id: str,
+        is_stored: bool,
+        storage_path: Optional[str] = None,
+        download_status: str = "not_downloaded",
+        checksum: Optional[str] = None
+    ) -> bool:
+        """Update storage status for a model."""
+        try:
+            if model_id in self.models:
+                model = self.models[model_id]
+                model.is_stored_locally = is_stored
+                model.local_storage_path = storage_path
+                model.download_status = download_status
+                model.storage_checksum = checksum
+                model.last_updated = datetime.utcnow()
+
+                if is_stored and download_status == "available":
+                    model.last_download_attempt = datetime.utcnow()
+
+                self._save_registry()
+                logger.info(f"Updated storage status for model {model_id}: {download_status}")
+                return True
+            else:
+                logger.warning(f"Model {model_id} not found for storage status update")
+                return False
+        except Exception as e:
+            logger.error(f"Failed to update storage status for {model_id}: {e}")
+            return False
+
+    def get_models_by_storage_status(self, status: str) -> List[ModelMetadata]:
+        """Get models by their storage status."""
+        return [model for model in self.models.values() if model.download_status == status]
+
+    def get_locally_stored_models(self) -> List[ModelMetadata]:
+        """Get all locally stored models."""
+        return [model for model in self.models.values() if model.is_stored_locally]
+
+    def get_models_needing_download(self) -> List[ModelMetadata]:
+        """Get models that need to be downloaded."""
+        return [
+            model for model in self.models.values()
+            if (model.auto_download_enabled and
+                model.download_status in ["not_downloaded", "error"])
+        ]
+
+    def mark_download_attempt(self, model_id: str, status: str = "downloading"):
+        """Mark a download attempt for a model."""
+        if model_id in self.models:
+            model = self.models[model_id]
+            model.download_status = status
+            model.last_download_attempt = datetime.utcnow()
+            self._save_registry()
+
+    def get_storage_summary(self) -> Dict[str, Any]:
+        """Get a summary of storage status for all models."""
+        total_models = len(self.models)
+        stored_models = len(self.get_locally_stored_models())
+        available_models = len(self.get_models_by_storage_status("available"))
+        downloading_models = len(self.get_models_by_storage_status("downloading"))
+        error_models = len(self.get_models_by_storage_status("error"))
+
+        # Calculate total storage size
+        total_size_mb = sum(
+            model.model_size_mb or 0
+            for model in self.get_locally_stored_models()
+            if model.model_size_mb
+        )
+
+        return {
+            "total_models": total_models,
+            "locally_stored": stored_models,
+            "available": available_models,
+            "downloading": downloading_models,
+            "error": error_models,
+            "not_downloaded": total_models - stored_models,
+            "estimated_storage_mb": total_size_mb,
+            "estimated_storage_gb": round(total_size_mb / 1024, 2)
+        }
 
 # Global registry instance
 _registry_instance = None

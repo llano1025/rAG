@@ -147,6 +147,20 @@ class Settings(BaseSettings):
     USAGE_STATISTICS_ENABLED: bool = Field(default=True, env="USAGE_STATISTICS_ENABLED")
     USAGE_STATS_FLUSH_INTERVAL: int = Field(default=300, env="USAGE_STATS_FLUSH_INTERVAL")  # 5 minutes
     USAGE_STATS_MAX_EVENTS: int = Field(default=10000, env="USAGE_STATS_MAX_EVENTS")
+
+    # Model Storage Configuration
+    MODEL_STORAGE_BASE_PATH: str = Field(default="./runtime/models", env="MODEL_STORAGE_BASE_PATH")
+    MODEL_STORAGE_ENABLE_AUTO_DOWNLOAD: bool = Field(default=True, env="MODEL_STORAGE_ENABLE_AUTO_DOWNLOAD")
+    MODEL_STORAGE_MAX_CONCURRENT_DOWNLOADS: int = Field(default=2, env="MODEL_STORAGE_MAX_CONCURRENT_DOWNLOADS")
+    MODEL_STORAGE_LIMIT_GB: Optional[float] = Field(default=None, env="MODEL_STORAGE_LIMIT_GB")
+    MODEL_STORAGE_CLEANUP_DAYS: int = Field(default=90, env="MODEL_STORAGE_CLEANUP_DAYS")
+
+    # Model Preloader Configuration
+    MODEL_PRELOAD_POLICY: str = Field(default="all", env="MODEL_PRELOAD_POLICY")  # none, essential, all, selective
+    MODEL_PRELOAD_TIMEOUT_MINUTES: int = Field(default=30, env="MODEL_PRELOAD_TIMEOUT_MINUTES")
+    MODEL_PRELOAD_ON_STARTUP: bool = Field(default=True, env="MODEL_PRELOAD_ON_STARTUP")
+    MODEL_PRELOAD_BACKGROUND: bool = Field(default=True, env="MODEL_PRELOAD_BACKGROUND")
+    MODEL_PRELOAD_ESSENTIAL_USE_CASES: str = Field(default="general,semantic_search,question_answering", env="MODEL_PRELOAD_ESSENTIAL_USE_CASES")
     
     # Backup Configuration - Updated for organized runtime structure
     BACKUP_ENABLED: bool = Field(default=True, env="BACKUP_ENABLED")
