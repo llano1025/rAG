@@ -485,7 +485,7 @@ class EnhancedSearchEngine:
         filters = filters or SearchFilter()
         
         # Only initialize storage for vector-based search types
-        vector_search_types = {SearchType.SEMANTIC, SearchType.HYBRID, SearchType.CONTEXTUAL,
+        vector_search_types = {SearchType.SEMANTIC, SearchType.CONTEXTUAL,
                              SearchType.TABLE_CONTENT, SearchType.TABLE_HYBRID}
         database_only_search_types = {SearchType.KEYWORD, SearchType.TABLE_HEADERS, SearchType.TABLE_CONTEXT, "basic"}  # Include "basic" alias for keyword
 
@@ -597,8 +597,6 @@ class EnhancedSearchEngine:
                 results = await self._semantic_search(query, filters, limit, db)
             elif search_type == SearchType.KEYWORD or search_type == "basic":
                 results = await self._keyword_search(query, filters, limit, db)
-            elif search_type == SearchType.HYBRID:
-                results = await self._hybrid_search(query, filters, limit, db)
             elif search_type == SearchType.CONTEXTUAL:
                 results = await self._contextual_search(query, filters, limit, db)
             elif search_type == SearchType.TABLE_CONTENT:
@@ -1217,76 +1215,6 @@ class EnhancedSearchEngine:
             logger.error(f"BM25 keyword search failed: {e}")
             return []
     
-    async def _hybrid_search(
-        self,
-        query: str,
-        filters: SearchFilter,
-        limit: int,
-        db: Session
-    ) -> List[SearchResult]:
-        """Perform hybrid search combining semantic and keyword approaches."""
-        try:
-            # Perform both semantic and keyword searches
-            semantic_results = await self._semantic_search(query, filters, limit, db)
-            keyword_results = await self._keyword_search(query, filters, limit, db)
-            
-            # Combine and re-rank results
-            combined_results = {}
-            
-            # Add semantic results with weight
-            for result in semantic_results:
-                key = f"{result.document_id}_{result.chunk_id}"
-                combined_results[key] = {
-                    'result': result,
-                    'semantic_score': result.score,
-                    'keyword_score': 0.0
-                }
-            
-            # Add keyword results with weight
-            for result in keyword_results:
-                key = f"{result.document_id}_{result.chunk_id}"
-                if key in combined_results:
-                    combined_results[key]['keyword_score'] = result.score
-                else:
-                    combined_results[key] = {
-                        'result': result,
-                        'semantic_score': 0.0,
-                        'keyword_score': result.score
-                    }
-            
-            # Calculate hybrid scores and apply min_score filtering
-            final_results = []
-            semantic_weight = 0.7
-            keyword_weight = 0.3
-            min_score_threshold = filters.min_score or 0.0
-            
-            for key, data in combined_results.items():
-                hybrid_score = (
-                    data['semantic_score'] * semantic_weight +
-                    data['keyword_score'] * keyword_weight
-                )
-                
-                # Apply min_score filtering on the final hybrid score
-                if hybrid_score < min_score_threshold:
-                    logger.debug(f"Filtered hybrid result {key} (score: {hybrid_score:.3f} < min_score: {min_score_threshold})")
-                    continue
-                
-                result = data['result']
-                result.score = hybrid_score
-                result.metadata['semantic_score'] = data['semantic_score']
-                result.metadata['keyword_score'] = data['keyword_score']
-                result.metadata['hybrid_score'] = hybrid_score
-                
-                final_results.append(result)
-            
-            # Sort by hybrid score and return top results
-            final_results.sort(key=lambda x: x.score, reverse=True)
-            return final_results[:limit]
-            
-        except Exception as e:
-            logger.error(f"Hybrid search failed: {e}")
-            return []
-    
     async def _create_search_result(self, vector_result: Dict, db: Session) -> Optional[SearchResult]:
         """Create SearchResult from vector search result."""
         try:
@@ -1624,8 +1552,6 @@ class EnhancedSearchEngine:
         
         if search_type == SearchType.SEMANTIC:
             return config.enable_for_semantic_search
-        elif search_type == SearchType.HYBRID:
-            return config.enable_for_hybrid_search
         elif search_type == SearchType.CONTEXTUAL:
             return config.enable_for_contextual_search
         
@@ -2446,17 +2372,17 @@ def detect_optimal_search_type(query: str) -> str:
     if query.lower().startswith(('what', 'how', 'why', 'when', 'where', 'who', 'which', 'can', 'should', 'would', 'could')):
         return SearchType.SEMANTIC
     
-    # Contains technical terms or specific phrases → hybrid search
+    # Contains technical terms or specific phrases → contextual search
     technical_indicators = ['api', 'function', 'method', 'class', 'error', 'code', 'algorithm', 'implementation']
     if any(term in query.lower() for term in technical_indicators):
-        return SearchType.HYBRID
-    
-    # Complex queries (more than 5 words) → hybrid search
+        return SearchType.CONTEXTUAL
+
+    # Complex queries (more than 5 words) → contextual search
     if len(words) > 5:
-        return SearchType.HYBRID
-        
-    # Default to semantic for best results with moderate complexity
-    return SearchType.SEMANTIC
+        return SearchType.CONTEXTUAL
+
+    # Default to contextual for best results with moderate complexity
+    return SearchType.CONTEXTUAL
 
 
 # Global search engine instance

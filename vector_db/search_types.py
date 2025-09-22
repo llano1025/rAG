@@ -10,7 +10,6 @@ class SearchType:
     """Search type constants."""
     SEMANTIC = "semantic"
     KEYWORD = "keyword"
-    HYBRID = "hybrid"
     CONTEXTUAL = "contextual"
     TABLE_CONTENT = "table_content"
     TABLE_HEADERS = "table_headers"

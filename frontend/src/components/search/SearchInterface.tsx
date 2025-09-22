@@ -16,7 +16,7 @@ import toast from 'react-hot-toast';
 
 interface SearchForm {
   query: string;
-  searchType: 'basic' | 'semantic' | 'hybrid' | 'contextual';
+  searchType: 'basic' | 'semantic' | 'contextual';
 }
 
 export default function SearchInterface() {
@@ -65,7 +65,7 @@ export default function SearchInterface() {
   } = useForm<SearchForm>({
     defaultValues: {
       query: '',
-      searchType: 'basic',
+      searchType: 'contextual',
     }
   });
 
@@ -189,7 +189,6 @@ export default function SearchInterface() {
         top_k: maxResults,
         similarity_threshold: minScore,
         semantic_search: data.searchType === 'semantic',
-        hybrid_search: data.searchType === 'hybrid',
         // Reranker settings
         enable_reranking: rerankerEnabled,
         reranker_model: rerankerModel,
@@ -204,9 +203,6 @@ export default function SearchInterface() {
       switch (data.searchType) {
         case 'semantic':
           response = await searchApi.semanticSearch(searchQuery);
-          break;
-        case 'hybrid':
-          response = await searchApi.hybridSearch(searchQuery);
           break;
         case 'contextual':
           response = await searchApi.contextualSearch(searchQuery);
@@ -293,7 +289,6 @@ export default function SearchInterface() {
         top_k: maxResults,
         similarity_threshold: minScore,
         semantic_search: searchType === 'semantic',
-        hybrid_search: searchType === 'hybrid',
         // Reranker settings
         enable_reranking: rerankerEnabled,
         reranker_model: rerankerModel,
@@ -313,7 +308,7 @@ export default function SearchInterface() {
 
   const loadSavedSearch = (savedSearch: SavedSearch) => {
     setValue('query', savedSearch.query_text);
-    setValue('searchType', savedSearch.search_type as 'basic' | 'semantic' | 'hybrid' | 'contextual');
+    setValue('searchType', savedSearch.search_type as 'basic' | 'semantic' | 'contextual');
 
     // Load filters if available
     if (savedSearch.filters) {
@@ -356,7 +351,7 @@ export default function SearchInterface() {
 
   const loadHistorySearch = (historyItem: RecentSearch) => {
     setValue('query', historyItem.query_text);
-    setValue('searchType', historyItem.query_type as 'basic' | 'semantic' | 'hybrid' | 'contextual');
+    setValue('searchType', historyItem.query_type as 'basic' | 'semantic' | 'contextual');
 
     // Load filters if available
     if (historyItem.filters) {
@@ -477,7 +472,6 @@ export default function SearchInterface() {
                     {...register('searchType')}
                     className="border border-gray-300 rounded-md px-3 py-1 text-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
                   >
-                    <option value="hybrid">Hybrid</option>
                     <option value="semantic">Semantic</option>
                     <option value="contextual">Contextual</option>
                     <option value="basic">Basic</option>
@@ -521,7 +515,6 @@ export default function SearchInterface() {
             <div className="text-xs text-gray-500">
               {searchType === 'basic' && 'Keyword-based search using traditional text matching'}
               {searchType === 'semantic' && 'AI-powered semantic search understanding context and meaning'}
-              {searchType === 'hybrid' && '🚀 Recommended: Combined keyword and semantic search for best results'}
               {searchType === 'contextual' && '🎯 Advanced: Context-aware search using content and surrounding text'}
             </div>
           </form>

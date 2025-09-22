@@ -80,9 +80,6 @@ export const searchApi = {
     return apiClient.post('/api/search/semantic', query);
   },
 
-  hybridSearch: async (query: SearchQuery): Promise<SearchResponse> => {
-    return apiClient.post('/api/search/hybrid', query);
-  },
 
   contextualSearch: async (query: SearchQuery): Promise<SearchResponse> => {
     return apiClient.post('/api/search/contextual', query);

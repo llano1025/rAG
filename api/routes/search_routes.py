@@ -53,12 +53,12 @@ async def unified_search(
             if query.lower().startswith(('what', 'how', 'why', 'when', 'where', 'who')):
                 return SearchType.SEMANTIC
             
-            # Complex queries → hybrid search
+            # Complex queries → contextual search
             if len(query.split()) > 5:
-                return SearchType.HYBRID
-                
-            # Default to semantic for best results
-            return SearchType.SEMANTIC
+                return SearchType.CONTEXTUAL
+
+            # Default to contextual for best results
+            return SearchType.CONTEXTUAL
         
         search_type = detect_optimal_search_type(request.query)
         
@@ -227,60 +227,6 @@ async def semantic_search(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Semantic search failed: {str(e)}")
 
-@router.post("/hybrid", response_model=SearchResponse)
-async def hybrid_search(
-    request: SearchQuery,
-    current_user = Depends(get_current_active_user)
-):
-    """
-    Professional hybrid search using Reciprocal Rank Fusion (RRF) via EnhancedSearchEngine.
-    """
-    try:
-        # Get search engine components
-        # Use persistent search engine instance
-        search_engine = await get_initialized_search_engine()
-        embedding_manager = EnhancedEmbeddingManager.create_default_manager()
-        
-        db = next(get_db())
-        
-        # Convert API filters to search engine format
-        search_filters = convert_api_filters_to_search_filter(request.filters)
-        if request.similarity_threshold is not None:
-            search_filters.min_score = request.similarity_threshold
-        
-        # Apply reranking settings
-        if hasattr(request, 'enable_reranking'):
-            search_filters.enable_reranking = request.enable_reranking
-        if hasattr(request, 'reranker_model'):
-            search_filters.reranker_model = request.reranker_model
-        if hasattr(request, 'rerank_score_weight'):
-            search_filters.rerank_score_weight = request.rerank_score_weight
-        if hasattr(request, 'min_rerank_score'):
-            search_filters.min_rerank_score = request.min_rerank_score
-        
-        # Execute hybrid search using SearchEngine
-        results = await search_engine.search(
-            query=request.query,
-            user=current_user,
-            search_type=SearchType.HYBRID,
-            filters=search_filters,
-            limit=request.top_k,
-            db=db
-        )
-        
-        # Convert to API response format
-        return convert_search_response_to_api_format(
-            results=results,
-            query=request.query,
-            execution_time=0.0,  # TODO: Add timing
-            search_type="hybrid",
-            filters=request.filters,
-            fusion_method="enhanced_search_engine_hybrid",
-            reranking_applied=getattr(search_filters, 'enable_reranking', False)
-        )
-        
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Hybrid search failed: {str(e)}")
 
 @router.post("/contextual", response_model=SearchResponse)
 async def contextual_search(

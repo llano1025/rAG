@@ -76,7 +76,6 @@ export interface SearchQuery {
   query: string;
   filters?: SearchFilters;
   semantic_search?: boolean;
-  hybrid_search?: boolean;
   top_k?: number;
   similarity_threshold?: number;
   page?: number;

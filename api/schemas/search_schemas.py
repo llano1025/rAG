@@ -37,7 +37,6 @@ class SearchQuery(BaseModel):
     query: str = Field(..., description="Search query text")
     filters: Optional[SearchFilters] = None
     semantic_search: bool = Field(True, description="Whether to use semantic search")
-    hybrid_search: bool = Field(False, description="Whether to combine semantic and keyword search")
     top_k: int = Field(10, description="Number of results to return", ge=1, le=100)
     similarity_threshold: Optional[float] = Field(
         None, 
