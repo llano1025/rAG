@@ -35,6 +35,16 @@ def _get_embedding_manager():
         logging.warning(f"EnhancedEmbeddingManager not available: {e}")
         return None
 
+# Lazy import for ContextualChunkEnhancer
+def _get_contextual_enhancer():
+    """Lazy import of ContextualChunkEnhancer."""
+    try:
+        from .contextual_chunk_enhancer import ContextualChunkEnhancer
+        return ContextualChunkEnhancer
+    except ImportError as e:
+        logging.warning(f"ContextualChunkEnhancer not available: {e}")
+        return None
+
 logger = logging.getLogger(__name__)
 
 class DocumentVersionError(Exception):
@@ -52,10 +62,10 @@ class DocumentVersionManager:
     - Diff tracking and metadata
     """
     
-    def __init__(self, storage_manager: VectorStorageManager = None):
+    def __init__(self, storage_manager: VectorStorageManager = None, enable_contextual_retrieval: bool = True):
         """Initialize document version manager."""
         logger.info("Initializing DocumentVersionManager")
-        
+
         try:
             self.storage_manager = storage_manager or get_storage_manager()
             if self.storage_manager is None:
@@ -64,11 +74,13 @@ class DocumentVersionManager:
         except Exception as e:
             logger.error(f"Failed to get storage manager: {e}")
             raise RuntimeError(f"Storage manager initialization failed: {e}")
-        
+
         self.embedding_manager = None  # Will be initialized lazily
         self.chunker = None  # Will be initialized lazily
-        
-        logger.info(f"DocumentVersionManager initialized - storage_manager: {self.storage_manager is not None}")
+        self.enable_contextual_retrieval = enable_contextual_retrieval
+        self.contextual_enhancer = None  # Will be initialized lazily if needed
+
+        logger.info(f"DocumentVersionManager initialized - storage_manager: {self.storage_manager is not None}, contextual_retrieval: {enable_contextual_retrieval}")
     
     def _get_embedding_manager_instance(self, embedding_model: str = None):
         """Get embedding manager instance, initializing if needed."""
@@ -112,6 +124,36 @@ class DocumentVersionManager:
                 raise RuntimeError(f"Embedding manager initialization failed: {e}")
         
         return self.embedding_manager
+
+    def _get_contextual_enhancer_instance(self):
+        """Get contextual enhancer instance, initializing if needed."""
+        if not self.enable_contextual_retrieval:
+            return None
+
+        if self.contextual_enhancer is None:
+            try:
+                ContextualChunkEnhancer = _get_contextual_enhancer()
+                if not ContextualChunkEnhancer:
+                    logger.warning("ContextualChunkEnhancer not available, disabling contextual retrieval")
+                    return None
+
+                # Get model manager for LLM-based context generation
+                from llm.model_manager import ModelManager
+                model_manager = ModelManager()
+
+                self.contextual_enhancer = ContextualChunkEnhancer(
+                    model_manager=model_manager,
+                    max_context_length=200,
+                    batch_size=10,
+                    enable_caching=True
+                )
+                logger.info("ContextualChunkEnhancer initialized successfully")
+
+            except Exception as e:
+                logger.error(f"Failed to initialize ContextualChunkEnhancer: {e}")
+                self.contextual_enhancer = None
+
+        return self.contextual_enhancer
     
     def _create_embedding_manager_for_model(self, embedding_model: str):
         """Create embedding manager for a specific model using the model registry."""
@@ -493,9 +535,88 @@ class DocumentVersionManager:
             if self.storage_manager is None:
                 logger.error("Storage manager not available for vector indexing")
                 raise RuntimeError("Vector storage service is currently unavailable")
-            
-            # Generate embeddings for all chunks
-            texts = [chunk_data['text'] for chunk_data in chunks_data]
+
+            # Get embedding manager first
+            embedding_manager = self._get_embedding_manager_instance(embedding_model)
+            if embedding_manager is None:
+                logger.error("Embedding manager not available for vector generation")
+                raise RuntimeError("Embedding generation service is currently unavailable")
+
+            # Apply contextual enhancement if enabled (Anthropic's contextual retrieval)
+            if self.enable_contextual_retrieval:
+                logger.info("Applying contextual enhancement to chunks (Anthropic's contextual retrieval)")
+
+                # Update progress - contextual enhancement
+                if websocket_manager and progress_user_id:
+                    await websocket_manager.emit_document_progress(
+                        user_id=progress_user_id,
+                        document_id=document.id,
+                        filename=filename or document.filename,
+                        stage="enhancing_chunks_with_context",
+                        progress=65,
+                        chunks_processed=0,
+                        total_chunks=len(chunks_data)
+                    )
+
+                # Get contextual enhancer
+                contextual_enhancer = self._get_contextual_enhancer_instance()
+
+                if contextual_enhancer is not None:
+                    # Convert chunks_data to Chunk objects for enhancement
+                    from .chunking import Chunk
+                    chunks_for_enhancement = []
+
+                    for chunk_data in chunks_data:
+                        chunk = Chunk(
+                            text=chunk_data['text'],
+                            start_idx=chunk_data['chunk'].start_char,
+                            end_idx=chunk_data['chunk'].end_char,
+                            metadata=chunk_data['metadata'],
+                            context_text=f"{chunk_data['context'].get('before', '')} {chunk_data['context'].get('after', '')}".strip(),
+                            document_id=document.id,
+                            chunk_id=chunk_data['chunk'].chunk_id
+                        )
+                        chunks_for_enhancement.append(chunk)
+
+                    # Prepare document metadata for contextual enhancement
+                    document_metadata = {
+                        'id': document.id,
+                        'title': document.title,
+                        'content_type': document.content_type,
+                        'filename': document.filename
+                    }
+
+                    # Apply contextual enhancement
+                    try:
+                        enhanced_chunks = await contextual_enhancer.enhance_chunks(
+                            chunks=chunks_for_enhancement,
+                            document_content=document.extracted_text,
+                            document_metadata=document_metadata
+                        )
+
+                        # Update chunks_data with enhanced text for embedding generation
+                        enhanced_texts = []
+                        for i, enhanced_chunk in enumerate(enhanced_chunks):
+                            enhanced_texts.append(enhanced_chunk.text)  # This now contains contextual explanation + original text
+
+                            # Update chunk metadata to track enhancement
+                            chunks_data[i]['metadata']['contextual_enhancement_applied'] = True
+                            chunks_data[i]['metadata']['has_contextual_explanation'] = hasattr(enhanced_chunk, 'contextual_explanation')
+                            if hasattr(enhanced_chunk, 'contextual_explanation'):
+                                chunks_data[i]['metadata']['contextual_explanation'] = enhanced_chunk.contextual_explanation
+
+                        texts = enhanced_texts
+                        logger.info(f"Successfully enhanced {len(enhanced_chunks)} chunks with contextual information")
+
+                    except Exception as e:
+                        logger.error(f"Contextual enhancement failed, falling back to original texts: {e}")
+                        texts = [chunk_data['text'] for chunk_data in chunks_data]
+                else:
+                    logger.warning("Contextual enhancer not available, using original chunk texts")
+                    texts = [chunk_data['text'] for chunk_data in chunks_data]
+            else:
+                # Use original texts without contextual enhancement
+                texts = [chunk_data['text'] for chunk_data in chunks_data]
 
             # Update progress - starting content embedding generation
             if websocket_manager and progress_user_id:
@@ -509,12 +630,7 @@ class DocumentVersionManager:
                     total_chunks=len(chunks_data)
                 )
 
-            # Generate content embeddings
-            embedding_manager = self._get_embedding_manager_instance(embedding_model)
-            if embedding_manager is None:
-                logger.error("Embedding manager not available for vector generation")
-                raise RuntimeError("Embedding generation service is currently unavailable")
-
+            # Generate content embeddings (now potentially with contextual enhancement)
             content_embeddings = await embedding_manager.generate_embeddings(texts)
 
             # Update progress - content embeddings complete
@@ -608,7 +724,7 @@ class DocumentVersionManager:
                 chunk.embedding_model = actual_model_name
             
             logger.info(f"Created vector index {index_name} with {len(added_ids)} embeddings")
-            
+
             # Add new collection to storage manager incrementally
             try:
                 embedding_dimension = len(content_embeddings[0]) if content_embeddings else 768
@@ -617,6 +733,56 @@ class DocumentVersionManager:
             except Exception as e:
                 logger.warning(f"Failed to add collection to storage manager: {e}")
                 # Continue - this is for performance optimization only
+
+            # Create BM25 index for lexical search (Anthropic's contextual retrieval)
+            try:
+                from .contextual_bm25_search import get_bm25_engine
+                bm25_engine = get_bm25_engine()
+                bm25_index_name = f"doc_{document.id}_bm25"
+
+                # Update progress - creating BM25 index
+                if websocket_manager and progress_user_id:
+                    await websocket_manager.emit_document_progress(
+                        user_id=progress_user_id,
+                        document_id=document.id,
+                        filename=filename or document.filename,
+                        stage="creating_bm25_index",
+                        progress=95,
+                        chunks_processed=len(chunks_data),
+                        total_chunks=len(chunks_data)
+                    )
+
+                # Prepare chunks for BM25 indexing
+                bm25_documents = []
+                for i, chunk_data in enumerate(chunks_data):
+                    chunk = chunk_data['chunk']
+                    # Use enhanced text if available, otherwise original text
+                    text_for_bm25 = texts[i] if i < len(texts) else chunk_data['text']
+
+                    bm25_doc = {
+                        'id': chunk.chunk_id,
+                        'text': text_for_bm25,  # This includes contextual enhancement if enabled
+                        'metadata': {
+                            'document_id': document.id,
+                            'chunk_index': chunk.chunk_index,
+                            'user_id': document.user_id,
+                            'filename': document.filename,
+                            'content_type': document.content_type,
+                            'contextual_enhancement_applied': chunks_data[i]['metadata'].get('contextual_enhancement_applied', False)
+                        }
+                    }
+                    bm25_documents.append(bm25_doc)
+
+                # Create and populate BM25 index
+                if bm25_engine.create_index(bm25_index_name):
+                    added_bm25_count = bm25_engine.add_documents(bm25_index_name, bm25_documents)
+                    logger.info(f"Created BM25 index {bm25_index_name} with {added_bm25_count} documents")
+                else:
+                    logger.warning(f"Failed to create BM25 index {bm25_index_name}")
+
+            except Exception as e:
+                logger.warning(f"Failed to create BM25 index: {e}")
+                # Continue - BM25 is supplementary to vector search
             
         except Exception as e:
             logger.error(f"Failed to create vector index: {e}")

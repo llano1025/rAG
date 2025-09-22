@@ -10,14 +10,14 @@ import re
 import hashlib
 import json
 from collections import Counter, defaultdict
-from typing import List, Dict, Any, Optional, Tuple, Set
+from typing import List, Dict, Any, Optional, Set
 from datetime import datetime, timezone
 import time
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
 
 from database.models import Document, DocumentChunk, User, SearchQuery, VectorIndex
-from .storage_manager import VectorStorageManager, get_storage_manager, get_initialized_storage_manager
+from .storage_manager import VectorStorageManager, get_storage_manager
 from .search_context_processor import ContextProcessor
 from .reranker import get_reranker_manager, get_reranker_config, RerankResult
 from .reranker.base_reranker import SearchResult as RerankerSearchResult
@@ -922,50 +922,6 @@ class EnhancedSearchEngine:
             
         except Exception as e:
             logger.error(f"Multi-embedding semantic search failed: {e}")
-            # Fallback to simple semantic search
-            return await self._simple_semantic_search(query, filters, limit, db)
-    
-    async def _simple_semantic_search(
-        self,
-        query: str,
-        filters: SearchFilter,
-        limit: int,
-        db: Session
-    ) -> List[SearchResult]:
-        """Simple fallback semantic search."""
-        try:
-            # Generate query embedding
-            embedding_manager = self._get_embedding_manager_instance()
-            query_embeddings = await embedding_manager.generate_embeddings([query])
-            query_vector = query_embeddings[0]
-            
-            # Search across all accessible document indices
-            all_results = []
-            
-            for doc_id in filters.document_ids:
-                index_name = f"doc_{doc_id}"
-                
-                # Search content vectors with Qdrant
-                results = await self.storage_manager.search_vectors(
-                    index_name=index_name,
-                    query_vector=query_vector,
-                    vector_type="content",
-                    limit=limit,
-                    score_threshold=filters.min_score
-                )
-                
-                # Convert to SearchResult objects
-                for result in results:
-                    search_result = await self._create_search_result(result, db)
-                    if search_result:
-                        all_results.append(search_result)
-            
-            # Sort by score and return top results
-            all_results.sort(key=lambda x: x.score, reverse=True)
-            return all_results[:limit]
-            
-        except Exception as e:
-            logger.error(f"Simple semantic search failed: {e}")
             return []
     
     async def _contextual_search(
@@ -975,48 +931,164 @@ class EnhancedSearchEngine:
         limit: int,
         db: Session
     ) -> List[SearchResult]:
-        """Perform contextual search combining content and context vectors."""
+        """
+        Enhanced contextual search combining semantic (content + context) vectors with BM25 lexical search.
+        Provides specialized contextual understanding through dual embeddings and lexical term matching.
+        """
+        try:
+            # Enhanced query processing with ContextProcessor
+            processed_context = self.context_processor.process_context(query)
+            enhanced_query = processed_context if processed_context != query else query
+
+            logger.info(f"Enhanced contextual search: '{query}' → '{enhanced_query}' (limit={limit})")
+
+            # Perform enhanced contextual search (semantic + BM25)
+            # 1. Get semantic contextual results
+            semantic_results = await self._get_semantic_contextual_results(enhanced_query, filters, limit, db)
+
+            # 2. Get BM25 lexical results for exact term matching
+            bm25_results = await self._keyword_search(enhanced_query, filters, limit, db)
+
+            # 3. Combine and normalize scores
+            combined_results = self._combine_semantic_and_bm25_contextual(
+                semantic_results, bm25_results
+            )
+
+            # Sort by combined score and return top results
+            combined_results.sort(key=lambda x: x.score, reverse=True)
+            final_results = combined_results[:limit]
+
+            logger.info(f"Enhanced contextual search completed: {len(final_results)} results "
+                       f"(semantic: {len(semantic_results)}, bm25: {len(bm25_results)})")
+
+            return final_results
+
+        except Exception as e:
+            logger.error(f"Enhanced contextual search failed: {e}")
+            return []
+
+    async def _get_semantic_contextual_results(
+        self,
+        query: str,
+        filters: SearchFilter,
+        limit: int,
+        db: Session
+    ) -> List[SearchResult]:
+        """Get semantic contextual search results (original functionality)."""
         try:
             # Generate query embedding
             embedding_manager = self._get_embedding_manager_instance()
             query_embeddings = await embedding_manager.generate_embeddings([query])
             query_vector = query_embeddings[0]
-            
+
             # Search across all accessible document indices
             all_results = []
-            
+
             for doc_id in filters.document_ids:
                 index_name = f"doc_{doc_id}"
-                
-                # Perform contextual search
+
+                # Perform contextual search with dynamic weights
                 results = await self.storage_manager.contextual_search(
                     index_name=index_name,
                     query_vector=query_vector,
-                    limit=limit,
+                    limit=limit * 2,  # Get more for fusion
                     content_weight=0.7,
                     context_weight=0.3,
-                    score_threshold=filters.min_score
+                    score_threshold=filters.min_score * 0.5 if filters.min_score else None
                 )
-                
+
                 # Convert to SearchResult objects
-                logger.debug(f"Converting {len(results)} contextual search results from {index_name}")
-                converted_count = 0
                 for result in results:
                     search_result = await self._create_search_result_from_contextual(result, db)
                     if search_result:
                         all_results.append(search_result)
-                        converted_count += 1
 
-                logger.info(f"Successfully converted {converted_count}/{len(results)} contextual results from {index_name}")
-            
-            # Sort by combined score and return top results
-            all_results.sort(key=lambda x: x.score, reverse=True)
-            return all_results[:limit]
-            
+            return all_results
+
         except Exception as e:
-            logger.error(f"Contextual search failed: {e}")
+            logger.error(f"Semantic contextual search failed: {e}")
             return []
-    
+
+    def _combine_semantic_and_bm25_contextual(
+        self,
+        semantic_results: List[SearchResult],
+        bm25_results: List[SearchResult]
+    ) -> List[SearchResult]:
+        """Combine semantic contextual and BM25 results with normalized scoring."""
+        try:
+            # Create lookup maps
+            semantic_by_key = {}
+            for result in semantic_results:
+                key = f"{result.document_id}_{result.chunk_id}"
+                semantic_by_key[key] = result
+
+            bm25_by_key = {}
+            for result in bm25_results:
+                key = f"{result.document_id}_{result.chunk_id}"
+                bm25_by_key[key] = result
+
+            # Normalize scores
+            semantic_scores = [r.score for r in semantic_results]
+            bm25_scores = [r.score for r in bm25_results]
+
+            max_semantic = max(semantic_scores) if semantic_scores else 1.0
+            max_bm25 = max(bm25_scores) if bm25_scores else 1.0
+
+            # Combine all unique results
+            all_keys = set(semantic_by_key.keys()) | set(bm25_by_key.keys())
+            combined_results = []
+
+            for key in all_keys:
+                # Get normalized scores
+                semantic_score = 0.0
+                bm25_score = 0.0
+                base_result = None
+
+                if key in semantic_by_key:
+                    semantic_score = semantic_by_key[key].score / max_semantic
+                    base_result = semantic_by_key[key]
+
+                if key in bm25_by_key:
+                    bm25_score = bm25_by_key[key].score / max_bm25
+                    if base_result is None:
+                        base_result = bm25_by_key[key]
+
+                if base_result is None:
+                    continue
+
+                # Calculate combined score with contextual bias
+                # Give slight preference to semantic for contextual understanding
+                semantic_weight = 0.65
+                bm25_weight = 0.35
+
+                combined_score = (semantic_weight * semantic_score + bm25_weight * bm25_score)
+
+                # Create enhanced result
+                enhanced_result = SearchResult(
+                    chunk_id=base_result.chunk_id,
+                    document_id=base_result.document_id,
+                    text=base_result.text,
+                    score=combined_score,
+                    metadata={
+                        **base_result.metadata,
+                        'search_algorithm': 'enhanced_contextual',
+                        'semantic_score': semantic_score,
+                        'bm25_score': bm25_score,
+                        'has_semantic': key in semantic_by_key,
+                        'has_bm25': key in bm25_by_key
+                    },
+                    document_metadata=base_result.document_metadata,
+                    highlight=base_result.highlight
+                )
+                combined_results.append(enhanced_result)
+
+            return combined_results
+
+        except Exception as e:
+            logger.error(f"Score combination failed: {e}")
+            # Return semantic results as fallback
+            return semantic_results
+
     async def _keyword_search(
         self,
         query: str,
@@ -1834,7 +1906,6 @@ class EnhancedSearchEngine:
             
             # Extract file types
             file_types = {}
-            languages = set()
             date_range = {'min_date': None, 'max_date': None}
             file_sizes = []
             

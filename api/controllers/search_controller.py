@@ -119,16 +119,16 @@ class SearchController:
             
             # Add user access control filters
             user_filters = await self._add_user_access_filters(filters, user)
-            
-            # Search in both spaces
+
+            # Search in both semantic spaces
             content_results = self.content_search.search(
-                query_emb, k=k, min_score=min_score
+                query_emb, k=k * 2, min_score=min_score  # Get more results for hybrid fusion
             )
             context_results = self.context_search.search(
-                context_emb, k=k, min_score=min_score
+                context_emb, k=k * 2, min_score=min_score
             )
-            
-            # Combine and filter results with access control
+
+            # Combine semantic results (simplified - hybrid functionality moved to search engine)
             results = await self._combine_and_filter_results(
                 content_results,
                 context_results,
@@ -139,8 +139,10 @@ class SearchController:
                 min_score
             )
             
+            # Note: Reranking is now handled within the search engine's _contextual_search method
+
             formatted_results = self._format_results(results[:k])
-            
+
             # Cache results and log search
             search_time = (datetime.utcnow() - start_time).total_seconds() * 1000
             await self._save_search_query(
@@ -442,6 +444,35 @@ class SearchController:
                 ip_address=ip_address,
                 user_agent=user_agent
             )
+
+    async def _get_chunk_by_id(self, chunk_id: str):
+        """Retrieve a chunk by its ID from the database."""
+        try:
+            from sqlalchemy import select
+            from database.models import DocumentChunk
+            from vector_db.chunking import Chunk
+
+            result = await self.db.execute(
+                select(DocumentChunk).where(DocumentChunk.chunk_id == chunk_id)
+            )
+            db_chunk = result.scalar_one_or_none()
+
+            if db_chunk:
+                # Convert database chunk to Chunk object
+                return Chunk(
+                    text=db_chunk.text,
+                    start_idx=db_chunk.start_char,
+                    end_idx=db_chunk.end_char,
+                    metadata={'document_id': db_chunk.document_id, 'chunk_index': db_chunk.chunk_index},
+                    context_text=f"{db_chunk.context_before} {db_chunk.context_after}".strip(),
+                    document_id=db_chunk.document_id,
+                    chunk_id=db_chunk.chunk_id
+                )
+            return None
+
+        except Exception as e:
+            logger.error(f"Failed to retrieve chunk {chunk_id}: {e}")
+            return None
 
 # Module-level functions for compatibility with routes
 @deprecated("Use EnhancedSearchEngine.search() or EnhancedSearchEngine.text_search() instead")
