@@ -227,7 +227,6 @@ async def semantic_search(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Semantic search failed: {str(e)}")
 
-
 @router.post("/contextual", response_model=SearchResponse)
 async def contextual_search(
     request: SearchQuery,

@@ -1,12 +1,9 @@
 from typing import List, Dict, Optional, Tuple
 import numpy as np
 from sqlalchemy.ext.asyncio import AsyncSession
-import hashlib
 import json
 import logging
-import warnings
-from datetime import datetime
-from functools import wraps
+from datetime import datetime, timezone
 
 from vector_db.embedding_manager import EmbeddingManager
 from vector_db.search_optimizer import SearchOptimizer, SearchError
@@ -17,30 +14,14 @@ from utils.security.audit_logger import AuditLogger
 from utils.exceptions import (
     InvalidSearchQueryException,
     SearchEngineUnavailableException,
-    SearchTimeoutException,
-    DocumentNotFoundException
 )
-from api.schemas.responses import StandardResponse, create_success_response
 
 logger = logging.getLogger(__name__)
 
-def deprecated(reason):
-    """Mark functions as deprecated with a reason."""
-    def decorator(func):
-        @wraps(func)
-        async def wrapper(*args, **kwargs):
-            warnings.warn(
-                f"{func.__name__} is deprecated and will be removed in v2.0. {reason}",
-                DeprecationWarning,
-                stacklevel=2
-            )
-            return await func(*args, **kwargs)
-        return wrapper
-    return decorator
 
 class SearchController:
     """Controller for all search operations."""
-    
+
     def __init__(
         self,
         embedding_manager: EmbeddingManager,
@@ -67,24 +48,18 @@ class SearchController:
         content_weight: float = 0.7,
         context_weight: float = 0.3,
         min_score: float = 0.0,
-        # Reranker parameters
-        enable_reranking: bool = False,
-        reranker_model: Optional[str] = None,
-        rerank_score_weight: float = 0.5,
-        min_rerank_score: Optional[float] = None,
-        # Embedding model parameter
         embedding_model: Optional[str] = None,
         ip_address: Optional[str] = None,
         user_agent: Optional[str] = None
     ) -> List[Dict]:
         """Unified search endpoint with all features."""
-        start_time = datetime.utcnow()
-        
+        start_time = datetime.now(timezone.utc)
+
         try:
             # Check for cached results first
             query_hash = SearchQuery.create_query_hash(query, filters)
             cached_query = await self._get_cached_search(query_hash, user.id)
-            
+
             if cached_query and cached_query.is_cache_valid():
                 self.audit_logger.log_event(
                     user_id=user.id,
@@ -95,12 +70,12 @@ class SearchController:
                     user_agent=user_agent
                 )
                 return cached_query.get_cached_results()
-            
+
             # Process query context
             processed_context = self.context_processor.process_context(
                 query, query_context
             )
-            
+
             # Generate embeddings with specified model or default
             if embedding_model:
                 # Create temporary embedding manager with specified model
@@ -116,19 +91,19 @@ class SearchController:
                 query_emb, context_emb = await self.embedding_manager.generate_query_embeddings(
                     query, processed_context
                 )
-            
+
             # Add user access control filters
             user_filters = await self._add_user_access_filters(filters, user)
 
             # Search in both semantic spaces
             content_results = self.content_search.search(
-                query_emb, k=k * 2, min_score=min_score  # Get more results for hybrid fusion
+                query_emb, k=k * 2, min_score=min_score  # Get more results for fusion
             )
             context_results = self.context_search.search(
                 context_emb, k=k * 2, min_score=min_score
             )
 
-            # Combine semantic results (simplified - hybrid functionality moved to search engine)
+            # Combine semantic results (enhanced search engine handles advanced fusion)
             results = await self._combine_and_filter_results(
                 content_results,
                 context_results,
@@ -138,20 +113,18 @@ class SearchController:
                 user,
                 min_score
             )
-            
-            # Note: Reranking is now handled within the search engine's _contextual_search method
 
             formatted_results = self._format_results(results[:k])
 
             # Cache results and log search
-            search_time = (datetime.utcnow() - start_time).total_seconds() * 1000
+            search_time = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
             await self._save_search_query(
-                query, user, query_hash, formatted_results, 
+                query, user, query_hash, formatted_results,
                 search_time, user_filters, ip_address, user_agent
             )
-            
+
             return formatted_results
-            
+
         except Exception as e:
             # Log search error
             self.audit_logger.log_event(
@@ -163,7 +136,7 @@ class SearchController:
                 user_agent=user_agent,
                 status="error"
             )
-            
+
             if isinstance(e, SearchError):
                 raise SearchEngineUnavailableException(
                     message=f"Search engine error: {str(e)}",
@@ -192,13 +165,13 @@ class SearchController:
         try:
             # Add user access control filters
             user_filters = await self._add_user_access_filters(filters, user)
-            
+
             # Process all contexts
             processed_contexts = [
                 self.context_processor.process_context(q, c)
                 for q, c in zip(queries, contexts or [None] * len(queries))
             ]
-            
+
             # Generate all embeddings
             query_embs = []
             context_embs = []
@@ -208,7 +181,7 @@ class SearchController:
                 )
                 query_embs.append(q_emb)
                 context_embs.append(c_emb)
-            
+
             # Perform batch search
             content_results = self.content_search.batch_search(
                 np.vstack(query_embs),
@@ -220,7 +193,7 @@ class SearchController:
                 k=k,
                 min_score=min_score
             )
-            
+
             # Process each query's results
             batch_results = []
             for i, (q_content, q_context) in enumerate(zip(content_results, context_results)):
@@ -234,14 +207,14 @@ class SearchController:
                     min_score
                 )
                 batch_results.append(self._format_results(combined[:k]))
-                
+
                 # Log each search query
                 query_hash = SearchQuery.create_query_hash(queries[i], user_filters)
                 await self._save_search_query(
-                    queries[i], user, query_hash, batch_results[-1], 
+                    queries[i], user, query_hash, batch_results[-1],
                     0, user_filters, ip_address, user_agent, is_batch=True
                 )
-            
+
             # Log batch search event
             self.audit_logger.log_event(
                 user_id=user.id,
@@ -251,9 +224,9 @@ class SearchController:
                 ip_address=ip_address,
                 user_agent=user_agent
             )
-            
+
             return batch_results
-            
+
         except Exception as e:
             # Log batch search error
             self.audit_logger.log_event(
@@ -265,7 +238,7 @@ class SearchController:
                 user_agent=user_agent,
                 status="error"
             )
-            
+
             raise SearchEngineUnavailableException(
                 message=f"Batch search operation failed: {str(e)}",
                 context={"batch_size": len(queries)}
@@ -284,7 +257,7 @@ class SearchController:
         """Combine, filter, and rank search results with access control."""
         combined_scores = {}
         accessible_documents = await self._get_accessible_documents(user)
-        
+
         for results, weight in [
             (content_results, content_weight),
             (context_results, context_weight)
@@ -294,10 +267,10 @@ class SearchController:
                 document_id = chunk.metadata.get('document_id')
                 if document_id and document_id not in accessible_documents:
                     continue
-                    
+
                 if filters and not self._matches_filters(chunk.metadata, filters):
                     continue
-                
+
                 chunk_id = f"{chunk.start_idx}_{chunk.end_idx}"
                 if chunk_id in combined_scores:
                     combined_scores[chunk_id]["score"] += score * weight
@@ -306,7 +279,7 @@ class SearchController:
                         "chunk": chunk,
                         "score": score * weight
                     }
-        
+
         results = [
             (item["chunk"], item["score"])
             for item in combined_scores.values()
@@ -339,7 +312,7 @@ class SearchController:
             }
             for chunk, score in results
         ]
-    
+
     async def _get_cached_search(self, query_hash: str, user_id: int) -> Optional[SearchQuery]:
         """Get cached search results if available."""
         try:
@@ -353,23 +326,23 @@ class SearchController:
             return result.scalar_one_or_none()
         except Exception:
             return None
-    
+
     async def _add_user_access_filters(self, filters: Optional[Dict], user: User) -> Dict:
         """Add user access control filters to search filters."""
         user_filters = filters.copy() if filters else {}
-        
+
         # Add user-specific document filters unless user is admin
         if not user.is_admin:
             accessible_docs = await self._get_accessible_documents(user)
             user_filters['accessible_documents'] = accessible_docs
-        
+
         return user_filters
-    
+
     async def _get_accessible_documents(self, user: User) -> List[str]:
         """Get list of document IDs that user can access."""
         try:
             from sqlalchemy import select, or_
-            
+
             # Query documents user can access
             query = select(Document.id).where(
                 or_(
@@ -378,19 +351,19 @@ class SearchController:
                     user.is_admin == True          # Admin can access all
                 )
             )
-            
+
             result = await self.db.execute(query)
             return [str(doc_id[0]) for doc_id in result.fetchall()]
         except Exception:
             # If query fails, return empty list (restrictive)
             return []
-    
+
     async def _save_search_query(
-        self, 
-        query: str, 
-        user: User, 
-        query_hash: str, 
-        results: List[Dict], 
+        self,
+        query: str,
+        user: User,
+        query_hash: str,
+        results: List[Dict],
         search_time: float,
         filters: Optional[Dict] = None,
         ip_address: Optional[str] = None,
@@ -403,7 +376,7 @@ class SearchController:
                 user_id=user.id,
                 query_text=query,
                 query_hash=query_hash,
-                query_type="hybrid",  # Default type
+                query_type="contextual",  # Default to contextual search
                 search_filters=json.dumps(filters) if filters else None,
                 max_results=len(results),
                 results_count=len(results),
@@ -411,14 +384,14 @@ class SearchController:
                 ip_address=ip_address,
                 user_agent=user_agent
             )
-            
+
             # Cache results if not batch search
             if not is_batch and results:
                 search_query.set_cached_results(results)
-            
+
             self.db.add(search_query)
             await self.db.commit()
-            
+
             # Log search event
             self.audit_logger.log_event(
                 user_id=user.id,
@@ -433,7 +406,7 @@ class SearchController:
                 ip_address=ip_address,
                 user_agent=user_agent
             )
-            
+
         except Exception as e:
             # Don't fail search if logging fails
             self.audit_logger.log_event(
@@ -474,1201 +447,116 @@ class SearchController:
             logger.error(f"Failed to retrieve chunk {chunk_id}: {e}")
             return None
 
-# Module-level functions for compatibility with routes
-@deprecated("Use EnhancedSearchEngine.search() or EnhancedSearchEngine.text_search() instead")
-async def search_documents(query: str, filters=None, sort: Optional[str] = None, 
-                         page: int = 1, page_size: int = 10, user_id: int = None, min_score: float = 0.0):
-    """Search documents with intelligent text matching and filtering."""
-    from ..schemas.search_schemas import SearchFilters
-    from database.connection import get_db
-    from sqlalchemy import or_, and_, func
-    from utils.search.query_processor import get_query_processor
-    import time
-    
-    # Start performance timing
-    start_time = time.time()
-    
-    logger.info(f"Starting enhanced text search for user {user_id} with query: '{query}', page: {page}, page_size: {page_size}")
-    
-    try:
-        # Handle filters parameter - could be SearchFilters object or dict or None
-        if filters is None:
-            filters_applied = SearchFilters()
-        elif hasattr(filters, 'dict'):  # It's a SearchFilters object
-            filters_applied = filters
-        else:  # It's a dict
-            try:
-                filters_applied = SearchFilters(**filters)
-            except:
-                filters_applied = SearchFilters()
-        
-        logger.debug(f"Applied filters: {filters_applied}")
-        
-        # Get database session
-        db = next(get_db())
-        
-        # Simple user lookup by ID
-        from database.models import User, Document
-        user = db.query(User).filter(User.id == user_id).first() if user_id else None
-        
-        if not user:
-            logger.warning(f"User {user_id} not found for search")
-            execution_time = (time.time() - start_time) * 1000
-            return create_success_response(
-                data={
-                    "results": [],
-                    "total_hits": 0,
-                    "execution_time_ms": execution_time,
-                    "filters_applied": filters_applied,
-                    "query_vector_id": None,
-                    "query": query
-                },
-                message="No search results - user not found"
-            )
-        
-        logger.debug(f"Found user: {user.username} (ID: {user.id})")
-        
-        # Build base query for accessible documents
-        base_query = db.query(Document).filter(
-            and_(
-                Document.is_deleted == False,
-                Document.status == 'completed',
-                or_(
-                    Document.user_id == user.id,  # User's own documents
-                    Document.is_public == True     # Public documents
-                )
-            )
-        )
-        
-        logger.debug("Built base query for accessible documents")
-        
-        # Apply intelligent text search if query provided
-        if query and query.strip():
-            # Process query using intelligent query processor
-            query_processor = get_query_processor()
-            processed_query = query_processor.process_query(query)
-            
-            logger.info(f"Processed query: concepts={processed_query.primary_terms}, "
-                       f"metadata={processed_query.secondary_terms}, strategy={processed_query.search_strategy}")
-            
-            # Build weighted search conditions based on processed query
-            search_conditions = []
-            
-            # Handle exact phrases with highest priority
-            for phrase in processed_query.exact_phrases:
-                phrase_conditions = [
-                    Document.extracted_text.ilike(f"%{phrase}%"),
-                    Document.title.ilike(f"%{phrase}%"),
-                    Document.filename.ilike(f"%{phrase}%"),
-                    Document.description.ilike(f"%{phrase}%")
-                ]
-                search_conditions.append(or_(*phrase_conditions))
-            
-            # Primary terms (semantic concepts) - high weight
-            primary_conditions = []
-            for term in processed_query.primary_terms:
-                term_conditions = [
-                    Document.extracted_text.ilike(f"%{term}%"),
-                    Document.title.ilike(f"%{term}%"),
-                    Document.filename.ilike(f"%{term}%"),
-                    Document.description.ilike(f"%{term}%")
-                ]
-                primary_conditions.append(or_(*term_conditions))
-            
-            # Secondary terms (metadata, dates, codes) - lower weight but still important
-            secondary_conditions = []
-            for term in processed_query.secondary_terms:
-                term_conditions = [
-                    Document.extracted_text.ilike(f"%{term}%"),
-                    Document.title.ilike(f"%{term}%"),
-                    Document.filename.ilike(f"%{term}%"),
-                    Document.description.ilike(f"%{term}%")
-                ]
-                secondary_conditions.append(or_(*term_conditions))
-            
-            # Combine conditions based on search strategy
-            if processed_query.search_strategy == "hybrid_weighted":
-                # Require at least one primary term, optionally secondary
-                if primary_conditions:
-                    if secondary_conditions:
-                        # Primary AND/OR Secondary
-                        combined_condition = and_(
-                            or_(*primary_conditions),  # At least one primary
-                            or_(or_(*primary_conditions), or_(*secondary_conditions))  # Primary or secondary
-                        )
-                    else:
-                        combined_condition = or_(*primary_conditions)
-                    search_conditions.append(combined_condition)
-                elif secondary_conditions:
-                    # Fallback to secondary only
-                    search_conditions.append(or_(*secondary_conditions))
-                    
-            elif processed_query.search_strategy == "text_primary":
-                # Focus on all terms equally for metadata-heavy queries
-                all_conditions = primary_conditions + secondary_conditions
-                if all_conditions:
-                    search_conditions.append(or_(*all_conditions))
-                    
-            else:  # semantic_primary or fallback
-                # Prioritize primary terms, secondary as fallback
-                if primary_conditions:
-                    search_conditions.append(or_(*primary_conditions))
-                elif secondary_conditions:
-                    search_conditions.append(or_(*secondary_conditions))
-            
-            # Apply search conditions
-            if search_conditions:
-                base_query = base_query.filter(or_(*search_conditions))
-                logger.debug(f"Added intelligent search conditions for {len(processed_query.primary_terms)} concepts "
-                           f"and {len(processed_query.secondary_terms)} metadata terms")
-        
-        # Apply additional filters
-        filter_count = 0
-        
-        # File type filtering
-        if hasattr(filters_applied, 'file_types') and filters_applied.file_types:
-            file_type_conditions = []
-            for file_type in filters_applied.file_types:
-                file_type_conditions.append(Document.content_type.ilike(f"%{file_type}%"))
-            if file_type_conditions:
-                base_query = base_query.filter(or_(*file_type_conditions))
-                filter_count += 1
-                logger.debug(f"Added file type filter: {filters_applied.file_types}")
-        
-        # Tag filtering
-        if hasattr(filters_applied, 'tag_ids') and filters_applied.tag_ids:
-            tag_conditions = []
-            for tag in filters_applied.tag_ids:
-                # Search in JSON tags field
-                tag_conditions.append(Document.tags.ilike(f"%{tag}%"))
-            if tag_conditions:
-                base_query = base_query.filter(or_(*tag_conditions))
-                filter_count += 1
-                logger.debug(f"Added tag filter: {filters_applied.tag_ids}")
-        
-        # Date range filtering
-        if hasattr(filters_applied, 'date_range') and filters_applied.date_range:
-            try:
-                start_date, end_date = filters_applied.date_range
-                if start_date:
-                    base_query = base_query.filter(Document.created_at >= start_date)
-                    filter_count += 1
-                if end_date:
-                    base_query = base_query.filter(Document.created_at <= end_date)
-                    filter_count += 1
-                logger.debug(f"Added date range filter: {start_date} to {end_date}")
-            except (ValueError, TypeError) as e:
-                logger.warning(f"Invalid date range filter: {e}")
-        
-        logger.info(f"Applied {filter_count} additional filters")
-        
-        # Get total count before pagination
-        total_count = base_query.count()
-        logger.info(f"Total matching documents: {total_count}")
-        
-        # Apply sorting
-        if sort:
-            if sort == 'created_at_desc':
-                base_query = base_query.order_by(Document.created_at.desc())
-            elif sort == 'created_at_asc':
-                base_query = base_query.order_by(Document.created_at.asc())
-            elif sort == 'filename_asc':
-                base_query = base_query.order_by(Document.filename.asc())
-            elif sort == 'filename_desc':
-                base_query = base_query.order_by(Document.filename.desc())
-            elif sort == 'file_size_desc':
-                base_query = base_query.order_by(Document.file_size.desc())
-            elif sort == 'file_size_asc':
-                base_query = base_query.order_by(Document.file_size.asc())
-            else:
-                # Default to relevance (most recent first)
-                base_query = base_query.order_by(Document.created_at.desc())
-        else:
-            # Default sorting - most recent first
-            base_query = base_query.order_by(Document.created_at.desc())
-        
-        # Apply pagination
-        skip = (page - 1) * page_size
-        paginated_query = base_query.offset(skip).limit(page_size)
-        
-        logger.debug(f"Applied pagination: skip={skip}, limit={page_size}")
-        
-        # Execute query and get results
-        documents = paginated_query.all()
-        logger.info(f"Retrieved {len(documents)} documents from database")
-        
-        # Convert to search result format with relevance scoring
-        search_results = []
-        processed_query = None
-        if query and query.strip():
-            query_processor = get_query_processor()
-            processed_query = query_processor.process_query(query)
-            
-        for doc in documents:
-            # Calculate relevance score based on processed query
-            score = _calculate_relevance_score(doc, query, processed_query)
-            
-            # Apply minimum score filtering with debug logging
-            if score < min_score:
-                logger.debug(f"Filtered out document {doc.id} (score: {score:.3f} < min_score: {min_score})")
-                continue
-            
-            # Extract content snippet with highlighting context
-            content_snippet = _extract_content_snippet(doc, query, processed_query)
-            
-            # Get tags safely
-            try:
-                tags_list = doc.get_tag_list()
-            except Exception as e:
-                logger.warning(f"Failed to get tags for document {doc.id}: {e}")
-                tags_list = []
-            
-            search_result = {
-                "document_id": str(doc.id),
-                "filename": doc.filename,
-                "content_snippet": content_snippet,
-                "score": score,
-                "metadata": {
-                    "title": doc.title,
-                    "content_type": doc.content_type,
-                    "file_size": doc.file_size,
-                    "tags": tags_list,
-                    "created_at": doc.created_at.isoformat() if doc.created_at else None,
-                    "language": doc.language,
-                    "description": doc.description,
-                    "upload_date": doc.created_at.isoformat() if doc.created_at else None,
-                    "owner": user.username
-                }
-            }
-            search_results.append(search_result)
-        
-        # Sort results by relevance score (highest first)
-        search_results.sort(key=lambda x: x['score'], reverse=True)
-        
-        # Calculate final execution time
-        execution_time = (time.time() - start_time) * 1000
-        
-        logger.info(f"Text search completed in {execution_time:.2f}ms, found {len(search_results)} results")
-        
-        result = {
-            "results": search_results,
-            "total_hits": total_count,
-            "execution_time_ms": execution_time,
-            "filters_applied": filters_applied,
-            "query_vector_id": None,
-            "query": query,
-            "processing_time": execution_time / 1000.0  # For frontend compatibility
-        }
-        
-        logger.debug(f"Returning search result: {len(result['results'])} results, {result['total_hits']} total hits")
-        return result
-        
-    except Exception as e:
-        execution_time = (time.time() - start_time) * 1000
-        logger.error(f"Text search failed after {execution_time:.2f}ms: {str(e)}", exc_info=True)
-        
-        # Return empty results on error
-        return create_success_response(
-            data={
-                "results": [],
-                "total_hits": 0,
-                "execution_time_ms": execution_time,
-                "filters_applied": SearchFilters(),
-                "query_vector_id": None,
-                "query": query,
-                "processing_time": execution_time / 1000.0
-            },
-            message="Search completed with errors - returning empty results"
-        )
 
-def _calculate_relevance_score(document, query: str, processed_query=None) -> float:
-    """Calculate intelligent relevance score based on processed query components.
-    
-    Returns a normalized score between 0.0 and 1.0 where:
-    - 1.0 = Perfect match (exact phrase in title)
-    - 0.8+ = Excellent match (multiple term matches in title/filename)
-    - 0.6+ = Good match (terms in title or multiple content matches)
-    - 0.4+ = Fair match (terms in filename/description or some content matches)
-    - 0.2+ = Poor match (minimal content matches)
-    - 0.0-0.2 = Very poor match
-    """
-    if not query or not query.strip():
-        return 0.5  # Default score for no query
-    
-    score = 0.0
-    max_possible_score = 1.0  # Track maximum possible score for normalization
-    
-    try:
-        # Use processed query if available for intelligent scoring
-        if processed_query:
-            # Exact phrase matches (highest priority)
-            for phrase in processed_query.exact_phrases:
-                phrase_lower = phrase.lower()
-                if document.title and phrase_lower in document.title.lower():
-                    score += 0.5  # Very high weight for exact phrase in title
-                elif document.filename and phrase_lower in document.filename.lower():
-                    score += 0.4
-                elif document.description and phrase_lower in document.description.lower():
-                    score += 0.3
-                elif document.extracted_text and phrase_lower in document.extracted_text.lower():
-                    score += 0.2
-            
-            # Primary terms (concepts) - high weight
-            primary_matches = 0
-            for term in processed_query.primary_terms:
-                term_lower = term.lower()
-                term_score = 0.0
-                
-                if document.title and term_lower in document.title.lower():
-                    term_score += 0.3
-                if document.filename and term_lower in document.filename.lower():
-                    term_score += 0.25
-                if document.description and term_lower in document.description.lower():
-                    term_score += 0.2
-                if document.extracted_text and term_lower in document.extracted_text.lower():
-                    # Count occurrences with diminishing returns
-                    content_lower = document.extracted_text.lower()
-                    match_count = content_lower.count(term_lower)
-                    term_score += min(0.15, match_count * 0.03)
-                
-                if term_score > 0:
-                    primary_matches += 1
-                    score += term_score
-            
-            # Secondary terms (metadata) - lower weight but still valuable
-            secondary_matches = 0
-            for term in processed_query.secondary_terms:
-                term_lower = term.lower()
-                term_score = 0.0
-                
-                if document.title and term_lower in document.title.lower():
-                    term_score += 0.15
-                if document.filename and term_lower in document.filename.lower():
-                    term_score += 0.12
-                if document.description and term_lower in document.description.lower():
-                    term_score += 0.1
-                if document.extracted_text and term_lower in document.extracted_text.lower():
-                    content_lower = document.extracted_text.lower()
-                    match_count = content_lower.count(term_lower)
-                    term_score += min(0.08, match_count * 0.02)
-                
-                if term_score > 0:
-                    secondary_matches += 1
-                    score += term_score
-            
-            # Bonus for matching multiple terms (concept coherence)
-            if primary_matches > 1:
-                score += 0.1 * (primary_matches - 1)
-            if primary_matches > 0 and secondary_matches > 0:
-                score += 0.05  # Bonus for concept + metadata match
-                
-        else:
-            # Fallback to simple scoring if no processed query
-            query_lower = query.lower().strip()
-            
-            if document.title and query_lower in document.title.lower():
-                score += 0.4
-            if document.filename and query_lower in document.filename.lower():
-                score += 0.3
-            if document.description and query_lower in document.description.lower():
-                score += 0.2
-            if document.extracted_text and query_lower in document.extracted_text.lower():
-                content_lower = document.extracted_text.lower()
-                match_count = content_lower.count(query_lower)
-                score += min(0.3, match_count * 0.05)
-        
-        # Tag matches (consistent across both methods)
-        try:
-            tags = document.get_tag_list()
-            query_terms = processed_query.get_all_terms() if processed_query else [query.lower()]
-            for tag in tags:
-                tag_lower = tag.lower()
-                for term in query_terms:
-                    if isinstance(term, str) and term.lower() in tag_lower:
-                        score += 0.1
-                        break
-        except Exception:
-            pass
-        
-        # Normalize score to 0-1 range without artificial minimum
-        # Remove the artificial 0.1 minimum that was causing low-quality results to pass
-        score = min(1.0, max(0.0, score))
-        
-        # Apply a more realistic minimum for documents that have any matches
-        # Only documents with absolutely no matches should get 0.0
-        if score > 0.0 and score < 0.05:
-            score = 0.05  # Very minimal score for documents with trace matches
-        
-    except Exception as e:
-        logger.warning(f"Error calculating relevance score for document {document.id}: {e}")
-        score = 0.1  # Minimal score for errors
-    
-    return score
-
-def _extract_content_snippet(document, query: str, processed_query=None, max_length: int = 300) -> str:
-    """Extract an intelligent content snippet with context around best matches."""
-    if not document.extracted_text:
-        # Fallback to title or description
-        if document.title:
-            return document.title[:max_length]
-        elif document.description:
-            return document.description[:max_length]
-        else:
-            return f"Document: {document.filename}"
-    
-    content = document.extracted_text
-    
-    # If no query, return beginning of content
-    if not query or not query.strip():
-        return content[:max_length] + ("..." if len(content) > max_length else "")
-    
-    content_lower = content.lower()
-    best_match_pos = -1
-    best_match_priority = 0
-    
-    # Use processed query for intelligent snippet extraction
-    if processed_query:
-        # Priority 1: Exact phrases (highest)
-        for phrase in processed_query.exact_phrases:
-            phrase_lower = phrase.lower()
-            match_pos = content_lower.find(phrase_lower)
-            if match_pos != -1 and best_match_priority < 3:
-                best_match_pos = match_pos
-                best_match_priority = 3
-                break
-        
-        # Priority 2: Primary terms (high)
-        if best_match_priority < 2:
-            for term in processed_query.primary_terms:
-                term_lower = term.lower()
-                match_pos = content_lower.find(term_lower)
-                if match_pos != -1:
-                    best_match_pos = match_pos
-                    best_match_priority = 2
-                    break
-        
-        # Priority 3: Secondary terms (medium)
-        if best_match_priority < 1:
-            for term in processed_query.secondary_terms:
-                term_lower = term.lower()
-                match_pos = content_lower.find(term_lower)
-                if match_pos != -1:
-                    best_match_pos = match_pos
-                    best_match_priority = 1
-                    break
-    else:
-        # Fallback to simple query matching
-        query_lower = query.lower().strip()
-        best_match_pos = content_lower.find(query_lower)
-    
-    if best_match_pos == -1:
-        # No match found, return beginning
-        return content[:max_length] + ("..." if len(content) > max_length else "")
-    
-    # Extract context around the best match
-    context_before = 100  # chars before match
-    context_after = 200   # chars after match
-    
-    # Try to align with sentence boundaries
-    context_start = max(0, best_match_pos - context_before)
-    context_end = min(len(content), best_match_pos + context_after)
-    
-    # Adjust to sentence boundaries if possible
-    try:
-        # Look for sentence start after context_start
-        sentence_start = content.rfind('. ', 0, best_match_pos)
-        if sentence_start != -1 and sentence_start > context_start - 50:
-            context_start = sentence_start + 2
-        
-        # Look for sentence end before context_end
-        sentence_end = content.find('. ', best_match_pos)
-        if sentence_end != -1 and sentence_end < context_end + 50:
-            context_end = sentence_end + 1
-    except Exception:
-        pass  # Fallback to character-based extraction
-    
-    snippet = content[context_start:context_end].strip()
-    
-    # Add ellipsis if we're not at the beginning/end
-    if context_start > 0:
-        snippet = "..." + snippet
-    if context_end < len(content):
-        snippet = snippet + "..."
-    
-    # Truncate if still too long
-    if len(snippet) > max_length:
-        snippet = snippet[:max_length-3] + "..."
-    
-    return snippet
-
-@deprecated("Use EnhancedSearchEngine.search() with SearchType.SEMANTIC instead")
-async def similarity_search(query_text: str, filters=None, top_k: int = 5,
-                          threshold: float = 0.0, user_id: int = None,
-                          enable_reranking: bool = False,
-                          reranker_model: Optional[str] = None,
-                          rerank_score_weight: float = 0.5,
-                          min_rerank_score: Optional[float] = None):
-    """Perform semantic similarity search using the enhanced search engine."""
-    try:
-        from ..schemas.search_schemas import SearchFilters
-        from vector_db.search_engine import EnhancedSearchEngine
-        from vector_db.search_types import SearchFilter, SearchType
-        from vector_db.storage_manager import get_storage_manager
-        from vector_db.embedding_manager import EnhancedEmbeddingManager
-        from database.connection import get_db
-        
-        # Get database session and user
-        db = next(get_db())
-        user = db.query(User).filter(User.id == user_id).first() if user_id else None
-        
-        if not user:
-            logger.warning(f"User {user_id} not found for similarity search")
-            # Fall back to text search for anonymous users
-            return await search_documents(
-                query=query_text,
-                filters=filters,
-                page_size=top_k,
-                user_id=user_id,
-                min_score=threshold
-            )
-        
-        # Handle filters parameter
-        search_filters = None
-        if filters:
-            search_filter = SearchFilter()
-            search_filter.user_id = user_id
-            
-            if hasattr(filters, 'dict'):
-                filter_dict = filters.dict()
-            elif isinstance(filters, dict):
-                filter_dict = filters
-            else:
-                filter_dict = {}
-            
-            # Map filters to SearchFilter object
-            if filter_dict.get('file_types'):
-                search_filter.content_types = filter_dict['file_types']
-            if filter_dict.get('tag_ids'):
-                search_filter.tags = filter_dict['tag_ids']
-            if filter_dict.get('date_range'):
-                try:
-                    start_date, end_date = filter_dict['date_range']
-                    search_filter.date_range = (
-                        datetime.fromisoformat(start_date) if isinstance(start_date, str) else start_date,
-                        datetime.fromisoformat(end_date) if isinstance(end_date, str) else end_date
-                    )
-                except (ValueError, TypeError):
-                    pass
-            
-            search_filter.min_score = threshold
-            
-            # Add reranker settings
-            search_filter.enable_reranking = enable_reranking
-            search_filter.reranker_model = reranker_model
-            search_filter.rerank_score_weight = rerank_score_weight
-            search_filter.min_rerank_score = min_rerank_score
-            
-            search_filters = search_filter
-        else:
-            # Create default filter with reranker settings
-            search_filters = SearchFilter()
-            search_filters.user_id = user_id
-            search_filters.min_score = threshold
-            search_filters.enable_reranking = enable_reranking
-            search_filters.reranker_model = reranker_model
-            search_filters.rerank_score_weight = rerank_score_weight
-            search_filters.min_rerank_score = min_rerank_score
-        
-        # Initialize search engine components
-        try:
-            storage_manager = get_storage_manager()
-            embedding_manager = EnhancedEmbeddingManager.create_default_manager()
-            search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
-            
-            # Perform semantic search
-            search_results = await search_engine.search(
-                query=query_text,
-                user=user,
-                search_type=SearchType.SEMANTIC,
-                filters=search_filters,
-                limit=top_k,
-                db=db
-            )
-            
-            # Format results to match API schema
-            formatted_results = []
-            for result in search_results:
-                # Get document info
-                document = db.query(Document).filter(
-                    Document.id == result.document_id
-                ).first()
-                
-                if document:
-                    formatted_result = {
-                        "document_id": str(result.document_id),
-                        "filename": document.filename,
-                        "content_snippet": result.text[:300] + "..." if len(result.text) > 300 else result.text,
-                        "score": result.score,
-                        "metadata": {
-                            "title": document.title,
-                            "content_type": document.content_type,
-                            "file_size": document.file_size,
-                            "tags": document.get_tag_list(),
-                            "created_at": document.created_at.isoformat(),
-                            "chunk_id": getattr(result, 'chunk_id', None),
-                            "highlight": getattr(result, 'highlight', None)
-                        }
-                    }
-                    formatted_results.append(formatted_result)
-            
-            # Return in SearchResponse format
-            response = {
-                "results": formatted_results,
-                "total_hits": len(formatted_results),
-                "execution_time_ms": 50.0,  # Would be measured in real implementation
-                "filters_applied": SearchFilters(**(filters.dict() if hasattr(filters, 'dict') else filters or {})),
-                "query_vector_id": None
-            }
-            
-            logger.info(f"Semantic search completed for user {user_id}, found {len(formatted_results)} results")
-            return response
-            
-        except Exception as search_error:
-            logger.error(f"Vector search failed, falling back to text search: {search_error}")
-            # Fall back to text search if vector search fails
-            return await search_documents(
-                query=query_text,
-                filters=filters,
-                page_size=top_k,
-                user_id=user_id,
-                min_score=threshold
-            )
-        
-    except Exception as e:
-        logger.error(f"Similarity search failed: {str(e)}")
-        # Ultimate fallback to text search
-        return await search_documents(
-            query=query_text,
-            filters=filters,
-            page_size=top_k,
-            user_id=user_id,
-            min_score=threshold
-        )
-
-def _safe_get_tag_list(doc):
-    """Safely get tag list from document with error handling."""
-    try:
-        return doc.get_tag_list()
-    except Exception as e:
-        logger.warning(f"Failed to get tag list for document {doc.id}: {e}")
-        return []
-
-@deprecated("Use EnhancedSearchEngine.get_available_filters() instead")
-async def get_available_filters(user_id: int):
-    """Get available search filters."""
-    logger.info(f"Getting available filters for user {user_id}")
-    try:
-        from database.connection import get_db
-        from sqlalchemy import distinct, func
-        
-        db = next(get_db())
-        logger.debug(f"Database session obtained for user {user_id}")
-        
-        # Get user's documents to extract available filter options
-        user_documents = db.query(Document).filter(
-            Document.user_id == user_id,
-            Document.is_deleted == False
-        ).all()
-        
-        # Extract unique file types
-        file_types = set()
-        tags = set()
-        languages = set()
-        folders = set()
-        
-        for doc in user_documents:
-            # File types
-            if doc.content_type:
-                file_types.add(doc.content_type)
-            
-            # Tags - use the model method which has proper error handling
-            try:
-                doc_tags = doc.get_tag_list()
-                if doc_tags:
-                    tags.update(doc_tags)
-            except Exception as e:
-                logger.warning(f"Failed to extract tags from document {doc.id}: {e}")
-                pass
-            
-            # Languages
-            if doc.language:
-                languages.add(doc.language)
-            
-            # Folders
-            if doc.folder_path:
-                folders.add(doc.folder_path)
-        
-        # Get date range of documents
-        date_stats = db.query(
-            func.min(Document.created_at),
-            func.max(Document.created_at)
-        ).filter(
-            Document.user_id == user_id,
-            Document.is_deleted == False
-        ).first()
-        
-        min_date = date_stats[0].isoformat() if date_stats[0] else None
-        max_date = date_stats[1].isoformat() if date_stats[1] else None
-        
-        # Get file size range
-        size_stats = db.query(
-            func.min(Document.file_size),
-            func.max(Document.file_size),
-            func.avg(Document.file_size)
-        ).filter(
-            Document.user_id == user_id,
-            Document.is_deleted == False
-        ).first()
-        
-        min_size = size_stats[0] or 0
-        max_size = size_stats[1] or 0
-        avg_size = int(size_stats[2]) if size_stats[2] else 0
-        
-        # Format available filters
-        available_filters = {
-            "file_types": [
-                {
-                    "value": ft,
-                    "label": _get_file_type_label(ft),
-                    "icon": _get_file_type_icon(ft)
-                }
-                for ft in sorted(file_types)
-            ],
-            "tags": [
-                {
-                    "value": tag,
-                    "label": tag,
-                    "count": sum(1 for doc in user_documents if tag in _safe_get_tag_list(doc))
-                }
-                for tag in sorted(tags) if tag and isinstance(tag, str)
-            ],
-            "languages": [
-                {
-                    "value": lang,
-                    "label": _get_language_label(lang)
-                }
-                for lang in sorted(languages) if lang
-            ],
-            "folders": [
-                {
-                    "value": folder,
-                    "label": folder,
-                    "count": sum(1 for doc in user_documents if doc.folder_path == folder)
-                }
-                for folder in sorted(folders)
-            ],
-            "date_range": {
-                "min_date": min_date,
-                "max_date": max_date
-            },
-            "file_size_range": {
-                "min_size": min_size,
-                "max_size": max_size,
-                "avg_size": avg_size
-            },
-            "search_types": [
-                {"value": "hybrid", "label": "Hybrid Search (Recommended)", "description": "Combined text and semantic search for best results"},
-                {"value": "semantic", "label": "Semantic Search", "description": "AI-powered context understanding"},
-                {"value": "basic", "label": "Basic Text Search", "description": "Keyword-based search"}
-            ]
-        }
-        
-        logger.info(f"Successfully generated available filters for user {user_id}: {len(available_filters['file_types'])} file types, {len(available_filters['tags'])} tags, {len(available_filters['languages'])} languages")
-        return available_filters
-        
-    except Exception as e:
-        logger.error(f"Failed to get available filters for user {user_id}: {str(e)}", exc_info=True)
-        return {
-            "file_types": [],
-            "tags": [],
-            "languages": [],
-            "folders": [],
-            "date_range": {"min_date": None, "max_date": None},
-            "file_size_range": {"min_size": 0, "max_size": 0, "avg_size": 0},
-            "search_types": [
-                {"value": "hybrid", "label": "Hybrid Search (Recommended)", "description": "Combined text and semantic search for best results"},
-                {"value": "semantic", "label": "Semantic Search", "description": "AI-powered context understanding"},
-                {"value": "basic", "label": "Basic Text Search", "description": "Keyword-based search"}
-            ]
-        }
-
-def _get_file_type_label(content_type: str) -> str:
-    """Get human-readable label for file type."""
-    type_labels = {
-        "application/pdf": "PDF Documents",
-        "text/plain": "Text Files",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "Word Documents",
-        "application/msword": "Word Documents (Legacy)",
-        "text/html": "HTML Files",
-        "application/json": "JSON Files",
-        "text/markdown": "Markdown Files",
-        "text/csv": "CSV Files",
-        "image/png": "PNG Images",
-        "image/jpeg": "JPEG Images",
-        "image/gif": "GIF Images"
-    }
-    return type_labels.get(content_type, content_type)
-
-def _get_file_type_icon(content_type: str) -> str:
-    """Get icon name for file type."""
-    type_icons = {
-        "application/pdf": "document-text",
-        "text/plain": "document",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "document",
-        "application/msword": "document",
-        "text/html": "code-bracket",
-        "application/json": "code-bracket",
-        "text/markdown": "document-text",
-        "text/csv": "table-cells",
-        "image/png": "photo",
-        "image/jpeg": "photo",
-        "image/gif": "photo"
-    }
-    return type_icons.get(content_type, "document")
-
-def _get_language_label(language_code: str) -> str:
-    """Get human-readable label for language code."""
-    language_labels = {
-        "en": "English",
-        "es": "Spanish",
-        "fr": "French",
-        "de": "German",
-        "it": "Italian",
-        "pt": "Portuguese",
-        "ja": "Japanese",
-        "ko": "Korean",
-        "zh": "Chinese",
-        "ru": "Russian",
-        "ar": "Arabic"
-    }
-    return language_labels.get(language_code, language_code.upper())
-
+# Helper functions for standalone use (kept for backward compatibility)
 async def save_search(name: str, search_request: Dict, user_id: int):
-    """Save a search query."""
-    logger.info(f"Saving search '{name}' for user {user_id}")
+    """Save a search configuration."""
     try:
         from database.connection import get_db
-        
+
         db = next(get_db())
-        
-        # Extract search parameters from request
-        query_text = search_request.get("query", "")
-        search_type = search_request.get("search_type", "semantic")
-        search_filters = search_request.get("filters", {})
-        max_results = search_request.get("top_k", 10)
-        similarity_threshold = search_request.get("similarity_threshold")
-        
-        # Validate input
-        if not name or not name.strip():
-            raise ValueError("Search name is required")
-        if not query_text or not query_text.strip():
-            raise ValueError("Search query is required")
-        
-        # Check if user already has a saved search with this name
-        existing_search = db.query(SavedSearch).filter(
-            SavedSearch.user_id == user_id,
-            SavedSearch.name == name.strip(),
-            SavedSearch.is_deleted == False
-        ).first()
-        
-        if existing_search:
-            raise ValueError(f"Saved search with name '{name}' already exists")
-        
-        # Create new saved search
+
+        # Create saved search
         saved_search = SavedSearch(
             user_id=user_id,
-            name=name.strip(),
-            query_text=query_text.strip(),
-            search_type=search_type,
-            max_results=max_results,
-            similarity_threshold=similarity_threshold
+            name=name,
+            query_text=search_request.get('query', ''),
+            search_type=search_request.get('search_type', 'contextual'),
+            search_filters=json.dumps(search_request.get('filters', {})),
+            max_results=search_request.get('max_results', 10),
+            similarity_threshold=search_request.get('similarity_threshold')
         )
-        
-        # Set filters if provided
-        if search_filters:
-            saved_search.set_filters(search_filters)
-        
+
         db.add(saved_search)
         db.commit()
-        db.refresh(saved_search)
-        
-        logger.info(f"Successfully saved search '{name}' (ID: {saved_search.id}) for user {user_id}")
-        
-        return saved_search
-        
+
+        logger.info(f"Saved search '{name}' for user {user_id}")
+
+        return {
+            "id": str(saved_search.id),
+            "name": saved_search.name,
+            "message": f"Search '{name}' saved successfully"
+        }
+
     except Exception as e:
-        logger.error(f"Failed to save search '{name}' for user {user_id}: {str(e)}", exc_info=True)
-        if "db" in locals():
-            db.rollback()
-        raise InvalidSearchQueryException(
-            message="Failed to save search query",
-            context={"error": str(e), "search_name": name}
-        )
+        logger.error(f"Failed to save search for user {user_id}: {str(e)}", exc_info=True)
+        return {"error": f"Failed to save search: {str(e)}"}
+
 
 async def get_saved_searches(user_id: int):
     """Get user's saved searches."""
-    logger.info(f"Retrieving saved searches for user {user_id}")
     try:
         from database.connection import get_db
-        from sqlalchemy import desc
-        
+
         db = next(get_db())
-        
-        # Get saved searches for the user
+
         saved_searches = db.query(SavedSearch).filter(
             SavedSearch.user_id == user_id,
             SavedSearch.is_deleted == False
-        ).order_by(desc(SavedSearch.usage_count), desc(SavedSearch.created_at)).all()
-        
-        # Format the results
-        formatted_searches = []
+        ).order_by(SavedSearch.last_used.desc().nullslast(), SavedSearch.created_at.desc()).all()
+
+        results = []
         for search in saved_searches:
-            formatted_search = {
-                "id": search.id,
-                "name": search.name,
-                "description": search.description,
-                "query_text": search.query_text,
-                "search_type": search.search_type,
-                "filters": search.get_filters_dict(),
-                "max_results": search.max_results,
-                "similarity_threshold": search.similarity_threshold,
-                "usage_count": search.usage_count,
-                "created_at": search.created_at.isoformat(),
-                "last_used": search.last_used.isoformat() if search.last_used else None,
-                "tags": search.get_tags_list(),
-                "is_public": search.is_public
-            }
-            formatted_searches.append(formatted_search)
-        
-        logger.info(f"Successfully retrieved {len(formatted_searches)} saved searches for user {user_id}")
-        return formatted_searches
-        
+            try:
+                search_dict = {
+                    "id": str(search.id),
+                    "name": search.name,
+                    "description": search.description,
+                    "query_text": search.query_text,
+                    "search_type": search.search_type,
+                    "filters": json.loads(search.search_filters) if search.search_filters else {},
+                    "max_results": search.max_results,
+                    "similarity_threshold": search.similarity_threshold,
+                    "usage_count": search.usage_count,
+                    "created_at": search.created_at.isoformat() if search.created_at else None,
+                    "last_used": search.last_used.isoformat() if search.last_used else None,
+                    "tags": search.get_tag_list(),
+                    "is_public": search.is_public
+                }
+                results.append(search_dict)
+            except Exception as e:
+                logger.warning(f"Failed to serialize saved search {search.id}: {e}")
+                continue
+
+        logger.debug(f"Retrieved {len(results)} saved searches for user {user_id}")
+        return results
+
     except Exception as e:
         logger.error(f"Failed to get saved searches for user {user_id}: {str(e)}", exc_info=True)
         return []
 
+
 async def get_recent_searches(user_id: int, limit: int = 10):
-    """Get user's recent searches."""
-    logger.info(f"Retrieving {limit} recent searches for user {user_id}")
+    """Get user's recent search history."""
     try:
         from database.connection import get_db
-        from sqlalchemy import desc
-        
+
         db = next(get_db())
-        
-        # Get recent search queries for the user
+
         recent_searches = db.query(SearchQuery).filter(
             SearchQuery.user_id == user_id
-        ).order_by(desc(SearchQuery.created_at)).limit(limit).all()
-        
-        # Format the results
-        formatted_searches = []
+        ).order_by(SearchQuery.created_at.desc()).limit(limit).all()
+
+        results = []
         for search in recent_searches:
-            formatted_search = {
-                "id": search.id,
-                "query_text": search.query_text,
-                "query_type": search.query_type,
-                "created_at": search.created_at.isoformat(),
-                "results_count": search.results_count,
-                "search_time_ms": search.search_time_ms,
-                "filters": search.get_filters_dict() if hasattr(search, 'get_filters_dict') else {}
-            }
-            
-            # Add filters if available
-            if search.search_filters:
-                try:
-                    import json
-                    formatted_search["filters"] = json.loads(search.search_filters)
-                except json.JSONDecodeError:
-                    formatted_search["filters"] = {}
-            
-            formatted_searches.append(formatted_search)
-        
-        logger.info(f"Successfully retrieved {len(formatted_searches)} recent searches for user {user_id}")
-        return formatted_searches
-        
+            try:
+                search_dict = {
+                    "id": str(search.id),
+                    "query_text": search.query_text,
+                    "query_type": search.query_type,
+                    "created_at": search.created_at.isoformat() if search.created_at else None,
+                    "results_count": search.results_count,
+                    "search_time_ms": search.search_time_ms,
+                    "filters": json.loads(search.search_filters) if search.search_filters else {}
+                }
+                results.append(search_dict)
+            except Exception as e:
+                logger.warning(f"Failed to serialize recent search {search.id}: {e}")
+                continue
+
+        logger.debug(f"Retrieved {len(results)} recent searches for user {user_id}")
+        return results
+
     except Exception as e:
         logger.error(f"Failed to get recent searches for user {user_id}: {str(e)}", exc_info=True)
         return []
-
-@deprecated("Use EnhancedSearchEngine.get_search_suggestions() instead")
-async def get_search_suggestions(query: str, limit: int = 5, user_id: int = None):
-    """Get search suggestions."""
-    logger.debug(f"Getting search suggestions for query '{query}' (limit: {limit}, user: {user_id})")
-    try:
-        from database.connection import get_db
-        from sqlalchemy import func, or_
-        
-        if not query or len(query.strip()) < 2:
-            return []
-        
-        db = next(get_db())
-        query_lower = query.lower().strip()
-        
-        suggestions = []
-        
-        # 1. Get suggestions from user's search history
-        if user_id:
-            recent_searches = db.query(SearchQuery.query_text).filter(
-                SearchQuery.user_id == user_id,
-                func.lower(SearchQuery.query_text).like(f"%{query_lower}%")
-            ).distinct().limit(limit).all()
-            
-            for search in recent_searches:
-                if search.query_text.lower() != query_lower:  # Don't suggest exact matches
-                    suggestions.append({
-                        "type": "history",
-                        "text": search.query_text,
-                        "icon": "clock"
-                    })
-        
-        # 2. Get suggestions from document titles and content
-        if user_id and len(suggestions) < limit:
-            remaining_limit = limit - len(suggestions)
-            
-            # Search in document titles
-            title_matches = db.query(Document.title).filter(
-                Document.user_id == user_id,
-                Document.is_deleted == False,
-                Document.title.isnot(None),
-                func.lower(Document.title).like(f"%{query_lower}%")
-            ).distinct().limit(remaining_limit).all()
-            
-            for doc in title_matches:
-                if doc.title and len(suggestions) < limit:
-                    suggestions.append({
-                        "type": "document_title",
-                        "text": doc.title,
-                        "icon": "document-text"
-                    })
-        
-        # 3. Get suggestions from document tags
-        if user_id and len(suggestions) < limit:
-            remaining_limit = limit - len(suggestions)
-            
-            documents_with_tags = db.query(Document).filter(
-                Document.user_id == user_id,
-                Document.is_deleted == False,
-                Document.tags.isnot(None)
-            ).all()
-            
-            matching_tags = set()
-            for doc in documents_with_tags:
-                try:
-                    tags = doc.get_tag_list()
-                    for tag in tags:
-                        if tag and isinstance(tag, str) and query_lower in tag.lower():
-                            if len(matching_tags) < remaining_limit:
-                                matching_tags.add(tag)
-                except Exception as e:
-                    logger.warning(f"Failed to extract tags for suggestions from document {doc.id}: {e}")
-                    continue
-            
-            for tag in matching_tags:
-                if len(suggestions) < limit:
-                    suggestions.append({
-                        "type": "tag",
-                        "text": tag,
-                        "icon": "tag"
-                    })
-        
-        # 4. Get suggestions from saved searches
-        if user_id and len(suggestions) < limit:
-            remaining_limit = limit - len(suggestions)
-            
-            saved_searches = db.query(SavedSearch.name, SavedSearch.query_text).filter(
-                SavedSearch.user_id == user_id,
-                SavedSearch.is_deleted == False,
-                or_(
-                    func.lower(SavedSearch.name).like(f"%{query_lower}%"),
-                    func.lower(SavedSearch.query_text).like(f"%{query_lower}%")
-                )
-            ).limit(remaining_limit).all()
-            
-            for search in saved_searches:
-                if len(suggestions) < limit:
-                    # Prefer the name if it matches, otherwise use the query
-                    suggestion_text = search.name if query_lower in search.name.lower() else search.query_text
-                    suggestions.append({
-                        "type": "saved_search",
-                        "text": suggestion_text,
-                        "icon": "bookmark"
-                    })
-        
-        # 5. Add generic search suggestions based on query patterns
-        if len(suggestions) < limit:
-            generic_suggestions = _get_generic_suggestions(query_lower)
-            for suggestion in generic_suggestions:
-                if len(suggestions) < limit:
-                    suggestions.append(suggestion)
-        
-        # Remove duplicates while preserving order
-        seen = set()
-        unique_suggestions = []
-        for suggestion in suggestions:
-            key = suggestion["text"].lower()
-            if key not in seen:
-                seen.add(key)
-                unique_suggestions.append(suggestion)
-        
-        logger.debug(f"Generated {len(unique_suggestions)} unique suggestions for query '{query}'")
-        return unique_suggestions[:limit]
-        
-    except Exception as e:
-        logger.error(f"Failed to get search suggestions for query '{query}': {str(e)}", exc_info=True)
-        return []
-
-def _get_generic_suggestions(query: str) -> List[Dict[str, str]]:
-    """Get generic search suggestions based on query patterns."""
-    suggestions = []
-    
-    # Common search patterns
-    patterns = {
-        "how": ["how to", "how does", "how can"],
-        "what": ["what is", "what are", "what does"],
-        "why": ["why does", "why is", "why do"],
-        "when": ["when to", "when is", "when does"],
-        "where": ["where is", "where are", "where to"],
-        "who": ["who is", "who are", "who can"]
-    }
-    
-    for key, variations in patterns.items():
-        if query.startswith(key) and len(query) > len(key):
-            for variation in variations:
-                if variation.startswith(query) and variation != query:
-                    suggestions.append({
-                        "type": "suggestion",
-                        "text": variation,
-                        "icon": "light-bulb"
-                    })
-                    break
-    
-    # Common document-related searches
-    doc_searches = [
-        "recent documents",
-        "large files", 
-        "pdf documents",
-        "images",
-        "shared documents",
-        "untagged documents"
-    ]
-    
-    for search in doc_searches:
-        if query in search and len(suggestions) < 3:
-            suggestions.append({
-                "type": "suggestion", 
-                "text": search,
-                "icon": "magnifying-glass"
-            })
-    
-    return suggestions
