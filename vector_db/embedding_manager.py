@@ -78,7 +78,7 @@ class HuggingFaceEmbeddingProvider(BaseEmbeddingProvider):
         self.storage_path = storage_path
 
         try:
-            logging.info(f"Initializing HuggingFace model {model_name} on {self.device}")
+            logger.debug(f"Initializing HuggingFace model {model_name} on {self.device}")
 
             # Determine model path - use local storage if available
             model_path = self._get_model_path()
@@ -90,7 +90,7 @@ class HuggingFaceEmbeddingProvider(BaseEmbeddingProvider):
                     self.model = SentenceTransformer(model_path, device=self.device)
                     self.model_type = "sentence_transformer"
                     self.embedding_dim = self.model.get_sentence_embedding_dimension()
-                    logging.info(f"Successfully loaded sentence-transformer model with {self.embedding_dim} dimensions from {model_path}")
+                    logger.debug(f"Successfully loaded sentence-transformer model with {self.embedding_dim} dimensions from {model_path}")
                 except Exception as st_error:
                     if is_local_path:
                         logging.warning(f"Failed to load from local path {model_path}: {st_error}")
@@ -99,7 +99,7 @@ class HuggingFaceEmbeddingProvider(BaseEmbeddingProvider):
                         self.model = SentenceTransformer(model_name, device=self.device)
                         self.model_type = "sentence_transformer"
                         self.embedding_dim = self.model.get_sentence_embedding_dimension()
-                        logging.info(f"Successfully loaded sentence-transformer model from HuggingFace with {self.embedding_dim} dimensions")
+                        logger.debug(f"Successfully loaded sentence-transformer model from HuggingFace with {self.embedding_dim} dimensions")
                     else:
                         raise st_error
             else:
@@ -112,7 +112,7 @@ class HuggingFaceEmbeddingProvider(BaseEmbeddingProvider):
                     self.model_type = "transformer"
                     # Estimate embedding dimension (common values)
                     self.embedding_dim = self.model.config.hidden_size
-                    logging.info(f"Successfully loaded transformer model with {self.embedding_dim} dimensions from {model_path}")
+                    logger.debug(f"Successfully loaded transformer model with {self.embedding_dim} dimensions from {model_path}")
                 except Exception as t_error:
                     if is_local_path:
                         logging.warning(f"Failed to load transformer from local path {model_path}: {t_error}")
@@ -124,7 +124,7 @@ class HuggingFaceEmbeddingProvider(BaseEmbeddingProvider):
                         self.model.eval()
                         self.model_type = "transformer"
                         self.embedding_dim = self.model.config.hidden_size
-                        logging.info(f"Successfully loaded transformer model from HuggingFace with {self.embedding_dim} dimensions")
+                        logger.debug(f"Successfully loaded transformer model from HuggingFace with {self.embedding_dim} dimensions")
                     else:
                         raise t_error
 
@@ -158,7 +158,7 @@ class HuggingFaceEmbeddingProvider(BaseEmbeddingProvider):
                 has_config = any(f in existing_files for f in ["config.json", "config_sentence_transformers.json"])
 
                 if has_config:
-                    logging.info(f"Using local storage for model {self.model_name}: {local_path}")
+                    logger.debug(f"Using local storage for model {self.model_name}: {local_path}")
                     return str(local_path)
                 else:
                     logging.warning(f"Local model missing essential config files, falling back to HuggingFace: {local_path}")
@@ -166,7 +166,7 @@ class HuggingFaceEmbeddingProvider(BaseEmbeddingProvider):
                 logging.warning(f"Local storage path does not exist: {local_path}, falling back to HuggingFace")
 
         # Fall back to downloading from HuggingFace
-        logging.info(f"Loading model from HuggingFace: {self.model_name}")
+        logger.debug(f"Loading model from HuggingFace: {self.model_name}")
         return self.model_name
 
     async def generate_embeddings(self, texts: List[str]) -> List[List[float]]:
@@ -297,7 +297,7 @@ class OllamaEmbeddingProvider(BaseEmbeddingProvider):
         self.session = None
         self.embedding_dim = None  # Will be determined dynamically
         
-        logging.info(f"Initializing Ollama provider with {base_url} and model {model_name}")
+        logger.debug(f"Initializing Ollama provider with {base_url} and model {model_name}")
         
     async def _get_session(self):
         """Get or create aiohttp session."""
@@ -399,7 +399,7 @@ class OpenAIEmbeddingProvider(BaseEmbeddingProvider):
             self.model_name = model_name
             self.batch_size = min(batch_size, 100)  # OpenAI has higher batch limits
             
-            logging.info(f"Initializing OpenAI provider with model {model_name}")
+            logger.debug(f"Initializing OpenAI provider with model {model_name}")
         except Exception as e:
             raise EmbeddingError(f"Failed to initialize OpenAI client: {e}") from e
         
@@ -485,7 +485,7 @@ class EnhancedEmbeddingManager:
                         stored_info = storage_manager.get_stored_model_info(model.model_id)
                         if stored_info and stored_info.status == "available":
                             storage_path = stored_info.storage_path
-                            logging.info(f"Using locally stored model: {model_name}")
+                            logger.debug(f"Using locally stored model: {model_name}")
 
             provider = HuggingFaceEmbeddingProvider(
                 model_name, device, batch_size, use_local_storage, storage_path
@@ -620,7 +620,7 @@ class EnhancedEmbeddingManager:
         """Migrate embeddings from old model to new model."""
         try:
             start_time = datetime.utcnow()
-            logger.info(f"Starting migration from {old_manager.model_info.get('model_name', 'unknown')} to {self.model_info['model_name']}")
+            logger.info(f"Starting embedding model migration from {old_manager.model_info.get('model_name', 'unknown')} to {self.model_info['model_name']}")
             
             migrated_count = 0
             failed_count = 0
@@ -734,7 +734,7 @@ class EnhancedEmbeddingManager:
                 "new_dimension": self.get_embedding_dimension()
             }
             
-            logger.info(f"Migration completed: {migrated_count}/{total_documents} documents migrated")
+            logger.info(f"Embedding model migration completed: {migrated_count}/{total_documents} documents migrated")
             return results
             
         except Exception as e:

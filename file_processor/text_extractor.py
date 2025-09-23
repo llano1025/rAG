@@ -95,7 +95,7 @@ class TextExtractor:
         try:
             # Check if Vision LLM OCR was explicitly requested
             if ocr_method == "vision_llm":
-                self.logger.info(f"Vision LLM OCR explicitly requested for {filename or 'document'}")
+                self.logger.debug(f"Vision LLM OCR explicitly requested for {filename or 'document'}")
                 return self._extract_with_vision_llm_ocr(temp_path, content_type, vision_provider)
             
             # For image files, use specified OCR settings
@@ -143,14 +143,14 @@ class TextExtractor:
                 return result_text
             else:
                 # Fallback to Vision LLM OCR if regular extraction failed
-                self.logger.info(f"Regular PDF text extraction yielded insufficient text, attempting Vision LLM OCR fallback for {file_path}")
+                self.logger.debug(f"Regular PDF text extraction yielded insufficient text, attempting Vision LLM OCR fallback for {file_path}")
                 return self._extract_pdf_with_vision_llm(file_path)
                 
         except Exception as e:
             self.logger.error(f"Failed to extract text from PDF {file_path}: {e}")
             # Try Vision LLM OCR as fallback
             try:
-                self.logger.info(f"Attempting Vision LLM OCR fallback after PDF extraction error for {file_path}")
+                self.logger.debug(f"Attempting Vision LLM OCR fallback after PDF extraction error for {file_path}")
                 return self._extract_pdf_with_vision_llm(file_path)
             except Exception as fallback_e:
                 self.logger.error(f"Vision LLM OCR fallback also failed: {fallback_e}")
@@ -494,7 +494,7 @@ class TextExtractor:
                         
                         if page_text and page_text.strip():
                             all_text.append(f"Page {page_num + 1}:\n{page_text.strip()}")
-                            self.logger.info(f"Successfully extracted text from PDF page {page_num + 1} using Vision LLM")
+                            self.logger.debug(f"Successfully extracted text from PDF page {page_num + 1} using Vision LLM")
                         else:
                             self.logger.warning(f"No text extracted from PDF page {page_num + 1}")
                             
@@ -504,7 +504,7 @@ class TextExtractor:
             
             if all_text:
                 result = "\n\n".join(all_text)
-                self.logger.info(f"Vision LLM OCR successfully extracted {len(result)} characters from PDF")
+                self.logger.debug(f"Vision LLM OCR successfully extracted {len(result)} characters from PDF")
                 return result
             else:
                 raise Exception("No text could be extracted from any PDF page using Vision LLM")
@@ -666,7 +666,7 @@ class TextExtractor:
                     page_text = ocr_processor.process_image(image, method=OCRMethod.VISION_LLM, vision_provider=provider)
                     if page_text and page_text.strip():
                         all_text.append(f"Page {page_num}:\n{page_text.strip()}")
-                        self.logger.info(f"Successfully extracted text from page {page_num} using Vision LLM")
+                        self.logger.debug(f"Successfully extracted text from page {page_num} using Vision LLM")
                     else:
                         self.logger.warning(f"No text extracted from page {page_num}")
                 except Exception as e:
@@ -675,7 +675,7 @@ class TextExtractor:
             
             if all_text:
                 result = "\n\n".join(all_text)
-                self.logger.info(f"Vision LLM OCR successfully extracted {len(result)} characters from {content_type} document")
+                self.logger.debug(f"Vision LLM OCR successfully extracted {len(result)} characters from {content_type} document")
                 return result
             else:
                 raise Exception("No text could be extracted from any page using Vision LLM")

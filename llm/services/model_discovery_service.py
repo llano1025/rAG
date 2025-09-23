@@ -123,12 +123,12 @@ class ModelDiscoveryService:
             for key in keys_to_remove:
                 del self._model_cache[key]
                 del self._cache_timestamps[key]
-            logger.info(f"Cleared cache for provider: {provider}")
+            logger.debug(f"Cleared cache for provider: {provider}")
         else:
             # Clear all cache
             self._model_cache.clear()
             self._cache_timestamps.clear()
-            logger.info("Cleared all model cache")
+            logger.debug("Cleared all model cache")
     
     async def get_available_providers(self) -> List[Dict[str, Any]]:
         """Get list of all available providers with their information."""
@@ -229,7 +229,7 @@ class ModelDiscoveryService:
             if use_cache:
                 cached_models = self._get_cached_models(cache_key)
                 if cached_models:
-                    logger.info(f"Returning cached models for {provider} due to API error")
+                    logger.debug(f"Returning cached models for {provider} due to API error")
                     return cached_models
             raise Exception(f"Failed to discover models for {provider}: {str(e)}")
     
@@ -502,7 +502,7 @@ class ModelDiscoveryService:
                                 }
                             ))
                     
-                    logger.info(f"Discovered {len(models)} Gemini models via API")
+                    logger.debug(f"Discovered {len(models)} Gemini models via API")
                     return models
                     
                 else:
@@ -593,7 +593,7 @@ class ModelDiscoveryService:
                                 }
                             ))
                     
-                    logger.info(f"Discovered {len(models)} Anthropic models via API")
+                    logger.debug(f"Discovered {len(models)} Anthropic models via API")
                     return models
                     
                 else:

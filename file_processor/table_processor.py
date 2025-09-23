@@ -125,7 +125,7 @@ class CrossPageTableProcessor:
             fragments = self._extract_table_fragments(resolved_path)
 
             if not fragments:
-                logger.info(f"No table fragments found in {file_path}")
+                logger.debug(f"No table fragments found in {file_path}")
                 return []
 
             # Group fragments into complete tables
@@ -136,7 +136,7 @@ class CrossPageTableProcessor:
                 context = self._extract_table_context(file_path, table)
                 table.metadata['context'] = context
 
-            logger.info(f"Reconstructed {len(reconstructed_tables)} tables from {len(fragments)} fragments")
+            logger.debug(f"Reconstructed {len(reconstructed_tables)} tables from {len(fragments)} fragments")
             return reconstructed_tables
 
         except Exception as e:
@@ -205,12 +205,12 @@ class CrossPageTableProcessor:
         try:
             if TABULA_AVAILABLE:
                 fragments.extend(self._extract_with_tabula(file_path))
-                logger.info("Extract table fragments with TABULA")
+                logger.debug("Extract table fragments with TABULA")
 
             if PYMUPDF_AVAILABLE and not fragments:
                 # Fallback to PyMuPDF if tabula fails
                 fragments.extend(self._extract_with_pymupdf(file_path))
-                logger.info("Extract table fragments with PYMUPDF")
+                logger.debug("Extract table fragments with PYMUPDF")
 
         except FileNotFoundError as e:
             logger.error(f"File not found during table extraction: {file_path} - {e}")

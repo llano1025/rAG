@@ -43,7 +43,7 @@ class OllamaLLM(StreamingLLM, AsyncHTTPProviderMixin):
         stream: bool = False
     ) -> Union[LLMResponse, AsyncGenerator[str, None]]:
         """Generate text using Ollama API."""
-        logger.info(f"[OLLAMA] Starting generation - Model: {config.model_name}, Stream: {stream}, Prompt length: {len(prompt)}")
+        logger.debug(f"[OLLAMA] Starting generation - Model: {config.model_name}, Stream: {stream}, Prompt length: {len(prompt)}")
         self._log_request(config.model_name, len(prompt))
         
         try:
@@ -65,10 +65,10 @@ class OllamaLLM(StreamingLLM, AsyncHTTPProviderMixin):
             logger.debug(f"[OLLAMA] Request payload prepared - Model: {config.model_name}, Options: {payload['options']}")
             
             if stream:
-                logger.info(f"[OLLAMA] Initiating streaming response")
+                logger.debug(f"[OLLAMA] Initiating streaming response")
                 return self.stream_generate(prompt, config)
             else:
-                logger.info(f"[OLLAMA] Initiating complete response")
+                logger.debug(f"[OLLAMA] Initiating complete response")
                 return await self._complete_response(payload, config)
                 
         except Exception as e:
@@ -120,7 +120,7 @@ class OllamaLLM(StreamingLLM, AsyncHTTPProviderMixin):
         config: ModelConfig
     ) -> AsyncGenerator[str, None]:
         """Handle streaming response."""
-        logger.info(f"[OLLAMA] Starting stream response - Model: {config.model_name}, URL: {self.base_url}")
+        logger.debug(f"[OLLAMA] Starting stream response - Model: {config.model_name}, URL: {self.base_url}")
         
         try:
             session = await self._get_session()
@@ -129,20 +129,20 @@ class OllamaLLM(StreamingLLM, AsyncHTTPProviderMixin):
             chunk_count = 0
             total_content = ""
             
-            logger.info(f"[OLLAMA] Making POST request to {self.base_url}/api/generate")
+            logger.debug(f"[OLLAMA] Making POST request to {self.base_url}/api/generate")
             
             async with session.post(
                 f"{self.base_url}/api/generate",
                 json=payload
             ) as response:
-                logger.info(f"[OLLAMA] Response received - Status: {response.status}, Content-Type: {response.content_type}")
+                logger.debug(f"[OLLAMA] Response received - Status: {response.status}, Content-Type: {response.content_type}")
                 
                 if response.status != 200:
                     error_text = await response.text()
                     logger.error(f"[OLLAMA] HTTP error - Status: {response.status}, Response: {error_text}")
                     raise Exception(f"Ollama request failed with status {response.status}: {error_text}")
                 
-                logger.info(f"[OLLAMA] Starting to read streaming content")
+                logger.debug(f"[OLLAMA] Starting to read streaming content")
                 
                 async for line in response.content:
                     chunk_count += 1
@@ -170,14 +170,14 @@ class OllamaLLM(StreamingLLM, AsyncHTTPProviderMixin):
                         
                         # Check for completion
                         if chunk.get("done", False):
-                            logger.info(f"[OLLAMA] Stream completed - Total chunks: {chunk_count}, Total content length: {len(total_content)}")
+                            logger.debug(f"[OLLAMA] Stream completed - Total chunks: {chunk_count}, Total content length: {len(total_content)}")
                             
                             # Log final statistics
                             if "eval_count" in chunk:
-                                logger.info(f"[OLLAMA] Final stats - Eval count: {chunk.get('eval_count')}, Prompt eval count: {chunk.get('prompt_eval_count')}")
+                                logger.debug(f"[OLLAMA] Final stats - Eval count: {chunk.get('eval_count')}, Prompt eval count: {chunk.get('prompt_eval_count')}")
                             if "eval_duration" in chunk:
                                 eval_duration_ms = chunk.get('eval_duration', 0) / 1000000  # Convert nanoseconds to milliseconds
-                                logger.info(f"[OLLAMA] Eval duration: {eval_duration_ms:.2f}ms")
+                                logger.debug(f"[OLLAMA] Eval duration: {eval_duration_ms:.2f}ms")
                             
                             break
                             
@@ -194,7 +194,7 @@ class OllamaLLM(StreamingLLM, AsyncHTTPProviderMixin):
                         logger.error(f"[OLLAMA] Error processing chunk {chunk_count}: {str(chunk_err)}")
                         continue
                 
-                logger.info(f"[OLLAMA] Stream processing completed - Total chunks processed: {chunk_count}")
+                logger.debug(f"[OLLAMA] Stream processing completed - Total chunks processed: {chunk_count}")
                 
         except Exception as stream_err:
             logger.error(f"[OLLAMA] Stream response failed: {str(stream_err)}", exc_info=True)
@@ -288,24 +288,24 @@ class OllamaLLM(StreamingLLM, AsyncHTTPProviderMixin):
     
     async def _perform_health_check(self) -> Dict[str, Any]:
         """Perform Ollama-specific health check."""
-        logger.info(f"[OLLAMA] Starting health check - URL: {self.base_url}")
+        logger.debug(f"[OLLAMA] Starting health check - URL: {self.base_url}")
         
         try:
             session = await self._get_session()
             logger.debug(f"[OLLAMA] Health check session obtained")
             
             # Check if Ollama server is accessible
-            logger.info(f"[OLLAMA] Checking server accessibility at {self.base_url}/api/tags")
+            logger.debug(f"[OLLAMA] Checking server accessibility at {self.base_url}/api/tags")
             
             async with session.get(f"{self.base_url}/api/tags") as response:
-                logger.info(f"[OLLAMA] Health check response - Status: {response.status}")
+                logger.debug(f"[OLLAMA] Health check response - Status: {response.status}")
                 
                 if response.status == 200:
                     result = await response.json()
                     model_count = len(result.get("models", []))
                     models = result.get("models", [])
                     
-                    logger.info(f"[OLLAMA] Health check successful - {model_count} models available")
+                    logger.debug(f"[OLLAMA] Health check successful - {model_count} models available")
                     if models:
                         model_names = [model.get("name", "unknown") for model in models]
                         logger.debug(f"[OLLAMA] Available models: {model_names}")

@@ -43,7 +43,7 @@ class RedisManager:
                 self._redis_client = Redis(**self.connection_params)
                 # Test connection asynchronously
                 await self._redis_client.ping()
-                logger.info("Redis client initialized successfully")
+                logger.debug("Redis client initialized successfully")
             except Exception as e:
                 logger.error(f"Failed to connect to Redis: {str(e)}")
                 raise

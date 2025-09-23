@@ -101,7 +101,7 @@ class ChatController:
             # Note: Messages are not persisted, so we start with empty message list
             # This is intentional - we keep session state but not full conversation history
             
-            logger.info(f"Restored session {session_id} from database for user {db_session.user_id}")
+            logger.debug(f"Restored session {session_id} from database for user {db_session.user_id}")
             return session
             
         except Exception as e:
@@ -110,7 +110,7 @@ class ChatController:
     
     async def _try_recover_session(self, session_id: str, user: User, db: Session) -> Optional[ChatSession]:
         """Try to recover a session from database if not found in memory."""
-        logger.info(f"Attempting to recover session {session_id} from database")
+        logger.debug(f"Attempting to recover session {session_id} from database")
         
         try:
             # Load session from database
@@ -126,7 +126,7 @@ class ChatController:
             # Add to active sessions
             self.active_sessions[session_id] = session
             
-            logger.info(f"Successfully recovered session {session_id} for user {user.id}")
+            logger.debug(f"Successfully recovered session {session_id} for user {user.id}")
             return session
             
         except Exception as e:
@@ -157,7 +157,7 @@ class ChatController:
                     del self.active_sessions[session.session_id]
             
             db.commit()
-            logger.info(f"Cleaned up {len(expired_sessions)} expired sessions from database")
+            logger.debug(f"Cleaned up {len(expired_sessions)} expired sessions from database")
             
         except Exception as e:
             logger.error(f"Failed to cleanup expired sessions: {str(e)}")
@@ -184,7 +184,7 @@ class ChatController:
                         )
                     ).order_by(RegisteredModel.fallback_priority.asc().nullslast()).all()
                     
-                    logger.info(f"Found {len(query)} registered LLM models in database for user {user.id}")
+                    logger.debug(f"Found {len(query)} registered LLM models in database for user {user.id}")
                     
                     for model in query:
                         try:
@@ -218,7 +218,7 @@ class ChatController:
                     
             # Fallback: try model manager if database query failed or no db session
             if not llm_models:
-                logger.info("No models from database, trying model manager as fallback")
+                logger.debug("No models from database, trying model manager as fallback")
                 registered_model_ids = self.model_manager.list_registered_models()
                 
                 for model_id in registered_model_ids:
@@ -264,7 +264,7 @@ class ChatController:
                     "api_cost_per_1k_tokens": model.api_cost_per_1k_tokens
                 })
             
-            logger.info(f"Returning {len(llm_models)} LLM models and {len(embedding_models)} embedding models")
+            logger.debug(f"Returning {len(llm_models)} LLM models and {len(embedding_models)} embedding models")
             
             return {
                 "llm_models": llm_models,
@@ -351,7 +351,7 @@ class ChatController:
                 fallback_priority=db_model.fallback_priority
             )
             
-            logger.info(f"Successfully registered database model {model_id} ({provider_name}) in model manager")
+            logger.debug(f"Successfully registered database model {model_id} ({provider_name}) in model manager")
             return True
             
         except Exception as e:
@@ -458,7 +458,7 @@ class ChatController:
         db: Session
     ) -> Dict[str, Any]:
         """Validate and normalize chat settings."""
-        logger.info(f"Validating settings for user {user.id}")
+        logger.debug(f"Validating settings for user {user.id}")
         logger.debug(f"Received settings: {settings}")
 
         # Get available LLM models first
@@ -492,14 +492,14 @@ class ChatController:
 
         validated_settings = {**default_settings, **settings}
 
-        logger.info(f"After merge - embedding_model: '{validated_settings['embedding_model']}'")
+        logger.debug(f"After merge - embedding_model: '{validated_settings['embedding_model']}'")
         
         # Validate LLM model
         if validated_settings["llm_model"] not in available_llm_models:
             # Fallback to first available model
             if available_llm_models:
                 validated_settings["llm_model"] = available_llm_models[0]
-                logger.info(f"LLM model '{settings.get('llm_model', 'None')}' not found, using '{available_llm_models[0]}'")
+                logger.debug(f"LLM model '{settings.get('llm_model', 'None')}' not found, using '{available_llm_models[0]}'")
             else:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -508,7 +508,7 @@ class ChatController:
         
         # Validate embedding model
         requested_embedding_model = validated_settings["embedding_model"]
-        logger.info(f"Validating embedding model: '{requested_embedding_model}'")
+        logger.debug(f"Validating embedding model: '{requested_embedding_model}'")
 
         embedding_model = self.embedding_registry.get_model(requested_embedding_model)
         if not embedding_model:
@@ -518,7 +518,7 @@ class ChatController:
             if available_models:
                 fallback_model = available_models[0].model_id
                 validated_settings["embedding_model"] = fallback_model
-                logger.info(f"Using fallback embedding model: '{fallback_model}'")
+                logger.debug(f"Using fallback embedding model: '{fallback_model}'")
             else:
                 logger.error(f"No embedding models available")
                 raise HTTPException(
@@ -526,7 +526,7 @@ class ChatController:
                     detail="No embedding models available"
                 )
         else:
-            logger.info(f"Embedding model '{requested_embedding_model}' validated successfully")
+            logger.debug(f"Embedding model '{requested_embedding_model}' validated successfully")
         
         # Validate numeric parameters
         validated_settings["temperature"] = max(0.0, min(2.0, float(validated_settings["temperature"])))
@@ -548,7 +548,7 @@ class ChatController:
         validated_settings["enable_fallback"] = bool(validated_settings["enable_fallback"])
         validated_settings["fallback_threshold"] = max(0, int(validated_settings["fallback_threshold"]))
 
-        logger.info(f"Settings validation completed successfully")
+        logger.debug(f"Settings validation completed successfully")
         logger.debug(f"Final validated settings: {validated_settings}")
 
         return validated_settings
@@ -562,14 +562,14 @@ class ChatController:
         settings_override: Optional[Dict[str, Any]] = None
     ) -> AsyncGenerator[str, None]:
         """Process a chat message and yield streaming responses."""
-        logger.info(f"Starting message processing - Session: {session_id}, User: {user.id}, Message length: {len(message)}")
+        logger.debug(f"Starting message processing - Session: {session_id}, User: {user.id}, Message length: {len(message)}")
         
         try:
             # Get session (try memory first, then database recovery)
             logger.debug(f"Retrieving session {session_id}")
             session = self.active_sessions.get(session_id)
             if not session:
-                logger.info(f"Session {session_id} not found in memory, attempting recovery")
+                logger.debug(f"Session {session_id} not found in memory, attempting recovery")
                 session = await self._try_recover_session(session_id, user, db)
                 
                 if not session:
@@ -591,7 +591,7 @@ class ChatController:
 
             # Update session settings if override provided
             if settings_override:
-                logger.info(f"Applying settings override - Original embedding model: {session.settings.get('embedding_model')}")
+                logger.debug(f"Applying settings override - Original embedding model: {session.settings.get('embedding_model')}")
                 logger.debug(f"Settings override: {settings_override}")
 
                 # Validate and merge new settings
@@ -599,7 +599,7 @@ class ChatController:
                 original_settings = session.settings.copy()
                 session.settings.update(validated_override)
 
-                logger.info(f"Settings updated - New embedding model: {session.settings.get('embedding_model')}")
+                logger.debug(f"Settings updated - New embedding model: {session.settings.get('embedding_model')}")
                 logger.debug(f"Original settings: {original_settings}")
                 logger.debug(f"Updated settings: {session.settings}")
 
@@ -615,17 +615,17 @@ class ChatController:
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
             session.messages.append(user_message)
-            logger.info(f"User message added - Total messages: {len(session.messages)}")
+            logger.debug(f"User message added - Total messages: {len(session.messages)}")
             
             # Initialize search engine if using RAG
             search_results = []
             if session.settings["use_rag"]:
-                logger.info(f"Starting RAG search - Embedding model: {session.settings['embedding_model']}")
+                logger.debug(f"Starting RAG search - Embedding model: {session.settings['embedding_model']}")
                 try:
                     search_results = await self._perform_rag_search(
                         message, session.settings, user, db
                     )
-                    logger.info(f"RAG search completed - Found {len(search_results)} results")
+                    logger.debug(f"RAG search completed - Found {len(search_results)} results")
                 except Exception as rag_error:
                     logger.error(f"RAG search failed: {str(rag_error)}", exc_info=True)
                     # Continue without RAG if search fails
@@ -650,21 +650,21 @@ class ChatController:
                     yield f"data: {json.dumps(sources_data)}\n\n"
                     logger.debug(f"Sources data sent successfully")
             else:
-                logger.info(f"RAG disabled for this session")
+                logger.debug(f"RAG disabled for this session")
             
             # Prepare context for LLM
-            logger.info(f"Preparing LLM context - RAG results: {len(search_results)}")
+            logger.debug(f"Preparing LLM context - RAG results: {len(search_results)}")
             context = self._prepare_llm_context(message, search_results, session)
             context_length = len(context)
-            logger.info(f"Context prepared - Length: {context_length} chars")
+            logger.debug(f"Context prepared - Length: {context_length} chars")
             
             # Generate response using selected LLM
             llm_model = session.settings["llm_model"]
-            logger.info(f"Starting LLM generation - Model: {llm_model}, Stream: True")
+            logger.debug(f"Starting LLM generation - Model: {llm_model}, Stream: True")
             
             # Ensure model is registered in model manager if it's a database model
             if llm_model.startswith("registered_"):
-                logger.info(f"Ensuring database model {llm_model} is registered in model manager")
+                logger.debug(f"Ensuring database model {llm_model} is registered in model manager")
                 model_registered = await self._ensure_model_registered(llm_model, user, db)
                 if not model_registered:
                     logger.error(f"Failed to register database model {llm_model}")
@@ -676,14 +676,14 @@ class ChatController:
                     yield f"data: {json.dumps(error_data)}\n\n"
                     return
                 else:
-                    logger.info(f"Database model {llm_model} successfully registered")
+                    logger.debug(f"Database model {llm_model} successfully registered")
             
             response_content = ""
             chunk_count = 0
             
             try:
                 # Get the async generator by awaiting the coroutine
-                logger.info(f"Getting streaming generator from model manager")
+                logger.debug(f"Getting streaming generator from model manager")
                 generator = None
                 
                 try:
@@ -692,7 +692,7 @@ class ChatController:
                         model_id=llm_model,
                         stream=True
                     )
-                    logger.info(f"Successfully obtained generator from model manager")
+                    logger.debug(f"Successfully obtained generator from model manager")
                     
                 except Exception as model_error:
                     logger.error(f"Failed to get generator from model manager: {str(model_error)}", exc_info=True)
@@ -753,7 +753,7 @@ class ChatController:
                     return
                 
                 # Now iterate over the async generator
-                logger.info(f"Starting to iterate over streaming generator")
+                logger.debug(f"Starting to iterate over streaming generator")
                 
                 try:
                     async for chunk in generator:
@@ -784,10 +784,10 @@ class ChatController:
                             except Exception as convert_error:
                                 logger.warning(f"Failed to convert chunk to string: {convert_error}")
                     
-                    logger.info(f"LLM generation completed - Total chunks: {chunk_count}, Response length: {len(response_content)}")
+                    logger.debug(f"LLM generation completed - Total chunks: {chunk_count}, Response length: {len(response_content)}")
                     
                 except asyncio.CancelledError:
-                    logger.info(f"LLM generation was cancelled by client")
+                    logger.debug(f"LLM generation was cancelled by client")
                     error_data = {
                         "type": "error",
                         "error": "Response generation was cancelled",
@@ -862,7 +862,7 @@ class ChatController:
                 "sources": search_results[:session.settings["top_k_documents"]] if search_results else []
             }
             session.messages.append(assistant_message)
-            logger.info(f"Assistant message added - ID: {assistant_message['id']}, Total messages: {len(session.messages)}")
+            logger.debug(f"Assistant message added - ID: {assistant_message['id']}, Total messages: {len(session.messages)}")
             
             # Save updated session to database
             try:
@@ -877,7 +877,7 @@ class ChatController:
                 "message_id": assistant_message["id"]
             }
             yield f"data: {json.dumps(completion_data)}\n\n"
-            logger.info(f"Completion signal sent successfully")
+            logger.debug(f"Completion signal sent successfully")
             
             # Log the interaction
             try:
@@ -899,7 +899,7 @@ class ChatController:
             except Exception as log_error:
                 logger.error(f"Failed to log user action: {str(log_error)}")
             
-            logger.info(f"Message processing completed successfully - Session: {session_id}")
+            logger.debug(f"Message processing completed successfully - Session: {session_id}")
             
         except Exception as e:
             logger.error(f"Failed to process chat message: {str(e)}", exc_info=True)
@@ -921,16 +921,16 @@ class ChatController:
         start_time = time.time()
 
         search_type = settings.get("search_type", "semantic")
-        logger.info(f"Starting RAG search - User: {user.id}, Query: '{query[:100]}...', Search type: {search_type}, Top-k: {settings.get('max_results', 20)}")
+        logger.debug(f"Starting RAG search - User: {user.id}, Query: '{query[:100]}...', Search type: {search_type}, Top-k: {settings.get('max_results', 20)}")
 
         # Debug: Log all settings received
-        logger.info(f"RAG search settings received: {settings}")
+        logger.debug(f"RAG search settings received: {settings}")
 
         # Debug: Log specific tag-related settings
         tags_setting = settings.get("tags")
         tag_match_mode_setting = settings.get("tag_match_mode")
         exclude_tags_setting = settings.get("exclude_tags")
-        logger.info(f"Tag filtering settings - tags: {tags_setting}, tag_match_mode: {tag_match_mode_setting}, exclude_tags: {exclude_tags_setting}")
+        logger.debug(f"Tag filtering settings - tags: {tags_setting}, tag_match_mode: {tag_match_mode_setting}, exclude_tags: {exclude_tags_setting}")
 
         try:
             # Initialize search engine if needed

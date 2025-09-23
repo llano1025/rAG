@@ -57,7 +57,7 @@ class ProviderRegistry:
         if initialization_callback:
             self._initialization_callbacks[provider_name] = initialization_callback
         
-        logger.info(f"Registered LLM provider: {provider_name}")
+        logger.debug(f"Registered LLM provider: {provider_name}")
     
     def unregister_provider(self, provider_name: str):
         """Unregister a provider."""
@@ -66,7 +66,7 @@ class ProviderRegistry:
             del self._provider_info[provider_name]
             if provider_name in self._initialization_callbacks:
                 del self._initialization_callbacks[provider_name]
-            logger.info(f"Unregistered LLM provider: {provider_name}")
+            logger.debug(f"Unregistered LLM provider: {provider_name}")
     
     def get_provider_class(self, provider_name: str) -> Optional[Type[BaseLLM]]:
         """Get provider class by name."""
@@ -113,14 +113,14 @@ class ProviderRegistry:
                 callback()
             
             # Create provider instance
-            logger.info(f"Creating provider instance: {provider_name}")
+            logger.debug(f"Creating provider instance: {provider_name}")
             provider = provider_class(*args, **kwargs)
             
             # Verify provider is properly initialized
             if not hasattr(provider, 'provider_name'):
                 logger.warning(f"Provider {provider_name} missing provider_name attribute")
             
-            logger.info(f"Successfully created provider instance: {provider_name}")
+            logger.debug(f"Successfully created provider instance: {provider_name}")
             return provider
             
         except Exception as e:

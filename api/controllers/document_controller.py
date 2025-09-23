@@ -53,38 +53,38 @@ class DocumentController:
         audit_logger: AuditLogger = None
     ):
         """Initialize document controller with dependencies."""
-        logger.info("DocumentController.__init__: Starting DocumentController initialization...")
-        logger.info(f"DocumentController.__init__: vector_controller provided: {vector_controller is not None}")
-        logger.info(f"DocumentController.__init__: audit_logger provided: {audit_logger is not None}")
+        logger.debug("DocumentController: Starting initialization...")
+        logger.debug(f"DocumentController: vector_controller provided: {vector_controller is not None}")
+        logger.debug(f"DocumentController: audit_logger provided: {audit_logger is not None}")
         
         self.vector_controller = vector_controller or get_vector_controller(audit_logger=audit_logger)
         self.audit_logger = audit_logger
         
         # File processing components
-        logger.info("DocumentController: Initializing file processing components...")
+        logger.debug("DocumentController: Initializing file processing components...")
         try:
             self.type_detector = FileTypeDetector()
-            logger.info("DocumentController: FileTypeDetector initialized successfully")
+            logger.debug("DocumentController: FileTypeDetector initialized")
         except Exception as e:
             logger.error(f"DocumentController: Failed to initialize FileTypeDetector: {e}")
             raise
-            
+
         try:
             self.text_extractor = TextExtractor()
-            logger.info("DocumentController: TextExtractor initialized successfully")
+            logger.debug("DocumentController: TextExtractor initialized")
         except Exception as e:
             logger.error(f"DocumentController: Failed to initialize TextExtractor: {e}")
             raise
-            
+
         try:
             self.metadata_extractor = MetadataExtractor()
-            logger.info("DocumentController: MetadataExtractor initialized successfully")
+            logger.debug("DocumentController: MetadataExtractor initialized")
         except Exception as e:
             logger.error(f"DocumentController: Failed to initialize MetadataExtractor: {e}")
             raise
-        
+
         # Configuration
-        logger.info("DocumentController.__init__: Setting up configuration...")
+        logger.debug("DocumentController: Setting up configuration...")
         self.max_file_size = 50 * 1024 * 1024  # 50MB
         # Ensure we have comprehensive MIME type support
         self.allowed_content_types = [
@@ -161,12 +161,12 @@ class DocumentController:
                 progress=5
             )
 
-            logger.info(f"DocumentController: Starting file validation for {file.filename}")
+            logger.debug(f"DocumentController: Starting file validation for {file.filename}")
 
             # Validate file
             try:
                 await self._validate_file(file)
-                logger.info(f"DocumentController: File validation successful for {file.filename}")
+                logger.debug(f"DocumentController: File validation successful for {file.filename}")
 
                 # Emit validation complete
                 await websocket_manager.emit_document_progress(
@@ -240,7 +240,7 @@ class DocumentController:
                     
                 enhanced_metadata.update(ocr_metadata)
                 
-                logger.info(f"DocumentController: Added OCR metadata for {file.filename}: {ocr_metadata}")
+                logger.debug(f"DocumentController: Added OCR metadata for {file.filename}: {ocr_metadata}")
 
             # Emit text extraction stage
             await websocket_manager.emit_document_progress(
@@ -848,14 +848,14 @@ class DocumentController:
     
     async def _validate_file(self, file: UploadFile):
         """Validate uploaded file."""
-        logger.info(f"_validate_file: Starting validation for {file.filename}")
-        logger.info(f"_validate_file: File content_type from FastAPI: {file.content_type}")
+        logger.debug(f"File validation: Starting for {file.filename}")
+        logger.debug(f"File validation: Content type from FastAPI: {file.content_type}")
         
         # Check file size
-        logger.info(f"_validate_file: Reading file content...")
+        logger.debug(f"File validation: Reading file content...")
         file_content = await file.read()
         await file.seek(0)  # Reset file pointer
-        logger.info(f"_validate_file: File content read - Size: {len(file_content)} bytes")
+        logger.debug(f"File validation: Content read - Size: {len(file_content)} bytes")
         
         if len(file_content) > self.max_file_size:
             logger.error(f"_validate_file: File size check failed - {len(file_content)} > {self.max_file_size}")
@@ -865,16 +865,16 @@ class DocumentController:
                 max_size=self.max_file_size
             )
         
-        logger.info(f"_validate_file: File size check passed")
-        logger.info(f"_validate_file: About to call type_detector.detect_type...")
-        logger.info(f"_validate_file: TypeDetector instance: {self.type_detector}")
+        logger.debug(f"File validation: Size check passed")
+        logger.debug(f"File validation: Detecting file type...")
+        logger.debug(f"File validation: TypeDetector instance: {self.type_detector}")
         
         # Check content type
         try:
             content_type = self.type_detector.detect_type(file_content=file_content, filename=file.filename)
-            logger.info(f"_validate_file: Type detection successful - Detected: {content_type}")
-            logger.info(f"_validate_file: Content type type: {type(content_type)}")
-            logger.info(f"_validate_file: Content type repr: {repr(content_type)}")
+            logger.debug(f"File validation: Type detection successful - Detected: {content_type}")
+            logger.debug(f"File validation: Content type type: {type(content_type)}")
+            logger.debug(f"File validation: Content type repr: {repr(content_type)}")
         except Exception as te:
             logger.error(f"_validate_file: Type detection failed")
             logger.error(f"_validate_file: Type detection error type: {type(te).__name__}")
@@ -973,26 +973,26 @@ def get_audit_logger() -> AuditLogger:
 
 def get_document_controller() -> DocumentController:
     """Get document controller instance with dependencies."""
-    logger.info("get_document_controller: Creating new DocumentController instance...")
+    logger.debug("get_document_controller: Creating new DocumentController instance...")
     try:
         # Get audit logger
-        logger.info("get_document_controller: Getting audit logger...")
+        logger.debug("get_document_controller: Getting audit logger...")
         audit_logger = get_audit_logger()
-        
+
         # Get vector controller with proper initialization
-        logger.info("get_document_controller: Getting vector controller...")
+        logger.debug("get_document_controller: Getting vector controller...")
         vector_controller = get_vector_controller(audit_logger=audit_logger)
-        
-        logger.info("get_document_controller: Creating DocumentController with dependencies...")
+
+        logger.debug("get_document_controller: Creating DocumentController with dependencies...")
         controller = DocumentController(
             vector_controller=vector_controller,
             audit_logger=audit_logger
         )
-        logger.info("get_document_controller: DocumentController created successfully")
+        logger.debug("get_document_controller: DocumentController created successfully")
         return controller
     except Exception as e:
         logger.error(f"get_document_controller: Failed to initialize document controller: {e}")
         logger.exception("get_document_controller: Full exception traceback:")
         # Return a minimal controller without vector functionality
-        logger.info("get_document_controller: Creating minimal DocumentController fallback...")
+        logger.warning("get_document_controller: Creating minimal DocumentController fallback...")
         return DocumentController(audit_logger=get_audit_logger())

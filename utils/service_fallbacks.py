@@ -23,7 +23,7 @@ class EmbeddedRedis:
     
     def __init__(self):
         self.client = fakeredis.FakeRedis()
-        logger.info("Using embedded FakeRedis for caching")
+        logger.debug("Using embedded FakeRedis for caching")
     
     def get(self, key: str) -> Optional[bytes]:
         return self.client.get(key)
@@ -46,7 +46,7 @@ class EmbeddedVectorDB:
     def __init__(self, db_path: str = "./runtime/databases/vector_storage.db"):
         self.db_path = db_path
         self.init_db()
-        logger.info(f"Using embedded SQLite vector database at {db_path}")
+        logger.debug(f"Using embedded SQLite vector database at {db_path}")
     
     def init_db(self):
         """Initialize SQLite database with vector storage tables."""
@@ -157,7 +157,7 @@ def get_redis_client(host: str = "localhost", port: int = 6379, **kwargs):
         client = redis.Redis(host=host, port=port, **kwargs)
         # Test connection
         client.ping()
-        logger.info(f"Connected to Redis at {host}:{port}")
+        logger.debug(f"Connected to Redis at {host}:{port}")
         return client
     except Exception as e:
         logger.warning(f"Could not connect to Redis ({e}), using embedded FakeRedis")
@@ -169,7 +169,7 @@ def get_qdrant_client(host: str = "localhost", port: int = 6333, **kwargs):
         client = QdrantClient(host=host, port=port, **kwargs)
         # Test connection by listing collections
         client.get_collections()
-        logger.info(f"Connected to Qdrant at {host}:{port}")
+        logger.debug(f"Connected to Qdrant at {host}:{port}")
         return client
     except Exception as e:
         logger.warning(f"Could not connect to Qdrant ({e}), using embedded vector database")
@@ -190,14 +190,14 @@ def test_service_connections():
         client = redis.Redis(host="localhost", port=6379)
         client.ping()
         status["redis"] = True
-        logger.info("✅ Redis connection successful")
+        logger.info("Redis connection successful")
     except Exception as e:
-        logger.info(f"❌ Redis connection failed: {e}")
+        logger.info(f"Redis connection failed: {e}")
         try:
             embedded_redis = EmbeddedRedis()
             embedded_redis.set("test", "value")
             status["embedded_redis"] = True
-            logger.info("✅ Embedded Redis (FakeRedis) working")
+            logger.info("Embedded Redis (FakeRedis) working")
         except Exception as e2:
             logger.error(f"❌ Embedded Redis failed: {e2}")
     
@@ -206,14 +206,14 @@ def test_service_connections():
         client = QdrantClient(host="localhost", port=6333)
         client.get_collections()
         status["qdrant"] = True
-        logger.info("✅ Qdrant connection successful")
+        logger.info("Qdrant connection successful")
     except Exception as e:
-        logger.info(f"❌ Qdrant connection failed: {e}")
+        logger.info(f"Qdrant connection failed: {e}")
         try:
             embedded_db = EmbeddedVectorDB()
             embedded_db.create_collection("test", 384)
             status["embedded_vector_db"] = True
-            logger.info("✅ Embedded Vector Database (SQLite) working")
+            logger.info("Embedded Vector Database (SQLite) working")
         except Exception as e2:
             logger.error(f"❌ Embedded Vector Database failed: {e2}")
     

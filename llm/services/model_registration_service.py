@@ -97,7 +97,7 @@ class ModelRegistrationService:
                         logger.error(f"Failed to load model {model.name} (ID: {model.id}): {str(e)}")
                         continue
                 
-                logger.info(f"Loaded {loaded_count} registered models into ModelManager")
+                logger.debug(f"Loaded {loaded_count} registered models into ModelManager")
                 return loaded_count
                 
             except Exception as e:
@@ -154,7 +154,7 @@ class ModelRegistrationService:
                     self._loaded_models[registered_model_id] = model
                     self._model_configs[registered_model_id] = model_config
                     
-                    logger.info(f"Reloaded model: {model.name} (ID: {registered_model_id})")
+                    logger.debug(f"Reloaded model: {model.name} (ID: {registered_model_id})")
                 
                 return True
                 
@@ -181,7 +181,7 @@ class ModelRegistrationService:
                 del self._loaded_models[registered_model_id]
                 del self._model_configs[registered_model_id]
                 
-                logger.info(f"Unloaded model: {registered_model_id}")
+                logger.debug(f"Unloaded model: {registered_model_id}")
                 return True
             else:
                 logger.warning(f"Model {registered_model_id} not currently loaded")
@@ -389,7 +389,7 @@ class ModelRegistrationService:
                                 logger.error(f"Error loading model {model.name}: {str(e)}")
                                 stats['errors'] += 1
             
-            logger.info(f"Model sync completed: {stats}")
+            logger.debug(f"Model sync completed: {stats}")
             return stats
             
         except Exception as e:
@@ -405,7 +405,7 @@ class ModelRegistrationService:
         self._loaded_models.clear()
         self._model_configs.clear()
         
-        logger.info("Model registration service cleaned up")
+        logger.debug("Model registration service cleaned up")
 
 # Global instance
 _registration_service = None

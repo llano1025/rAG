@@ -45,6 +45,11 @@ def configure_logging():
     file_handler.setFormatter(formatter)
     root_logger.addHandler(file_handler)
 
+    # Suppress noisy third-party loggers
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("watchfiles.main").setLevel(logging.WARNING)
+
 # Initialize logging
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -257,17 +262,20 @@ def create_app() -> FastAPI:
         import time
         import logging
         logger = logging.getLogger("middleware")
-        
+
         start_time = time.time()
-        logger.info(f"🔍 REQUEST: {request.method} {request.url.path}")
-        logger.info(f"🔍 REQUEST HEADERS: {dict(request.headers)}")
-        logger.info(f"🔍 REQUEST QUERY PARAMS: {dict(request.query_params)}")
-        
+        logger.info(f"REQUEST: {request.method} {request.url.path}")
+        logger.debug(f"Request headers: {dict(request.headers)}")
+
+        # Only log query params if they exist
+        if request.query_params:
+            logger.debug(f"Query params: {dict(request.query_params)}")
+
         response = await call_next(request)
-        
+
         process_time = time.time() - start_time
-        logger.info(f"🔍 RESPONSE: {response.status_code} in {process_time:.3f}s")
-        
+        logger.info(f"RESPONSE: {response.status_code} in {process_time:.3f}s")
+
         return response
     
     # Add custom middleware

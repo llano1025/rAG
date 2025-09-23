@@ -182,7 +182,7 @@ class OCRProcessor:
                     new_height = max_size
                     new_width = int((width * max_size) / height)
                 
-                self.logger.info(f"Resizing image from {width}x{height} to {new_width}x{new_height}")
+                self.logger.debug(f"Resizing image from {width}x{height} to {new_width}x{new_height}")
                 image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
             
             # Convert to RGB if needed (for consistent processing)

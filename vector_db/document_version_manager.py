@@ -64,7 +64,7 @@ class DocumentVersionManager:
     
     def __init__(self, storage_manager: VectorStorageManager = None, enable_contextual_retrieval: bool = True):
         """Initialize document version manager."""
-        logger.info("Initializing DocumentVersionManager")
+        logger.debug("Initializing DocumentVersionManager")
 
         try:
             self.storage_manager = storage_manager or get_storage_manager()
@@ -80,7 +80,7 @@ class DocumentVersionManager:
         self.enable_contextual_retrieval = enable_contextual_retrieval
         self.contextual_enhancer = None  # Will be initialized lazily if needed
 
-        logger.info(f"DocumentVersionManager initialized - storage_manager: {self.storage_manager is not None}, contextual_retrieval: {enable_contextual_retrieval}")
+        logger.debug(f"DocumentVersionManager initialized - storage_manager: {self.storage_manager is not None}, contextual_retrieval: {enable_contextual_retrieval}")
     
     def _get_embedding_manager_instance(self, embedding_model: str = None):
         """Get embedding manager instance, initializing if needed."""
@@ -147,7 +147,7 @@ class DocumentVersionManager:
                     batch_size=10,
                     enable_caching=True
                 )
-                logger.info("ContextualChunkEnhancer initialized successfully")
+                logger.debug("ContextualChunkEnhancer initialized successfully")
 
             except Exception as e:
                 logger.error(f"Failed to initialize ContextualChunkEnhancer: {e}")

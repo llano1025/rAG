@@ -57,7 +57,7 @@ class VectorStorageManager:
             await self._discover_and_init_collections()
             
             self._is_initialized = True
-            logger.info("Vector storage manager initialized successfully")
+            logger.debug("Vector storage manager initialized successfully")
             return True
             
         except Exception as e:
@@ -99,9 +99,9 @@ class VectorStorageManager:
             # Initialize search optimizers for discovered active indices
             for index_name, collections_dict in index_collections.items():
                 try:
-                    logger.info(f"Initializing search optimizer for active index '{index_name}' with collections: {collections_dict}")
+                    logger.debug(f"Initializing search optimizer for active index '{index_name}' with collections: {collections_dict}")
                     await self._init_search_optimizer_for_index(index_name, collections_dict)
-                    logger.info(f"Successfully initialized search optimizer for active index: {index_name}")
+                    logger.debug(f"Successfully initialized search optimizer for active index: {index_name}")
                 except Exception as e:
                     logger.warning(f"Failed to initialize search optimizer for {index_name}: {e}")
             

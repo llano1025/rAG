@@ -23,67 +23,67 @@ class FileStorageManager:
         Args:
             storage_root: Root directory for file storage
         """
-        logger.info(f"FileManager: Initializing file storage manager...")
-        logger.info(f"FileManager: Storage root path: {storage_root}")
-        
+        logger.debug("FileManager: Initializing file storage manager...")
+        logger.debug(f"FileManager: Storage root path: {storage_root}")
+
         self.storage_root = Path(storage_root)
-        logger.info(f"FileManager: Resolved storage root: {self.storage_root.absolute()}")
-        
+        logger.debug(f"FileManager: Resolved storage root: {self.storage_root.absolute()}")
+
         # Create storage directory if it doesn't exist
         try:
-            logger.info(f"FileManager: Creating storage directory structure...")
+            logger.debug("FileManager: Creating storage directory structure...")
             self.storage_root.mkdir(parents=True, exist_ok=True)
-            logger.info(f"FileManager: Storage directory created/verified")
+            logger.debug("FileManager: Storage directory created/verified")
         except OSError as create_err:
             logger.error(f"FileManager: Failed to create storage directory: {create_err}")
             raise IOError(f"Cannot create storage directory: {create_err}")
-        
+
         # Validate storage directory
         self._validate_storage_directory()
-        
-        logger.info(f"FileManager: File storage initialized successfully at: {self.storage_root.absolute()}")
+
+        logger.debug(f"FileManager: File storage initialized at {self.storage_root.absolute()}")
     
     def _validate_storage_directory(self):
         """Validate storage directory exists and is accessible."""
-        logger.info(f"FileManager: Validating storage directory...")
-        
+        logger.debug("FileManager: Validating storage directory...")
+
         # Check if directory exists
         if not self.storage_root.exists():
             logger.error(f"FileManager: Storage directory does not exist: {self.storage_root}")
             raise IOError(f"Storage directory does not exist: {self.storage_root}")
-            
+
         # Check if it's actually a directory
         if not self.storage_root.is_dir():
             logger.error(f"FileManager: Storage path is not a directory: {self.storage_root}")
             raise IOError(f"Storage path is not a directory: {self.storage_root}")
-            
+
         # Check read permissions
         if not os.access(self.storage_root, os.R_OK):
             logger.error(f"FileManager: Storage directory is not readable: {self.storage_root}")
             raise IOError(f"Storage directory is not readable: {self.storage_root}")
-            
+
         # Check write permissions
         if not os.access(self.storage_root, os.W_OK):
             logger.error(f"FileManager: Storage directory is not writable: {self.storage_root}")
             raise IOError(f"Storage directory is not writable: {self.storage_root}")
-            
+
         # Check execute permissions (needed to access subdirectories)
         if not os.access(self.storage_root, os.X_OK):
             logger.error(f"FileManager: Storage directory is not executable: {self.storage_root}")
             raise IOError(f"Storage directory is not executable: {self.storage_root}")
-            
+
         # Test write capability with a temporary file
         try:
             test_file = self.storage_root / ".test_write"
             with open(test_file, 'w') as f:
                 f.write("test")
             test_file.unlink()  # Delete test file
-            logger.info(f"FileManager: Write test passed")
+            logger.debug("FileManager: Write test passed")
         except OSError as test_err:
             logger.error(f"FileManager: Write test failed: {test_err}")
             raise IOError(f"Cannot write to storage directory: {test_err}")
             
-        logger.info(f"✅ FileManager: Storage directory validation passed")
+        logger.debug("FileManager: Storage directory validation passed")
     
     def _generate_file_path(self, file_hash: str, original_filename: str) -> Path:
         """

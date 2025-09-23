@@ -76,7 +76,7 @@ class CorpusStatsManager:
                 if len(self.stats_cache) < 100:  # Keep cache size reasonable
                     return stats
             
-            logger.info(f"Computing corpus statistics for {len(document_ids)} documents")
+            logger.debug(f"Computing corpus statistics for {len(document_ids)} documents")
             
             # Query all chunks for the documents
             chunks = db.query(DocumentChunk.text).filter(
@@ -120,7 +120,7 @@ class CorpusStatsManager:
             
             # Cache the results
             self.stats_cache[cache_key] = stats
-            logger.info(f"Computed stats: {total_docs} docs, avg_len={avg_doc_length:.1f}, "
+            logger.debug(f"Computed stats: {total_docs} docs, avg_len={avg_doc_length:.1f}, "
                        f"vocabulary_size={len(idf_values)}")
             
             return stats
@@ -306,11 +306,11 @@ class EnhancedSearchEngine:
     async def _ensure_storage_initialized(self):
         """Ensure storage manager is properly initialized."""
         if not self._storage_initialized:
-            logger.info("Initializing storage manager for search operations")
+            logger.debug("Initializing storage manager for search operations")
             success = await self.storage_manager.initialize()
             if success:
                 self._storage_initialized = True
-                logger.info("Storage manager initialized successfully")
+                logger.debug("Storage manager initialized successfully")
             else:
                 logger.error("Failed to initialize storage manager")
                 raise RuntimeError("Storage manager initialization failed")
@@ -424,7 +424,7 @@ class EnhancedSearchEngine:
                 }
                 dict_results.append(dict_result)
             
-            logger.info(f"search_with_context completed: {len(dict_results)} results for query '{query[:50]}...'")
+            logger.debug(f"search_with_context completed: {len(dict_results)} results for query '{query[:50]}...'")
             return dict_results
             
         except Exception as e:
@@ -464,15 +464,15 @@ class EnhancedSearchEngine:
             cache_hash = hashlib.md5(hash_input.encode('utf-8')).hexdigest()
             cache_key = f"search_{search_type}_{cache_hash}"
             
-            # Debug logging to identify instability sources  
-            logger.info(f"Cache key generation:")
-            logger.info(f"Query: '{query[:50]}...'")
-            logger.info(f"User ID: {user_id}")
-            logger.info(f"Search Type: {search_type}")
-            logger.info(f"Normalized filter: {stable_filter}")
-            logger.info(f"Filter string: {filter_str}")
-            logger.info(f"Hash input length: {len(hash_input)} chars")
-            logger.info(f"Final key: {cache_key}")
+            # Debug logging to identify instability sources
+            logger.debug(f"Cache key generation:")
+            logger.debug(f"Query: '{query[:50]}...'")
+            logger.debug(f"User ID: {user_id}")
+            logger.debug(f"Search Type: {search_type}")
+            logger.debug(f"Normalized filter: {stable_filter}")
+            logger.debug(f"Filter string: {filter_str}")
+            logger.debug(f"Hash input length: {len(hash_input)} chars")
+            logger.debug(f"Final key: {cache_key}")
             
             return cache_key
         except Exception as e:
@@ -519,7 +519,7 @@ class EnhancedSearchEngine:
         if search_type in vector_search_types:
             await self._ensure_storage_initialized()
         elif search_type in database_only_search_types:
-            logger.info(f"Skipping Qdrant initialization for {search_type} search (database-only)")
+            logger.debug(f"Skipping Qdrant initialization for {search_type} search (database-only)")
         else:
             # Unknown search type - be safe and initialize storage
             logger.warning(f"Unknown search type '{search_type}', initializing storage as safety measure")
@@ -529,18 +529,18 @@ class EnhancedSearchEngine:
         cache_key = None
         if use_cache:
             cache_key = self._generate_stable_cache_key(query, user.id, search_type, filters)
-            logger.info(f"Generated cache key for entire method: {cache_key}")
+            logger.debug(f"Generated cache key for entire method: {cache_key}")
         
         try:
             # Hierarchical cache strategy - check multiple cache levels
             if use_cache and cache_key:
                 # Check end-to-end Redis cache first (fastest)
                 try:
-                    logger.info(f"Checking Redis cache for key: {cache_key}")
-                    logger.info(f"Query: '{query[:50]}...', User: {user.id}, Filters: {len(filters.to_dict())} properties")
+                    logger.debug(f"Checking Redis cache for key: {cache_key}")
+                    logger.debug(f"Query: '{query[:50]}...', User: {user.id}, Filters: {len(filters.to_dict())} properties")
                     cached_data = await self.redis_manager.get_value(cache_key)
                     if cached_data:
-                        logger.info(f"CACHE HIT! Found {len(cached_data)} cached results for query: {query[:50]}...")
+                        logger.debug(f"CACHE HIT! Found {len(cached_data)} cached results for query: {query[:50]}...")
                         # Convert back to SearchResult objects
                         cached_results = []
                         for result_data in cached_data:
@@ -554,17 +554,17 @@ class EnhancedSearchEngine:
                                 highlight=result_data.get('highlight')
                             )
                             cached_results.append(result)
-                        logger.info(f"Returning {len(cached_results)} Redis cached results")
+                        logger.debug(f"Returning {len(cached_results)} Redis cached results")
                         return cached_results
                     else:
-                        logger.info(f"CACHE MISS - No Redis cached results found")
+                        logger.debug(f"CACHE MISS - No Redis cached results found")
                 except Exception as e:
                     logger.warning(f"Redis cache retrieval failed: {e}")
                 
                 # Fallback to database cache
                 cached_results = await self._get_cached_results(query, user.id, search_type, filters, db)
                 if cached_results:
-                    logger.info(f"Returning database cached results for query: {query[:50]}...")
+                    logger.debug(f"Returning database cached results for query: {query[:50]}...")
                     return cached_results
                 
                 # Check vector cache coverage for semantic searches
@@ -580,7 +580,7 @@ class EnhancedSearchEngine:
                     
                     if vector_coverage >= 0.8:  # 80% or more documents have cached vector results
                         assembly_start = time.time()
-                        logger.info(f"High vector cache coverage ({vector_coverage:.1%}), assembling from cache")
+                        logger.debug(f"High vector cache coverage ({vector_coverage:.1%}), assembling from cache")
                         assembled_results = await self._assemble_from_vector_cache(query, filters, limit, accessible_doc_ids)
                         
                         if assembled_results:
@@ -588,7 +588,7 @@ class EnhancedSearchEngine:
                             
                             # Cache these assembled results for future end-to-end cache hits
                             try:
-                                logger.info(f"Caching {len(assembled_results)} assembled results for key: {cache_key}")
+                                logger.debug(f"Caching {len(assembled_results)} assembled results for key: {cache_key}")
                                 serialized_results = [result.to_dict() for result in assembled_results]
                                 success = await self.redis_manager.set_value(
                                     cache_key,
@@ -596,16 +596,16 @@ class EnhancedSearchEngine:
                                     ttl=self.cache_duration_hours * 3600
                                 )
                                 if success:
-                                    logger.info(f"Successfully cached assembled results")
+                                    logger.debug(f"Successfully cached assembled results")
                                 else:
                                     logger.warning(f"Failed to cache assembled results")
-                                logger.info(f"Vector cache optimization: assembled {len(assembled_results)} results in {assembly_time:.1f}ms (saved full search)")
+                                logger.debug(f"Vector cache optimization: assembled {len(assembled_results)} results in {assembly_time:.1f}ms (saved full search)")
                             except Exception as e:
                                 logger.warning(f"Failed to cache assembled results: {e}")
                             
                             return assembled_results
                         else:
-                            logger.info(f"Vector cache assembly returned no results, falling back to full search")
+                            logger.debug(f"Vector cache assembly returned no results, falling back to full search")
             
             # Apply user access control to filters (skip if already done for semantic cache check)
             if not hasattr(filters, 'document_ids') or not filters.document_ids:
@@ -657,7 +657,7 @@ class EnhancedSearchEngine:
                 results = [result for result in results if result.score >= filters.min_score]
                 filtered_count = initial_count - len(results)
                 if filtered_count > 0:
-                    logger.info(f"Filtered {filtered_count} results below min_score threshold ({filters.min_score}) after reranking")
+                    logger.debug(f"Filtered {filtered_count} results below min_score threshold ({filters.min_score}) after reranking")
 
             # Log search query and cache results
             search_time = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
@@ -670,8 +670,8 @@ class EnhancedSearchEngine:
                 
                 # Redis cache via query optimizer for fast retrieval
                 try:
-                    logger.info(f"Caching {len(results)} search results for key: {cache_key}")
-                    logger.info(f"Confirming same cache key used for storage: {cache_key}")
+                    logger.debug(f"Caching {len(results)} search results for key: {cache_key}")
+                    logger.debug(f"Confirming same cache key used for storage: {cache_key}")
                     serialized_results = [result.to_dict() for result in results]
                     success = await self.redis_manager.set_value(
                         cache_key,
@@ -679,13 +679,13 @@ class EnhancedSearchEngine:
                         ttl=self.cache_duration_hours * 3600
                     )
                     if success:
-                        logger.info(f"Successfully cached {len(results)} search results")
+                        logger.debug(f"Successfully cached {len(results)} search results")
                     else:
                         logger.warning(f"Failed to cache search results")
                 except Exception as e:
                     logger.warning(f"Failed to cache results in Redis: {e}")
             
-            logger.info(f"Search completed in {search_time:.2f}ms, returned {len(results)} results")
+            logger.debug(f"Search completed in {search_time:.2f}ms, returned {len(results)} results")
             return results
             
         except Exception as e:
@@ -863,7 +863,7 @@ class EnhancedSearchEngine:
             # Process query to extract semantic components
             processed_query = query_processor.process_query(query)
             
-            logger.info(f"Semantic search with strategy: {processed_query.search_strategy}, "
+            logger.debug(f"Semantic search with strategy: {processed_query.search_strategy}, "
                        f"concepts: {processed_query.primary_terms}, metadata: {processed_query.secondary_terms}")
             
             # Generate multiple embeddings based on query strategy
@@ -906,7 +906,7 @@ class EnhancedSearchEngine:
                             score_threshold=filters.min_score or 0.1,
                             metadata_filters={'user_id': filters.user_id} if filters.user_id else None
                         )
-                        logger.info(f"Initiating search using Qdrant...")
+                        logger.debug(f"Initiating search using Qdrant...")
                         results = search_results
 
                         # Process results with weighted scoring
@@ -942,7 +942,7 @@ class EnhancedSearchEngine:
             final_results = list(all_results.values())
             final_results.sort(key=lambda x: x.score, reverse=True)
             
-            logger.info(f"Multi-embedding semantic search completed: {len(final_results)} results")
+            logger.debug(f"Multi-embedding semantic search completed: {len(final_results)} results")
             return final_results[:limit]
             
         except Exception as e:
@@ -965,7 +965,7 @@ class EnhancedSearchEngine:
             processed_context = self.context_processor.process_context(query)
             enhanced_query = processed_context if processed_context != query else query
 
-            logger.info(f"Enhanced contextual search: '{query}' → '{enhanced_query}' (limit={limit})")
+            logger.debug(f"Enhanced contextual search: '{query}' → '{enhanced_query}' (limit={limit})")
 
             # Perform enhanced contextual search (semantic + BM25)
             # 1. Get semantic contextual results
@@ -983,7 +983,7 @@ class EnhancedSearchEngine:
             combined_results.sort(key=lambda x: x.score, reverse=True)
             final_results = combined_results[:limit]
 
-            logger.info(f"Enhanced contextual search completed: {len(final_results)} results "
+            logger.debug(f"Enhanced contextual search completed: {len(final_results)} results "
                        f"(semantic: {len(semantic_results)}, bm25: {len(bm25_results)})")
 
             return final_results
@@ -1129,7 +1129,7 @@ class EnhancedSearchEngine:
         2. BM25 reranking for statistical relevance
         """
         try:
-            logger.info(f"Enhanced keyword search: '{query}' (limit={limit})")
+            logger.debug(f"Enhanced keyword search: '{query}' (limit={limit})")
             
             # Preprocess query and fast database filtering
             query_terms = self.corpus_stats_manager.preprocess_query(query)
@@ -1232,7 +1232,7 @@ class EnhancedSearchEngine:
             scored_results.sort(key=lambda x: x.score, reverse=True)
             final_results = scored_results[:limit]
             
-            logger.info(f"BM25 keyword search completed: {len(final_results)} results "
+            logger.debug(f"BM25 keyword search completed: {len(final_results)} results "
                        f"(avg_score={sum(r.score for r in final_results)/len(final_results):.3f} "
                        f"if final_results else 0)")
             
@@ -1565,7 +1565,7 @@ class EnhancedSearchEngine:
             # Add remaining results (if any) with their original scores
             final_results.extend(remaining_results)
             
-            logger.info(f"Reranked {len(results_to_rerank)} results using {filters.reranker_model or 'default'} model")
+            logger.debug(f"Reranked {len(results_to_rerank)} results using {filters.reranker_model or 'default'} model")
             
             return final_results
             
@@ -2226,7 +2226,7 @@ class EnhancedSearchEngine:
                 pattern = f"*doc_{doc_id}*"
                 await self.redis_manager.delete_pattern(pattern)
                 
-            logger.info(f"Cache invalidated for documents: {document_ids}")
+            logger.debug(f"Cache invalidated for documents: {document_ids}")
         except Exception as e:
             logger.error(f"Failed to invalidate cache: {e}")
 
@@ -2235,7 +2235,7 @@ class EnhancedSearchEngine:
         try:
             # Clear Redis cache entries for this user
             await self.redis_manager.delete_pattern(f"search_*_{user_id}_*")
-            logger.info(f"Cleared cache for user {user_id}")
+            logger.debug(f"Cleared cache for user {user_id}")
         except Exception as e:
             logger.error(f"Failed to clear user cache: {e}")
 
@@ -2262,7 +2262,7 @@ class EnhancedSearchEngine:
         """Optimize cache performance based on usage patterns."""
         try:
             # Cache optimization now handled directly by Redis manager
-            logger.info("Cache performance optimization completed")
+            logger.debug("Cache performance optimization completed")
         except Exception as e:
             logger.error(f"Cache optimization failed: {e}")
 
@@ -2374,7 +2374,7 @@ class EnhancedSearchEngine:
             sorted_results = sorted(all_results.values(), key=lambda x: x.score, reverse=True)
             final_results = sorted_results[:limit]
             
-            logger.info(f"Assembled {len(final_results)} results from vector cache")
+            logger.debug(f"Assembled {len(final_results)} results from vector cache")
             return final_results
             
         except Exception as e:

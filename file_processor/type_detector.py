@@ -131,16 +131,16 @@ class FileTypeDetector:
     def __init__(self):
         """Initialize the FileTypeDetector with magic for MIME type detection."""
         self.logger = logging.getLogger(__name__)
-        self.logger.info(f"TypeDetector: Initializing FileTypeDetector...")
-        self.logger.info(f"TypeDetector: MAGIC_AVAILABLE = {MAGIC_AVAILABLE}")
-        
+        self.logger.debug("TypeDetector: Initializing FileTypeDetector...")
+        self.logger.debug(f"TypeDetector: MAGIC_AVAILABLE = {MAGIC_AVAILABLE}")
+
         magic_available = MAGIC_AVAILABLE  # Use local variable to avoid scoping issues
         magic_working = False
-        
+
         if magic_available:
             try:
                 self.mime = magic.Magic(mime=True)
-                self.logger.info(f"TypeDetector: python-magic initialized successfully")
+                self.logger.debug("TypeDetector: python-magic initialized successfully")
                 magic_working = True
                 
                 # Test magic functionality with different content types
@@ -194,7 +194,7 @@ class FileTypeDetector:
         """
         try:
             if not MAGIC_AVAILABLE:
-                self.logger.info("python-magic not available, using extension-based detection")
+                self.logger.debug("python-magic not available, using extension-based detection")
                 # Fallback to extension-based detection
                 return self._detect_by_extension(file_path)
             
@@ -207,9 +207,9 @@ class FileTypeDetector:
 
             # Normalize MIME type to handle variations
             normalized_mime_type = self._normalize_mime_type(mime_type)
-            self.logger.info(f"MIME type detection - Original: {mime_type}, Normalized: {normalized_mime_type}")
-            self.logger.info(f"MIME type detection - Available mappings: {list(self.MIME_TO_EXTENSION.keys())}")
-            self.logger.info(f"MIME type detection - Normalized type in mappings: {normalized_mime_type in self.MIME_TO_EXTENSION}")
+            self.logger.debug(f"MIME type detection - Original: {mime_type}, Normalized: {normalized_mime_type}")
+            self.logger.debug(f"MIME type detection - Available mappings: {list(self.MIME_TO_EXTENSION.keys())}")
+            self.logger.debug(f"MIME type detection - Normalized type in mappings: {normalized_mime_type in self.MIME_TO_EXTENSION}")
             
             if normalized_mime_type not in self.MIME_TO_EXTENSION:
                 self.logger.error(f"MIME type validation failed - {normalized_mime_type} not in supported types")
@@ -307,7 +307,7 @@ class FileTypeDetector:
             # Detect from bytes content
             try:
                 if not MAGIC_AVAILABLE:
-                    self.logger.info("python-magic not available for content detection, trying filename extension")
+                    self.logger.debug("python-magic not available for content detection, trying filename extension")
                     # Use filename extension if available
                     if filename:
                         return self._detect_by_filename(filename)
@@ -318,9 +318,9 @@ class FileTypeDetector:
                 mime_type = self.mime.from_buffer(file_content)
                 # Normalize MIME type
                 normalized_mime_type = self._normalize_mime_type(mime_type)
-                self.logger.info(f"MIME type detection from content - Original: {mime_type}, Normalized: {normalized_mime_type}")
-                self.logger.info(f"MIME type detection from content - Available mappings: {list(self.MIME_TO_EXTENSION.keys())}")
-                self.logger.info(f"MIME type detection from content - Normalized type in mappings: {normalized_mime_type in self.MIME_TO_EXTENSION}")
+                self.logger.debug(f"MIME type detection from content - Original: {mime_type}, Normalized: {normalized_mime_type}")
+                self.logger.debug(f"MIME type detection from content - Available mappings: {list(self.MIME_TO_EXTENSION.keys())}")
+                self.logger.debug(f"MIME type detection from content - Normalized type in mappings: {normalized_mime_type in self.MIME_TO_EXTENSION}")
                 
                 if normalized_mime_type not in self.MIME_TO_EXTENSION:
                     self.logger.error(f"MIME type validation failed from content - {normalized_mime_type} not in supported types")
@@ -336,7 +336,7 @@ class FileTypeDetector:
                         self.logger.warning(f"Attempting filename-based detection for {filename}")
                         try:
                             filename_mime_type = self._detect_by_filename(filename)
-                            self.logger.info(f"Filename-based detection successful: {filename_mime_type}")
+                            self.logger.debug(f"Filename-based detection successful: {filename_mime_type}")
                             return filename_mime_type
                         except UnsupportedFileType:
                             self.logger.warning(f"Filename-based detection also failed for {filename}")
@@ -348,16 +348,16 @@ class FileTypeDetector:
                             # Extract extension and try to map to a known image type
                             extension = Path(filename).suffix.lower()
                             if extension in ['.jpg', '.jpeg']:
-                                self.logger.info(f"Treating unknown image type as JPEG based on extension {extension}")
+                                self.logger.debug(f"Treating unknown image type as JPEG based on extension {extension}")
                                 return 'image/jpeg'
                             elif extension in ['.png']:
-                                self.logger.info(f"Treating unknown image type as PNG based on extension {extension}")
+                                self.logger.debug(f"Treating unknown image type as PNG based on extension {extension}")
                                 return 'image/png'
                             elif extension in ['.gif']:
-                                self.logger.info(f"Treating unknown image type as GIF based on extension {extension}")
+                                self.logger.debug(f"Treating unknown image type as GIF based on extension {extension}")
                                 return 'image/gif'
                             elif extension in ['.tiff', '.tif']:
-                                self.logger.info(f"Treating unknown image type as TIFF based on extension {extension}")
+                                self.logger.debug(f"Treating unknown image type as TIFF based on extension {extension}")
                                 return 'image/tiff'
                     
                     # Fallback 3: Check if it's a text type we should support
@@ -365,7 +365,7 @@ class FileTypeDetector:
                         self.logger.warning(f"Unknown text MIME type {normalized_mime_type}, attempting generic text handling")
                         # For unknown text types, default to plain text if we have a reasonable filename
                         if filename and any(filename.lower().endswith(ext) for ext in ['.txt', '.text', '.log']):
-                            self.logger.info(f"Treating unknown text type as plain text based on filename {filename}")
+                            self.logger.debug(f"Treating unknown text type as plain text based on filename {filename}")
                             return 'text/plain'
                     
                     # If all fallbacks fail, raise the original error

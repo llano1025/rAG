@@ -125,40 +125,40 @@ def create_tables():
         # Create engine
         engine = create_engine(database_url)
         
-        print("🔗 Connecting to PostgreSQL database...")
+        print("Connecting to PostgreSQL database...")
         
         with engine.connect() as connection:
-            print("✅ Connected to database successfully")
+            print("Connected to database successfully")
             
             # Create tables
-            print("📝 Creating registered_models table...")
+            print("Creating registered_models table...")
             connection.execute(text(CREATE_REGISTERED_MODELS_TABLE))
             connection.commit()
-            print("✅ registered_models table created")
+            print("registered_models table created")
             
-            print("📝 Creating model_tests table...")
+            print("Creating model_tests table...")
             connection.execute(text(CREATE_MODEL_TESTS_TABLE))
             connection.commit()
-            print("✅ model_tests table created")
+            print("model_tests table created")
             
             # Create indexes
-            print("📊 Creating database indexes...")
+            print("Creating database indexes...")
             for index_sql in CREATE_INDEXES:
                 connection.execute(text(index_sql))
             connection.commit()
-            print("✅ Database indexes created")
+            print("Database indexes created")
             
             # Create update triggers
-            print("⚡ Creating update triggers...")
+            print("Creating update triggers...")
             for trigger_sql in CREATE_UPDATE_TRIGGERS:
                 connection.execute(text(trigger_sql))
             connection.commit()
-            print("✅ Update triggers created")
+            print("Update triggers created")
             
-            print("🎉 Model registration tables created successfully!")
+            print("Model registration tables created successfully!")
             
     except Exception as e:
-        print(f"❌ Error creating tables: {str(e)}")
+        print(f"Error creating tables: {str(e)}")
         raise
 
 def verify_tables():
@@ -179,10 +179,10 @@ def verify_tables():
             
             tables = [row[0] for row in result.fetchall()]
             
-            print(f"📋 Found tables: {tables}")
+            print(f"Found tables: {tables}")
             
             if 'registered_models' in tables and 'model_tests' in tables:
-                print("✅ All model registration tables verified successfully")
+                print("All model registration tables verified successfully")
                 
                 # Check table structure
                 for table_name in ['registered_models', 'model_tests']:
@@ -194,20 +194,20 @@ def verify_tables():
                     """))
                     
                     columns = result.fetchall()
-                    print(f"📊 {table_name} has {len(columns)} columns")
+                    print(f"{table_name} has {len(columns)} columns")
                 
                 return True
             else:
-                print("❌ Some tables are missing")
+                print("Some tables are missing")
                 return False
                 
     except Exception as e:
-        print(f"❌ Error verifying tables: {str(e)}")
+        print(f"Error verifying tables: {str(e)}")
         return False
 
 def main():
     """Main migration function."""
-    print("🚀 Starting model registration tables migration...")
+    print("Starting model registration tables migration...")
     print("=" * 60)
     
     try:
@@ -215,20 +215,20 @@ def main():
         create_tables()
         
         print("\n" + "=" * 60)
-        print("🔍 Verifying table creation...")
+        print("Verifying table creation...")
         
         # Verify tables
         if verify_tables():
-            print("\n🎉 Migration completed successfully!")
+            print("\nMigration completed successfully!")
             print("The following tables are now available:")
             print("  • registered_models - Store user-registered LLM models")
             print("  • model_tests - Store model testing and validation results")
         else:
-            print("\n❌ Migration verification failed!")
+            print("\nMigration verification failed!")
             return 1
             
     except Exception as e:
-        print(f"\n❌ Migration failed: {str(e)}")
+        print(f"\nMigration failed: {str(e)}")
         return 1
     
     return 0

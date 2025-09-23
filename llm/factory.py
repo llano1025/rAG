@@ -39,11 +39,11 @@ async def create_model_manager_with_registered_models(user_id: Optional[int] = N
         # Load registered models from database
         if user_id:
             loaded_count = await registration_service.load_all_registered_models(user_id)
-            logger.info(f"Loaded {loaded_count} registered models for user {user_id}")
+            logger.debug(f"Loaded {loaded_count} registered models for user {user_id}")
         else:
             # Load all public models (user_id=None loads public models)
             loaded_count = await registration_service.load_all_registered_models(None)
-            logger.info(f"Loaded {loaded_count} public registered models")
+            logger.debug(f"Loaded {loaded_count} public registered models")
             
     except Exception as e:
         logger.error(f"Failed to load registered models: {str(e)}")
@@ -66,7 +66,7 @@ async def load_models_for_user(manager: ModelManager, user_id: int) -> int:
     try:
         registration_service = get_registration_service()
         loaded_count = await registration_service.load_all_registered_models(user_id)
-        logger.info(f"Loaded {loaded_count} models for user {user_id}")
+        logger.debug(f"Loaded {loaded_count} models for user {user_id}")
         return loaded_count
     except Exception as e:
         logger.error(f"Failed to load models for user {user_id}: {str(e)}")

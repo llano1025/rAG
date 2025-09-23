@@ -111,7 +111,7 @@ class TableAwareChunkingStrategy:
         try:
             # Step 1: Extract and reconstruct tables
             tables = self.table_processor.process_document_tables(file_path)
-            logger.info(f"Found {len(tables)} reconstructed tables")
+            logger.debug(f"Found {len(tables)} reconstructed tables")
 
             # Step 2: Create table representations for RAG
             table_representations = []
@@ -128,7 +128,7 @@ class TableAwareChunkingStrategy:
                 extracted_text, tables, table_representations, table_boundaries, metadata
             )
 
-            logger.info(f"Created {len(chunks)} table-aware chunks")
+            logger.debug(f"Created {len(chunks)} table-aware chunks")
             return chunks
 
         except Exception as e:

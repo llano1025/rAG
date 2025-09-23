@@ -118,7 +118,7 @@ class ModelStorageManager:
                     self.stored_models[model_info.model_id] = model_info
 
             else:
-                logger.info("No existing model metadata found")
+                logger.debug("No existing model metadata found")
 
         except Exception as e:
             logger.error(f"Failed to load model metadata: {e}")
@@ -135,16 +135,16 @@ class ModelStorageManager:
             stale_model_ids = stored_model_ids - active_model_ids
 
             if stale_model_ids:
-                logger.info(f"Found {len(stale_model_ids)} stale model entries in storage: {stale_model_ids}")
+                logger.debug(f"Found {len(stale_model_ids)} stale model entries in storage: {stale_model_ids}")
 
                 # Remove stale entries
                 for model_id in stale_model_ids:
-                    logger.info(f"Removing stale model entry: {model_id}")
+                    logger.debug(f"Removing stale model entry: {model_id}")
                     del self.stored_models[model_id]
 
                 # Save updated metadata
                 self._save_metadata()
-                logger.info(f"Cleaned up {len(stale_model_ids)} stale model entries")
+                logger.debug(f"Cleaned up {len(stale_model_ids)} stale model entries")
 
         except Exception as e:
             logger.warning(f"Failed to sync with registry: {e}")
@@ -260,7 +260,7 @@ class ModelStorageManager:
 
         # Check if already downloading
         if model_id in self._active_downloads:
-            logger.info(f"Model {model_id} is already being downloaded")
+            logger.debug(f"Model {model_id} is already being downloaded")
             try:
                 return await self._active_downloads[model_id]
             except Exception as e:
@@ -269,7 +269,7 @@ class ModelStorageManager:
 
         # Check if already stored and not forcing redownload
         if not force_redownload and self.is_model_stored(model_id):
-            logger.info(f"Model {model_id} is already stored")
+            logger.debug(f"Model {model_id} is already stored")
             return True
 
         # Create download task
@@ -294,7 +294,7 @@ class ModelStorageManager:
         model_name = model_metadata.model_name
 
         async with self._download_semaphore:
-            logger.info(f"Starting download for model {model_id} ({model_name})")
+            logger.info(f"Downloading model {model_id} ({model_name})")
 
             try:
                 # Check storage limit
@@ -335,7 +335,7 @@ class ModelStorageManager:
                     stored_model.status = "available"
                     stored_model.downloaded_at = datetime.utcnow()
                     stored_model.last_validated = datetime.utcnow()
-                    logger.info(f"Successfully downloaded model {model_id}")
+                    logger.info(f"Downloaded model {model_id} successfully")
                 else:
                     stored_model.status = "error"
                     logger.error(f"Failed to download model {model_id}")
@@ -418,7 +418,7 @@ class ModelStorageManager:
                 if config_file.exists():
                     stored_model.checksum = self._calculate_file_checksum(config_file)
 
-                logger.info(f"HuggingFace model {model_id} downloaded to {storage_path}")
+                logger.debug(f"HuggingFace model {model_id} downloaded to {storage_path}")
                 return True
 
         except Exception as e:
@@ -428,7 +428,7 @@ class ModelStorageManager:
     def _download_hf_model_sync(self, model_name: str, download_path: Path, download_kwargs: Optional[Dict] = None) -> bool:
         """Synchronous HuggingFace model download with configurable parameters."""
         try:
-            logger.info(f"Downloading HuggingFace model {model_name}")
+            logger.debug(f"Downloading HuggingFace model {model_name}")
 
             # Prepare download kwargs
             kwargs = download_kwargs or {}
@@ -441,7 +441,7 @@ class ModelStorageManager:
                     cache_folder=str(download_path),
                     **kwargs
                 )
-                logger.info(f"Downloaded as sentence-transformer: {model_name}")
+                logger.debug(f"Downloaded as sentence-transformer: {model_name}")
                 return True
             except Exception as st_error:
                 logger.debug(f"Sentence-transformer download failed: {st_error}")
@@ -459,7 +459,7 @@ class ModelStorageManager:
                     cache_dir=str(download_path),
                     **kwargs
                 )
-                logger.info(f"Downloaded as transformer: {model_name}")
+                logger.debug(f"Downloaded as transformer: {model_name}")
                 return True
             except Exception as t_error:
                 logger.error(f"Transformer download failed: {t_error}")
@@ -472,7 +472,7 @@ class ModelStorageManager:
     def _validate_downloaded_model(self, storage_path: Path, model_metadata) -> Dict[str, Any]:
         """Validate a downloaded model structure."""
         try:
-            logger.info(f"Validating downloaded model at {storage_path}")
+            logger.debug(f"Validating downloaded model at {storage_path}")
 
             # Check if directory exists and is not empty
             if not storage_path.exists():
@@ -546,7 +546,7 @@ class ModelStorageManager:
                     logger.warning(f"Missing sentence-transformers files: {missing_files}")
                     # This might not be fatal, continue validation
 
-            logger.info(f"Model validation successful: type={model_type}, path={storage_path}")
+            logger.debug(f"Model validation successful: type={model_type}, path={storage_path}")
             return {
                 "valid": True,
                 "model_type": model_type,
@@ -588,7 +588,7 @@ class ModelStorageManager:
                 stored_model.status = "available"
                 stored_model.last_validated = datetime.utcnow()
                 stored_model.validation_error = None
-                logger.info(f"Model {model_id} validation successful")
+                logger.debug(f"Model {model_id} validation successful")
             else:
                 stored_model.status = "corrupted"
                 logger.warning(f"Model {model_id} validation failed")
@@ -652,13 +652,13 @@ class ModelStorageManager:
             # Remove files
             if storage_path.exists():
                 shutil.rmtree(storage_path)
-                logger.info(f"Deleted model files for {model_id}")
+                logger.debug(f"Deleted model files for {model_id}")
 
             # Remove from metadata
             del self.stored_models[model_id]
             self._save_metadata()
 
-            logger.info(f"Successfully deleted model {model_id}")
+            logger.info(f"Deleted model {model_id}")
             return True
 
         except Exception as e:
@@ -674,7 +674,7 @@ class ModelStorageManager:
             last_used = stored_model.last_validated or stored_model.downloaded_at
 
             if last_used < cutoff_date:
-                logger.info(f"Cleaning up old model {model_id} (last used: {last_used})")
+                logger.debug(f"Cleaning up old model {model_id} (last used: {last_used})")
                 if self.delete_model(model_id):
                     deleted_models.append(model_id)
 
@@ -729,7 +729,7 @@ class ModelStorageManager:
         if self._active_downloads:
             await asyncio.gather(*self._active_downloads.values(), return_exceptions=True)
 
-        logger.info("Model storage manager cleanup completed")
+        logger.debug("Model storage manager cleanup completed")
 
 # Global instance
 _storage_manager_instance = None
