@@ -337,7 +337,16 @@ class EnhancedSearchEngine:
         enable_reranking: bool = False,
         reranker_model: Optional[str] = None,
         rerank_score_weight: float = 0.5,
-        min_rerank_score: Optional[float] = None
+        min_rerank_score: Optional[float] = None,
+        # Filter parameters for chat controller compatibility
+        tags: Optional[List[str]] = None,
+        tag_match_mode: str = None,
+        exclude_tags: Optional[List[str]] = None,
+        file_type: Optional[List[str]] = None,
+        language: Optional[str] = None,
+        is_public: Optional[bool] = None,
+        min_score: Optional[float] = None,
+        file_size_range: Optional[List[int]] = None
     ) -> List[Dict[str, Any]]:
         """
         Perform search with context - compatibility method for chat controller.
@@ -367,12 +376,30 @@ class EnhancedSearchEngine:
             # Convert top_k to limit
             limit = top_k or self.default_limit
             
-            # Create search filter with reranker settings
+            # Create search filter with reranker and filter settings
             search_filters = SearchFilter()
             search_filters.enable_reranking = enable_reranking
             search_filters.reranker_model = reranker_model
             search_filters.rerank_score_weight = rerank_score_weight
             search_filters.min_rerank_score = min_rerank_score
+
+            # Apply filter parameters from chat settings
+            if tags:
+                search_filters.tags = tags
+            if tag_match_mode:
+                search_filters.tag_match_mode = tag_match_mode
+            if exclude_tags:
+                search_filters.exclude_tags = exclude_tags
+            if file_type:
+                search_filters.content_types = file_type  # Note: content_types maps to file_type
+            if language:
+                search_filters.language = language
+            if is_public is not None:
+                search_filters.is_public = is_public
+            if min_score is not None:
+                search_filters.min_score = min_score
+            if file_size_range and len(file_size_range) == 2:
+                search_filters.file_size_range = tuple(file_size_range)
             
             # Perform search using existing method
             results = await self.search(

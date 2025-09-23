@@ -1,24 +1,26 @@
 # api/routes/chat_routes.py
 
 from typing import Dict, Any, Optional
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
-from datetime import datetime
+from datetime import datetime, timezone
 
 from database.connection import get_db
 from api.middleware.auth import get_current_user, get_current_active_user
 from api.controllers.chat_controller import get_chat_controller
 from database.models import User
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 # Request/Response Models
 class ChatSettings(BaseModel):
     """Chat configuration settings."""
     llm_model: str = Field(default="openai-gpt35", description="LLM model to use")
-    embedding_model: str = Field(default="hf-mpnet-base-v2", description="Embedding model for RAG")
+    embedding_model: str = Field(default="hf-minilm-l6-v2", description="Embedding model for RAG")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="Response randomness")
     max_tokens: int = Field(default=2048, ge=1, le=8192, description="Maximum response tokens")
     use_rag: bool = Field(default=True, description="Whether to use RAG for context")
@@ -93,13 +95,26 @@ async def create_chat_session(
 ):
     """Create a new chat session."""
     try:
-        settings = request.settings.dict() if request.settings else {}
+        logger.info(f"Creating session for user {current_user.id}")
+        logger.debug(f"Raw request.settings: {request.settings}")
+
+        settings = request.settings.model_dump() if request.settings else {}
+        logger.info(f"Processed settings: {settings}")
+
+        # Log specifically the embedding model setting
+        embedding_model = settings.get('embedding_model', 'NOT_SET')
+        logger.info(f"Embedding model in processed settings: '{embedding_model}'")
+
         controller = get_chat_controller(current_user.id)
         session_info = await controller.create_chat_session(
             user=current_user,
             settings=settings,
             db=db
         )
+
+        logger.info(f"Session created: {session_info['session_id']}")
+        logger.debug(f"Final session settings: {session_info.get('settings', {})}")
+
         return SessionResponse(**session_info)
     except Exception as e:
         raise HTTPException(
@@ -125,7 +140,8 @@ async def list_chat_sessions(
 async def get_chat_history(
     session_id: str,
     limit: int = 50,
-    current_user: User = Depends(get_current_active_user)
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
 ):
     """Get chat history for a specific session."""
     try:
@@ -170,25 +186,44 @@ async def stream_chat_response(
 ):
     """Stream chat response using Server-Sent Events."""
     try:
+        logger.info(f"Processing message for user {current_user.id}")
+        logger.debug(f"Request settings: {request.settings}")
+
         # Create session if not provided
         session_id = request.session_id
         if not session_id:
-            settings = request.settings.dict() if request.settings else {}
+            logger.info(f"Creating new session with settings")
+            settings = request.settings.model_dump() if request.settings else {}
+            embedding_model = settings.get('embedding_model', 'NOT_SET')
+            logger.info(f"Embedding model for new session: '{embedding_model}'")
+
             session_info = await get_chat_controller(current_user.id).create_chat_session(
                 user=current_user,
                 settings=settings,
                 db=db
             )
             session_id = session_info["session_id"]
+        else:
+            logger.info(f"Using existing session: {session_id}")
+            if request.settings:
+                embedding_model = request.settings.embedding_model if hasattr(request.settings, 'embedding_model') else 'NOT_SET'
+                logger.info(f"Settings provided for existing session (will be applied): embedding_model='{embedding_model}'")
         
         # Create streaming response
         async def event_stream():
             try:
+                # Prepare settings override if provided
+                settings_override = None
+                if request.settings:
+                    settings_override = request.settings.model_dump()
+                    logger.debug(f"Passing settings override: {settings_override}")
+
                 async for chunk in get_chat_controller(current_user.id).process_chat_message(
                     session_id=session_id,
                     message=request.message,
                     user=current_user,
-                    db=db
+                    db=db,
+                    settings_override=settings_override
                 ):
                     yield chunk
             except Exception as e:
@@ -226,7 +261,7 @@ async def send_chat_message(
         # Create session if not provided
         session_id = request.session_id
         if not session_id:
-            settings = request.settings.dict() if request.settings else {}
+            settings = request.settings.model_dump() if request.settings else {}
             session_info = await get_chat_controller(current_user.id).create_chat_session(
                 user=current_user,
                 settings=settings,
@@ -237,12 +272,18 @@ async def send_chat_message(
         # Collect streaming response
         response_content = ""
         sources = []
-        
+
+        # Prepare settings override if provided
+        settings_override = None
+        if request.settings:
+            settings_override = request.settings.model_dump()
+
         async for chunk in get_chat_controller(current_user.id).process_chat_message(
             session_id=session_id,
             message=request.message,
             user=current_user,
-            db=db
+            db=db,
+            settings_override=settings_override
         ):
             if chunk.startswith("data: "):
                 try:
@@ -259,7 +300,7 @@ async def send_chat_message(
             "session_id": session_id,
             "response": response_content,
             "sources": sources,
-            "timestamp": str(datetime.utcnow())
+            "timestamp": str(datetime.now(timezone.utc))
         }
         
     except Exception as e:
@@ -282,7 +323,7 @@ async def run_model_health_check(
         
         return {
             "health_check_results": health_results,
-            "timestamp": str(datetime.utcnow())
+            "timestamp": str(datetime.now(timezone.utc))
         }
         
     except Exception as e:
@@ -345,7 +386,7 @@ async def cleanup_old_sessions(
         
         return {
             "message": f"Cleaned up sessions older than {max_age_hours} hours",
-            "timestamp": str(datetime.utcnow())
+            "timestamp": str(datetime.now(timezone.utc))
         }
         
     except Exception as e:

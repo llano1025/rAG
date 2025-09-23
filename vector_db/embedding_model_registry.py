@@ -268,7 +268,17 @@ class EmbeddingModelRegistry:
 
     def get_model(self, model_id: str) -> Optional[ModelMetadata]:
         """Get model metadata."""
-        return self.models.get(model_id)
+        logger.debug(f"[EMBEDDING_REGISTRY] Looking up model ID: '{model_id}'")
+        model = self.models.get(model_id)
+
+        if model:
+            logger.debug(f"[EMBEDDING_REGISTRY] Found model - ID: '{model.model_id}', Name: '{model.model_name}', Provider: {model.provider}")
+        else:
+            logger.warning(f"[EMBEDDING_REGISTRY] Model '{model_id}' not found in registry")
+            available_models = list(self.models.keys())
+            logger.warning(f"[EMBEDDING_REGISTRY] Available model IDs: {available_models}")
+
+        return model
 
     def list_models(
         self,

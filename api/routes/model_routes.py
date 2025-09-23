@@ -839,7 +839,7 @@ async def get_available_embedding_models(
         # This could be expanded to dynamically discover models from providers
         available_models = [
             EmbeddingModel(
-                name="sentence-transformers/all-MiniLM-L6-v2",
+                name="hf-minilm-l6-v2",
                 display_name="All-MiniLM-L6-v2",
                 description="Fast and efficient sentence transformer model, 384 dimensions",
                 dimension=384,
@@ -847,7 +847,7 @@ async def get_available_embedding_models(
                 max_length=512
             ),
             EmbeddingModel(
-                name="sentence-transformers/all-mpnet-base-v2",
+                name="hf-mpnet-base-v2",
                 display_name="All-MPNet-Base-v2",
                 description="High quality sentence transformer model, 768 dimensions",
                 dimension=768,
@@ -855,7 +855,7 @@ async def get_available_embedding_models(
                 max_length=514
             ),
             EmbeddingModel(
-                name="intfloat/multilingual-e5-large-instruct",
+                name="hf-e5-large-instruct",
                 display_name="E5-Large-Instruct",
                 description="Multilingual instruction-tuned embedding model, 1024 dimensions",
                 dimension=1024,
@@ -863,7 +863,7 @@ async def get_available_embedding_models(
                 max_length=512
             ),
             EmbeddingModel(
-                name="BAAI/bge-m3",
+                name="hf-bge-m3",
                 display_name="BGE-M3",
                 description="Multilingual embedding model with strong performance, 1024 dimensions",
                 dimension=1024,
@@ -871,10 +871,10 @@ async def get_available_embedding_models(
                 max_length=8192
             ),
             EmbeddingModel(
-                name="Qwen/Qwen3-Embedding-0.6B",
+                name="hf-qwen3-embedding",
                 display_name="Qwen3-Embedding",
-                description="Qwen3 embedding model, 768 dimensions",
-                dimension=768,
+                description="Qwen3 embedding model, 1024 dimensions",
+                dimension=1024,
                 provider="sentence-transformers",
                 max_length=8192
             )

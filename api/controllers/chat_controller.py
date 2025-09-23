@@ -5,7 +5,7 @@ import asyncio
 import logging
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
 from sqlalchemy import and_, or_
@@ -25,8 +25,8 @@ class ChatSession:
         self.user_id = user_id
         self.settings = settings
         self.messages: List[Dict[str, Any]] = []
-        self.created_at = datetime.utcnow()
-        self.last_activity = datetime.utcnow()
+        self.created_at = datetime.now(timezone.utc)
+        self.last_activity = datetime.now(timezone.utc)
 
 class ChatController:
     """Controller for chat functionality with RAG support."""
@@ -110,7 +110,7 @@ class ChatController:
     
     async def _try_recover_session(self, session_id: str, user: User, db: Session) -> Optional[ChatSession]:
         """Try to recover a session from database if not found in memory."""
-        logger.info(f"[CHAT] Attempting to recover session {session_id} from database")
+        logger.info(f"Attempting to recover session {session_id} from database")
         
         try:
             # Load session from database
@@ -126,24 +126,24 @@ class ChatController:
             # Add to active sessions
             self.active_sessions[session_id] = session
             
-            logger.info(f"[CHAT] Successfully recovered session {session_id} for user {user.id}")
+            logger.info(f"Successfully recovered session {session_id} for user {user.id}")
             return session
             
         except Exception as e:
-            logger.error(f"[CHAT] Failed to recover session {session_id}: {str(e)}")
+            logger.error(f"Failed to recover session {session_id}: {str(e)}")
             return None
     
     async def _cleanup_expired_sessions_db(self, db: Session, max_age_hours: int = 24):
         """Clean up expired sessions from database."""
         try:
             from datetime import timedelta
-            cutoff_time = datetime.utcnow() - timedelta(hours=max_age_hours)
+            cutoff_time = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
             
             # Find expired sessions
             expired_sessions = db.query(ChatSessionModel).filter(
                 or_(
                     ChatSessionModel.last_activity < cutoff_time,
-                    ChatSessionModel.expires_at < datetime.utcnow(),
+                    ChatSessionModel.expires_at < datetime.now(timezone.utc),
                     ChatSessionModel.is_active == False
                 )
             ).all()
@@ -458,9 +458,13 @@ class ChatController:
         db: Session
     ) -> Dict[str, Any]:
         """Validate and normalize chat settings."""
+        logger.info(f"Validating settings for user {user.id}")
+        logger.debug(f"Received settings: {settings}")
+
         # Get available LLM models first
         available_llm_models = await self._get_available_llm_model_ids(user, db)
-        
+        logger.debug(f"Available LLM models: {available_llm_models}")
+
         # Default settings - use first available model as default
         default_llm_model = available_llm_models[0] if available_llm_models else "default-llm"
         
@@ -482,7 +486,13 @@ class ChatController:
         }
         
         # Merge with provided settings
+        logger.debug(f"Merging provided settings with defaults")
+        logger.debug(f"Default embedding_model: '{default_settings['embedding_model']}'")
+        logger.debug(f"Provided embedding_model: '{settings.get('embedding_model', 'NOT_PROVIDED')}'")
+
         validated_settings = {**default_settings, **settings}
+
+        logger.info(f"After merge - embedding_model: '{validated_settings['embedding_model']}'")
         
         # Validate LLM model
         if validated_settings["llm_model"] not in available_llm_models:
@@ -497,17 +507,26 @@ class ChatController:
                 )
         
         # Validate embedding model
-        embedding_model = self.embedding_registry.get_model(validated_settings["embedding_model"])
+        requested_embedding_model = validated_settings["embedding_model"]
+        logger.info(f"Validating embedding model: '{requested_embedding_model}'")
+
+        embedding_model = self.embedding_registry.get_model(requested_embedding_model)
         if not embedding_model:
+            logger.warning(f"Embedding model '{requested_embedding_model}' not found, falling back")
             # Fallback to first available model
             available_models = self.embedding_registry.list_models()
             if available_models:
-                validated_settings["embedding_model"] = available_models[0].model_id
+                fallback_model = available_models[0].model_id
+                validated_settings["embedding_model"] = fallback_model
+                logger.info(f"Using fallback embedding model: '{fallback_model}'")
             else:
+                logger.error(f"No embedding models available")
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="No embedding models available"
                 )
+        else:
+            logger.info(f"Embedding model '{requested_embedding_model}' validated successfully")
         
         # Validate numeric parameters
         validated_settings["temperature"] = max(0.0, min(2.0, float(validated_settings["temperature"])))
@@ -528,7 +547,10 @@ class ChatController:
         # Validate boolean settings
         validated_settings["enable_fallback"] = bool(validated_settings["enable_fallback"])
         validated_settings["fallback_threshold"] = max(0, int(validated_settings["fallback_threshold"]))
-        
+
+        logger.info(f"Settings validation completed successfully")
+        logger.debug(f"Final validated settings: {validated_settings}")
+
         return validated_settings
 
     async def process_chat_message(
@@ -536,67 +558,82 @@ class ChatController:
         session_id: str,
         message: str,
         user: User,
-        db: Session
+        db: Session,
+        settings_override: Optional[Dict[str, Any]] = None
     ) -> AsyncGenerator[str, None]:
         """Process a chat message and yield streaming responses."""
-        logger.info(f"[CHAT] Starting message processing - Session: {session_id}, User: {user.id}, Message length: {len(message)}")
+        logger.info(f"Starting message processing - Session: {session_id}, User: {user.id}, Message length: {len(message)}")
         
         try:
             # Get session (try memory first, then database recovery)
-            logger.debug(f"[CHAT] Retrieving session {session_id}")
+            logger.debug(f"Retrieving session {session_id}")
             session = self.active_sessions.get(session_id)
             if not session:
-                logger.info(f"[CHAT] Session {session_id} not found in memory, attempting recovery")
+                logger.info(f"Session {session_id} not found in memory, attempting recovery")
                 session = await self._try_recover_session(session_id, user, db)
                 
                 if not session:
-                    logger.error(f"[CHAT] Session {session_id} not found in memory or database")
+                    logger.error(f"Session {session_id} not found in memory or database")
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
                         detail="Chat session not found"
                     )
             
-            logger.debug(f"[CHAT] Session found - User: {session.user_id}, Settings: {session.settings}")
+            logger.debug(f"Session found - User: {session.user_id}, Settings: {session.settings}")
             
             # Verify session ownership
             if session.user_id != user.id:
-                logger.error(f"[CHAT] Access denied - Session user {session.user_id} != Current user {user.id}")
+                logger.error(f"Access denied - Session user {session.user_id} != Current user {user.id}")
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Access denied to chat session"
                 )
-            
+
+            # Update session settings if override provided
+            if settings_override:
+                logger.info(f"Applying settings override - Original embedding model: {session.settings.get('embedding_model')}")
+                logger.debug(f"Settings override: {settings_override}")
+
+                # Validate and merge new settings
+                validated_override = await self._validate_chat_settings(settings_override, user, db)
+                original_settings = session.settings.copy()
+                session.settings.update(validated_override)
+
+                logger.info(f"Settings updated - New embedding model: {session.settings.get('embedding_model')}")
+                logger.debug(f"Original settings: {original_settings}")
+                logger.debug(f"Updated settings: {session.settings}")
+
             # Update session activity
-            session.last_activity = datetime.utcnow()
-            logger.debug(f"[CHAT] Session activity updated")
+            session.last_activity = datetime.now(timezone.utc)
+            logger.debug(f"Session activity updated")
             
             # Add user message to session
             user_message = {
                 "id": str(uuid.uuid4()),
                 "type": "user",
                 "content": message,
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
             session.messages.append(user_message)
-            logger.info(f"[CHAT] User message added - Total messages: {len(session.messages)}")
+            logger.info(f"User message added - Total messages: {len(session.messages)}")
             
             # Initialize search engine if using RAG
             search_results = []
             if session.settings["use_rag"]:
-                logger.info(f"[CHAT] Starting RAG search - Embedding model: {session.settings['embedding_model']}")
+                logger.info(f"Starting RAG search - Embedding model: {session.settings['embedding_model']}")
                 try:
                     search_results = await self._perform_rag_search(
                         message, session.settings, user, db
                     )
-                    logger.info(f"[CHAT] RAG search completed - Found {len(search_results)} results")
+                    logger.info(f"RAG search completed - Found {len(search_results)} results")
                 except Exception as rag_error:
-                    logger.error(f"[CHAT] RAG search failed: {str(rag_error)}", exc_info=True)
+                    logger.error(f"RAG search failed: {str(rag_error)}", exc_info=True)
                     # Continue without RAG if search fails
                     search_results = []
                 
                 # Send sources information
                 if search_results:
-                    logger.debug(f"[CHAT] Sending sources data for {len(search_results)} results")
+                    logger.debug(f"Sending sources data for {len(search_results)} results")
                     sources_data = {
                         "type": "sources",
                         "sources": [
@@ -607,30 +644,30 @@ class ChatController:
                                 "similarity_score": result["similarity_score"],
                                 "text_snippet": result["text"][:200] + "..." if len(result["text"]) > 200 else result["text"]
                             }
-                            for result in search_results[:session.settings["top_k_documents"]]
+                            for result in search_results[:session.settings.get("max_results", 20)]
                         ]
                     }
                     yield f"data: {json.dumps(sources_data)}\n\n"
-                    logger.debug(f"[CHAT] Sources data sent successfully")
+                    logger.debug(f"Sources data sent successfully")
             else:
-                logger.info(f"[CHAT] RAG disabled for this session")
+                logger.info(f"RAG disabled for this session")
             
             # Prepare context for LLM
-            logger.info(f"[CHAT] Preparing LLM context - RAG results: {len(search_results)}")
+            logger.info(f"Preparing LLM context - RAG results: {len(search_results)}")
             context = self._prepare_llm_context(message, search_results, session)
             context_length = len(context)
-            logger.info(f"[CHAT] Context prepared - Length: {context_length} chars")
+            logger.info(f"Context prepared - Length: {context_length} chars")
             
             # Generate response using selected LLM
             llm_model = session.settings["llm_model"]
-            logger.info(f"[CHAT] Starting LLM generation - Model: {llm_model}, Stream: True")
+            logger.info(f"Starting LLM generation - Model: {llm_model}, Stream: True")
             
             # Ensure model is registered in model manager if it's a database model
             if llm_model.startswith("registered_"):
-                logger.info(f"[CHAT] Ensuring database model {llm_model} is registered in model manager")
+                logger.info(f"Ensuring database model {llm_model} is registered in model manager")
                 model_registered = await self._ensure_model_registered(llm_model, user, db)
                 if not model_registered:
-                    logger.error(f"[CHAT] Failed to register database model {llm_model}")
+                    logger.error(f"Failed to register database model {llm_model}")
                     error_data = {
                         "type": "error",
                         "error": f"Model {llm_model} could not be loaded. Please try a different model.",
@@ -639,14 +676,14 @@ class ChatController:
                     yield f"data: {json.dumps(error_data)}\n\n"
                     return
                 else:
-                    logger.info(f"[CHAT] Database model {llm_model} successfully registered")
+                    logger.info(f"Database model {llm_model} successfully registered")
             
             response_content = ""
             chunk_count = 0
             
             try:
                 # Get the async generator by awaiting the coroutine
-                logger.info(f"[CHAT] Getting streaming generator from model manager")
+                logger.info(f"Getting streaming generator from model manager")
                 generator = None
                 
                 try:
@@ -655,10 +692,10 @@ class ChatController:
                         model_id=llm_model,
                         stream=True
                     )
-                    logger.info(f"[CHAT] Successfully obtained generator from model manager")
+                    logger.info(f"Successfully obtained generator from model manager")
                     
                 except Exception as model_error:
-                    logger.error(f"[CHAT] Failed to get generator from model manager: {str(model_error)}", exc_info=True)
+                    logger.error(f"Failed to get generator from model manager: {str(model_error)}", exc_info=True)
                     
                     # Use the specific error message from the model manager (no fallback)
                     error_message = str(model_error)
@@ -687,7 +724,7 @@ class ChatController:
                         "error": error_message,
                         "error_code": error_code,
                         "model": llm_model,
-                        "timestamp": datetime.utcnow().isoformat(),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
                         "suggestions": self._get_model_error_suggestions(error_code, llm_model)
                     }
                     yield f"data: {json.dumps(error_data)}\n\n"
@@ -695,7 +732,7 @@ class ChatController:
                 
                 # Verify we got a valid async generator
                 if generator is None:
-                    logger.error(f"[CHAT] Generator is None from model manager")
+                    logger.error(f"Generator is None from model manager")
                     error_data = {
                         "type": "error",
                         "error": "Failed to initialize LLM response generator",
@@ -705,7 +742,7 @@ class ChatController:
                     return
                 
                 if not hasattr(generator, '__aiter__'):
-                    logger.error(f"[CHAT] Expected async generator, got {type(generator)}")
+                    logger.error(f"Expected async generator, got {type(generator)}")
                     error_data = {
                         "type": "error",
                         "error": "Invalid response format from LLM service",
@@ -716,7 +753,7 @@ class ChatController:
                     return
                 
                 # Now iterate over the async generator
-                logger.info(f"[CHAT] Starting to iterate over streaming generator")
+                logger.info(f"Starting to iterate over streaming generator")
                 
                 try:
                     async for chunk in generator:
@@ -731,9 +768,9 @@ class ChatController:
                             
                             # Log every 10th chunk to avoid spam
                             if chunk_count % 10 == 0:
-                                logger.debug(f"[CHAT] Streamed {chunk_count} chunks, total length: {len(response_content)}")
+                                logger.debug(f"Streamed {chunk_count} chunks, total length: {len(response_content)}")
                         else:
-                            logger.warning(f"[CHAT] Received non-string chunk: {type(chunk)} - {chunk}")
+                            logger.warning(f"Received non-string chunk: {type(chunk)} - {chunk}")
                             # Try to convert to string if possible
                             try:
                                 chunk_str = str(chunk)
@@ -745,12 +782,12 @@ class ChatController:
                                     }
                                     yield f"data: {json.dumps(chunk_data)}\n\n"
                             except Exception as convert_error:
-                                logger.warning(f"[CHAT] Failed to convert chunk to string: {convert_error}")
+                                logger.warning(f"Failed to convert chunk to string: {convert_error}")
                     
-                    logger.info(f"[CHAT] LLM generation completed - Total chunks: {chunk_count}, Response length: {len(response_content)}")
+                    logger.info(f"LLM generation completed - Total chunks: {chunk_count}, Response length: {len(response_content)}")
                     
                 except asyncio.CancelledError:
-                    logger.info(f"[CHAT] LLM generation was cancelled by client")
+                    logger.info(f"LLM generation was cancelled by client")
                     error_data = {
                         "type": "error",
                         "error": "Response generation was cancelled",
@@ -760,7 +797,7 @@ class ChatController:
                     return
                     
                 except Exception as stream_error:
-                    logger.error(f"[CHAT] Error during streaming: {str(stream_error)}", exc_info=True)
+                    logger.error(f"Error during streaming: {str(stream_error)}", exc_info=True)
                     
                     # Determine error type for better messages
                     error_message = "Streaming error occurred"
@@ -783,7 +820,7 @@ class ChatController:
                     return
                 
             except Exception as llm_error:
-                logger.error(f"[CHAT] LLM generation failed: {str(llm_error)}", exc_info=True)
+                logger.error(f"LLM generation failed: {str(llm_error)}", exc_info=True)
                 
                 # Determine appropriate error message and code based on error type
                 error_str = str(llm_error)
@@ -820,19 +857,19 @@ class ChatController:
                 "id": str(uuid.uuid4()),
                 "type": "assistant",
                 "content": response_content,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "model": session.settings["llm_model"],
                 "sources": search_results[:session.settings["top_k_documents"]] if search_results else []
             }
             session.messages.append(assistant_message)
-            logger.info(f"[CHAT] Assistant message added - ID: {assistant_message['id']}, Total messages: {len(session.messages)}")
+            logger.info(f"Assistant message added - ID: {assistant_message['id']}, Total messages: {len(session.messages)}")
             
             # Save updated session to database
             try:
                 await self._save_session_to_db(session, db)
-                logger.debug(f"[CHAT] Session {session_id} saved to database after message")
+                logger.debug(f"Session {session_id} saved to database after message")
             except Exception as save_error:
-                logger.error(f"[CHAT] Failed to save session to database: {str(save_error)}")
+                logger.error(f"Failed to save session to database: {str(save_error)}")
             
             # Send completion signal
             completion_data = {
@@ -840,7 +877,7 @@ class ChatController:
                 "message_id": assistant_message["id"]
             }
             yield f"data: {json.dumps(completion_data)}\n\n"
-            logger.info(f"[CHAT] Completion signal sent successfully")
+            logger.info(f"Completion signal sent successfully")
             
             # Log the interaction
             try:
@@ -858,14 +895,14 @@ class ChatController:
                     },
                     db=db
                 )
-                logger.debug(f"[CHAT] User action logged successfully")
+                logger.debug(f"User action logged successfully")
             except Exception as log_error:
-                logger.error(f"[CHAT] Failed to log user action: {str(log_error)}")
+                logger.error(f"Failed to log user action: {str(log_error)}")
             
-            logger.info(f"[CHAT] Message processing completed successfully - Session: {session_id}")
+            logger.info(f"Message processing completed successfully - Session: {session_id}")
             
         except Exception as e:
-            logger.error(f"[CHAT] Failed to process chat message: {str(e)}", exc_info=True)
+            logger.error(f"Failed to process chat message: {str(e)}", exc_info=True)
             error_data = {
                 "type": "error",
                 "error": str(e)
@@ -884,48 +921,65 @@ class ChatController:
         start_time = time.time()
 
         search_type = settings.get("search_type", "semantic")
-        logger.info(f"[RAG_SEARCH] Starting RAG search - User: {user.id}, Query: '{query[:100]}...', Search type: {search_type}, Top-k: {settings.get('top_k_documents', 5)}")
+        logger.info(f"Starting RAG search - User: {user.id}, Query: '{query[:100]}...', Search type: {search_type}, Top-k: {settings.get('max_results', 20)}")
 
         try:
             # Initialize search engine if needed
             if not self.search_engine:
-                logger.debug(f"[RAG_SEARCH] Initializing search engine")
+                logger.debug(f"Initializing search engine")
                 from vector_db.storage_manager import VectorStorageManager
                 from vector_db.embedding_manager import EnhancedEmbeddingManager
 
                 storage_manager = VectorStorageManager()
 
                 # Create embedding manager based on settings
-                embedding_model = self.embedding_registry.get_model(settings["embedding_model"])
+                requested_model_id = settings["embedding_model"]
+                logger.info(f"Requested embedding model ID: '{requested_model_id}'")
+
+                embedding_model = self.embedding_registry.get_model(requested_model_id)
                 if not embedding_model:
-                    logger.error(f"[RAG_SEARCH] Embedding model {settings['embedding_model']} not found")
+                    logger.error(f"Embedding model '{requested_model_id}' not found in registry")
+                    available_models = self.embedding_registry.list_models()
+                    logger.error(f"Available models: {[m.model_id for m in available_models]}")
                     return []
 
+                logger.info(f"Resolved embedding model - ID: '{embedding_model.model_id}', Name: '{embedding_model.model_name}', Provider: {embedding_model.provider}")
+
                 # Create appropriate embedding manager
+                logger.info(f"Creating HuggingFace manager with model: '{embedding_model.model_name}'")
                 embedding_manager = EnhancedEmbeddingManager.create_huggingface_manager(
                     embedding_model.model_name
                 )
                 self.search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
-                logger.info(f"[RAG_SEARCH] Search engine initialized successfully")
+                logger.info(f"Search engine initialized successfully")
 
             # Use search_with_context with the selected search type
-            logger.info(f"[RAG_SEARCH] Using search_with_context with search type: {search_type}")
+            logger.info(f"Using search_with_context with search type: {search_type}")
             search_start = time.time()
 
             search_results = await self.search_engine.search_with_context(
                 query=query,
                 search_type=search_type,
                 user_id=user.id,
-                top_k=settings.get("top_k_documents", 20),
+                top_k=settings.get("max_results", 20),
                 db=db,
                 enable_reranking=settings.get("enable_reranking", False),
                 reranker_model=settings.get("reranker_model"),
                 rerank_score_weight=settings.get("rerank_score_weight", 0.5),
-                min_rerank_score=settings.get("min_rerank_score")
+                min_rerank_score=settings.get("min_rerank_score"),
+                # Filter parameters for search
+                tags=settings.get("tags"),
+                tag_match_mode=settings.get("tag_match_mode"),
+                exclude_tags=settings.get("exclude_tags"),
+                file_type=settings.get("file_type"),
+                language=settings.get("language"),
+                is_public=settings.get("is_public"),
+                min_score=settings.get("min_score"),
+                file_size_range=settings.get("file_size_range")
             )
 
             search_time = (time.time() - search_start) * 1000
-            logger.info(f"[RAG_SEARCH] Search with context completed in {search_time:.2f}ms, found {len(search_results)} results")
+            logger.info(f"Search with context completed in {search_time:.2f}ms, found {len(search_results)} results")
 
             # Format results for chat controller compatibility
             formatted_results = []
@@ -958,13 +1012,13 @@ class ChatController:
                     formatted_results.append(formatted_result)
 
             total_time = (time.time() - start_time) * 1000
-            logger.info(f"[RAG_SEARCH] RAG search completed in {total_time:.2f}ms - Returning {len(formatted_results)} results")
+            logger.info(f"RAG search completed in {total_time:.2f}ms - Returning {len(formatted_results)} results")
 
             return formatted_results
 
         except Exception as e:
             total_time = (time.time() - start_time) * 1000
-            logger.error(f"[RAG_SEARCH] RAG search failed after {total_time:.2f}ms: {str(e)}", exc_info=True)
+            logger.error(f"RAG search failed after {total_time:.2f}ms: {str(e)}", exc_info=True)
             return []
 
     def _prepare_llm_context(
@@ -974,6 +1028,8 @@ class ChatController:
         session: ChatSession
     ) -> str:
         """Prepare context for LLM including RAG results and conversation history."""
+        logger.info(f"Preparing context - Search results: {len(search_results)}, Message: '{current_message[:100]}...'")
+
         # Start with system message
         context_parts = [
             "You are a helpful AI assistant with access to document knowledge.",
@@ -981,14 +1037,40 @@ class ChatController:
             "If you cannot find relevant information in the documents, say so clearly.",
             ""
         ]
-        
+
         # Add document context if available
         if search_results:
-            context_parts.append("Relevant document excerpts:")
-            for i, result in enumerate(search_results, 1):
-                context_parts.append(f"{i}. From '{result['filename']}':")
-                context_parts.append(f"   {result['text']}")
+            logger.info(f"Adding {len(search_results)} search results to context")
+
+            # Validate and filter search results
+            valid_results = []
+            for result in search_results:
+                if result.get('text') and len(result['text'].strip()) > 20:  # At least 20 characters
+                    valid_results.append(result)
+                else:
+                    logger.warning(f"Skipping invalid result from '{result.get('filename', 'unknown')}' - text too short or empty")
+
+            if valid_results:
+                context_parts.append("Relevant document excerpts:")
+                for i, result in enumerate(valid_results, 1):
+                    # Log each search result for debugging
+                    score = result.get('similarity_score', 'N/A')
+                    text_length = len(result['text'])
+                    logger.debug(f"Result {i}: File='{result['filename']}', Score={score}, Text_length={text_length}")
+                    logger.debug(f"Result {i} text preview: '{result['text'][:200]}...'")
+
+                    # Improved formatting with score and metadata
+                    context_parts.append(f"{i}. From '{result['filename']}' (relevance: {score}):")
+                    context_parts.append(f"   {result['text'].strip()}")
+                    context_parts.append("")
+
+                logger.info(f"Added {len(valid_results)} valid results out of {len(search_results)} total")
+            else:
+                logger.warning(f"No valid search results found - all results were too short or empty")
+                context_parts.append("No relevant document excerpts found.")
                 context_parts.append("")
+        else:
+            logger.warning(f"No search results provided to context preparation")
         
         # Add recent conversation history (last 4 messages)
         recent_messages = session.messages[-4:] if len(session.messages) > 4 else session.messages
@@ -1003,8 +1085,12 @@ class ChatController:
         context_parts.append(f"Current question: {current_message}")
         context_parts.append("")
         context_parts.append("Please provide a helpful and accurate response:")
-        
-        return "\n".join(context_parts)
+
+        final_context = "\n".join(context_parts)
+        logger.info(f"Context preparation completed - Total length: {len(final_context)} chars")
+        logger.debug(f"Final context preview: '{final_context[:500]}...'")
+
+        return final_context
 
     async def get_chat_history(
         self,
@@ -1151,7 +1237,7 @@ class ChatController:
         """Clean up old inactive sessions from both memory and database."""
         try:
             # Clean up memory sessions
-            current_time = datetime.utcnow()
+            current_time = datetime.now(timezone.utc)
             memory_sessions_to_remove = []
             
             for session_id, session in self.active_sessions.items():

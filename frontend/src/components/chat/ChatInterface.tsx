@@ -77,7 +77,7 @@ interface ChatSessionInfo {
 const DEFAULT_SETTINGS: ChatSettings = {
   llm_model: 'openai-gpt35',
   embedding_model: 'hf-minilm-l6-v2',
-  temperature: 0.7,
+  temperature: 1,
   max_tokens: 2048,
   use_rag: true,
   search_type: 'contextual',
@@ -239,6 +239,14 @@ const ChatInterface: React.FC = () => {
         message: userMessage.content,
         sessionId: sessionInfo?.session_id,
         settings: settings
+      });
+
+      // Debug logging for embedding model specifically
+      console.log('[CHAT_UI] Embedding model setting:', {
+        embedding_model: settings.embedding_model,
+        use_rag: settings.use_rag,
+        search_type: settings.search_type,
+        max_results: settings.max_results
       });
 
       const stream = await chatApi.streamMessage(
