@@ -923,6 +923,15 @@ class ChatController:
         search_type = settings.get("search_type", "semantic")
         logger.info(f"Starting RAG search - User: {user.id}, Query: '{query[:100]}...', Search type: {search_type}, Top-k: {settings.get('max_results', 20)}")
 
+        # Debug: Log all settings received
+        logger.info(f"RAG search settings received: {settings}")
+
+        # Debug: Log specific tag-related settings
+        tags_setting = settings.get("tags")
+        tag_match_mode_setting = settings.get("tag_match_mode")
+        exclude_tags_setting = settings.get("exclude_tags")
+        logger.info(f"Tag filtering settings - tags: {tags_setting}, tag_match_mode: {tag_match_mode_setting}, exclude_tags: {exclude_tags_setting}")
+
         try:
             # Initialize search engine if needed
             if not self.search_engine:

@@ -94,7 +94,7 @@ const DEFAULT_SETTINGS: ChatSettings = {
   language: '',
   is_public: undefined,
   max_results: 20,
-  min_score: 0.1,
+  min_score: 0.5,
 };
 
 const ChatInterface: React.FC = () => {

@@ -27,6 +27,25 @@ class ChatSettings(BaseModel):
     search_type: str = Field(default="semantic", description="Type of search (semantic, hybrid, basic)")
     top_k_documents: int = Field(default=5, ge=1, le=20, description="Number of documents to retrieve")
 
+    # Search filter settings (missing fields that frontend sends)
+    tags: Optional[list] = Field(default=[], description="Tags to filter by")
+    tag_match_mode: str = Field(default="any", description="Tag matching mode (any, all, exact)")
+    exclude_tags: Optional[list] = Field(default=[], description="Tags to exclude")
+    file_type: Optional[list] = Field(default=[], description="File types to filter by")
+    language: Optional[str] = Field(default=None, description="Language filter")
+    languages: Optional[list] = Field(default=[], description="Languages filter (array)")
+    is_public: Optional[bool] = Field(default=None, description="Public/private filter")
+    min_score: Optional[float] = Field(default=None, description="Minimum similarity score")
+    max_results: int = Field(default=20, description="Maximum number of results")
+    file_size_range: Optional[list] = Field(default=None, description="File size range filter")
+    date_range: Optional[dict] = Field(default=None, description="Date range filter")
+
+    # Reranker settings
+    enable_reranking: Optional[bool] = Field(default=False, description="Enable reranking")
+    reranker_model: Optional[str] = Field(default=None, description="Reranker model to use")
+    rerank_score_weight: Optional[float] = Field(default=0.5, description="Reranker score weight")
+    min_rerank_score: Optional[float] = Field(default=None, description="Minimum rerank score")
+
 class CreateSessionRequest(BaseModel):
     """Request to create a new chat session."""
     settings: Optional[ChatSettings] = None
