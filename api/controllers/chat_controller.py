@@ -8,14 +8,12 @@ import uuid
 from datetime import datetime
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
-from sqlalchemy import and_, or_, desc
+from sqlalchemy import and_, or_
 
-from database.models import User, Document, DocumentChunk, ChatSessionModel, RegisteredModel
+from database.models import User, Document, ChatSessionModel, RegisteredModel
 from llm.factory import create_model_manager_with_registered_models_sync
-from vector_db.embedding_manager import EnhancedEmbeddingManager
 from vector_db.embedding_model_registry import get_embedding_model_registry, EmbeddingProvider
 from vector_db.search_engine import EnhancedSearchEngine
-from database.connection import get_db
 from utils.security.audit_logger import log_user_action
 
 logger = logging.getLogger(__name__)
@@ -36,7 +34,7 @@ class ChatController:
     def __init__(self, user_id: Optional[int] = None):
         self.model_manager = create_model_manager_with_registered_models_sync(user_id)
         self.embedding_registry = get_embedding_model_registry()
-        self.search_engine = None  # Will be initialized per request
+        self.search_engine = None  # Will be initialized as needed using shared infrastructure
         self.active_sessions: Dict[str, ChatSession] = {}
     
     async def _save_session_to_db(self, session: ChatSession, db: Session):
@@ -881,500 +879,73 @@ class ChatController:
         user: User,
         db: Session
     ) -> List[Dict[str, Any]]:
-        """Perform RAG search to find relevant documents with fallback and comprehensive logging."""
+        """Perform RAG search using search_with_context with direct method selection."""
         import time
         start_time = time.time()
-        
-        logger.info(f"[RAG_SEARCH] Starting RAG search - User: {user.id}, Query: '{query[:100]}...', Search type: {settings.get('search_type', 'hybrid')}, Top-k: {settings.get('top_k_documents', 5)}")
-        
-        # Get search type for enhanced search engine
-        search_type = settings.get("search_type", "hybrid")
-        logger.info(f"[RAG_SEARCH] Using search type: {search_type}")
-        
-        # If hybrid search is requested, use the dedicated hybrid method
-        if search_type == "hybrid":
-            return await self._perform_hybrid_rag_search(query, settings, user, db)
-        
+
+        search_type = settings.get("search_type", "semantic")
+        logger.info(f"[RAG_SEARCH] Starting RAG search - User: {user.id}, Query: '{query[:100]}...', Search type: {search_type}, Top-k: {settings.get('top_k_documents', 5)}")
+
         try:
-            # Create embedding manager for the selected model
-            embedding_model = self.embedding_registry.get_model(settings["embedding_model"])
-            if not embedding_model:
-                logger.error(f"[RAG_SEARCH] Embedding model {settings['embedding_model']} not found - available models: {[m.model_id for m in self.embedding_registry.list_models()]}")
-                return await self._fallback_to_text_search(query, user, db, settings)
-            
-            logger.info(f"[RAG_SEARCH] Using embedding model: {embedding_model.model_name} (provider: {embedding_model.provider.value})")
-            
-            # Create appropriate embedding manager
-            embedding_manager = None
-            try:
-                if embedding_model.provider == EmbeddingProvider.HUGGINGFACE:
-                    logger.debug(f"[RAG_SEARCH] Creating HuggingFace embedding manager")
-                    embedding_manager = EnhancedEmbeddingManager.create_huggingface_manager(
-                        embedding_model.model_name
-                    )
-                elif embedding_model.provider == EmbeddingProvider.OLLAMA:
-                    logger.debug(f"[RAG_SEARCH] Creating Ollama embedding manager")
-                    embedding_manager = EnhancedEmbeddingManager.create_ollama_manager(
-                        model_name=embedding_model.model_name
-                    )
-                elif embedding_model.provider == EmbeddingProvider.OPENAI:
-                    logger.debug(f"[RAG_SEARCH] Creating OpenAI embedding manager")
-                    from config import get_settings
-                    settings_config = get_settings()
-                    if not settings_config.OPENAI_API_KEY:
-                        logger.error(f"[RAG_SEARCH] OpenAI API key not configured")
-                        return await self._fallback_to_text_search(query, user, db, settings)
-                    embedding_manager = EnhancedEmbeddingManager.create_openai_manager(
-                        api_key=settings_config.OPENAI_API_KEY,
-                        model_name=embedding_model.model_name
-                    )
-                else:
-                    logger.error(f"[RAG_SEARCH] Unsupported embedding provider: {embedding_model.provider}")
-                    return await self._fallback_to_text_search(query, user, db, settings)
-            except Exception as e:
-                logger.error(f"[RAG_SEARCH] Failed to create embedding manager: {str(e)}")
-                return await self._fallback_to_text_search(query, user, db, settings)
-            
-            # Initialize search engine
-            try:
-                if not self.search_engine:
-                    logger.debug(f"[RAG_SEARCH] Initializing search engine")
-                    from vector_db.storage_manager import VectorStorageManager
-                    storage_manager = VectorStorageManager()
-                    self.search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
-                    logger.info(f"[RAG_SEARCH] Search engine initialized successfully")
-            except Exception as e:
-                logger.error(f"[RAG_SEARCH] Failed to initialize search engine: {str(e)}")
-                return await self._fallback_to_text_search(query, user, db, settings)
-            
-            # Perform search
-            logger.info(f"[RAG_SEARCH] Starting vector search with search engine")
-            vector_search_start = time.time()
-            
-            try:
-                search_results = await self.search_engine.search_with_context(
-                    query=query,
-                    search_type=settings["search_type"],
-                    user_id=user.id,
-                    top_k=settings["top_k_documents"] * 2,  # Get more results for filtering
-                    db=db,
-                    enable_reranking=settings.get("enable_reranking", False),
-                    reranker_model=settings.get("reranker_model"),
-                    rerank_score_weight=settings.get("rerank_score_weight", 0.5),
-                    min_rerank_score=settings.get("min_rerank_score")
-                )
-                
-                vector_search_time = (time.time() - vector_search_start) * 1000
-                logger.info(f"[RAG_SEARCH] Vector search completed in {vector_search_time:.2f}ms, found {len(search_results)} results")
-                
-                # Log search result details
-                if search_results:
-                    avg_score = sum(r.get('similarity_score', 0) for r in search_results) / len(search_results)
-                    max_score = max(r.get('similarity_score', 0) for r in search_results)
-                    min_score = min(r.get('similarity_score', 0) for r in search_results)
-                    logger.debug(f"[RAG_SEARCH] Score stats - Avg: {avg_score:.4f}, Max: {max_score:.4f}, Min: {min_score:.4f}")
-                else:
-                    logger.warning(f"[RAG_SEARCH] Vector search returned no results for query: '{query}'")
-                    
-            except Exception as e:
-                logger.error(f"[RAG_SEARCH] Vector search failed: {str(e)}", exc_info=True)
-                return await self._fallback_to_text_search(query, user, db, settings)
-            
-            # Format results with detailed logging
-            logger.debug(f"[RAG_SEARCH] Formatting {len(search_results)} search results")
-            formatted_results = []
-            
-            for i, result in enumerate(search_results):
-                # Get document info
-                document_id = result.get("document_id")
-                logger.debug(f"[RAG_SEARCH] Processing result {i+1}: document_id={document_id}, score={result.get('similarity_score', 0):.4f}")
-                
-                if not document_id:
-                    logger.warning(f"[RAG_SEARCH] Result {i+1} missing document_id, skipping")
-                    continue
-                
-                document = db.query(Document).filter(
-                    and_(
-                        Document.id == document_id,
-                        Document.user_id == user.id,
-                        Document.is_deleted == False
-                    )
-                ).first()
-                
-                if document:
-                    chunk_text = result.get("text", "")
-                    formatted_result = {
-                        "document_id": document.id,
-                        "filename": document.filename,
-                        "chunk_id": result.get("chunk_id", ""),
-                        "text": chunk_text,
-                        "similarity_score": result.get("similarity_score", 0.0),
-                        "metadata": result.get("metadata", {})
-                    }
-                    formatted_results.append(formatted_result)
-                    
-                    # Log chunk content for debugging
-                    logger.debug(f"[RAG_SEARCH] Added result: {document.filename}, chunk_text_length={len(chunk_text)}, text_preview='{chunk_text[:100]}...'")
-                else:
-                    logger.warning(f"[RAG_SEARCH] Document {document_id} not found or not accessible for user {user.id}")
-            
-            final_results = formatted_results[:settings["top_k_documents"]]
-            total_time = (time.time() - start_time) * 1000
-            
-            logger.info(f"[RAG_SEARCH] RAG search completed in {total_time:.2f}ms - Returning {len(final_results)} results from {len(formatted_results)} candidates")
-            
-            # Check if we should try fallback search
-            should_fallback = (
-                settings.get("enable_fallback", True) and 
-                len(final_results) < settings.get("fallback_threshold", 1)
-            )
-            
-            if should_fallback:
-                logger.warning(f"[RAG_SEARCH] Found {len(final_results)} results (below threshold {settings.get('fallback_threshold', 1)}), trying fallback text search")
-                return await self._fallback_to_text_search(query, user, db, settings)
-            
-            return final_results
-            
-        except Exception as e:
-            total_time = (time.time() - start_time) * 1000
-            logger.error(f"[RAG_SEARCH] RAG search failed after {total_time:.2f}ms: {str(e)}", exc_info=True)
-            
-            # Try fallback search as last resort if enabled
-            if settings.get("enable_fallback", True):
-                logger.info(f"[RAG_SEARCH] Attempting fallback text search due to error")
-                try:
-                    return await self._fallback_to_text_search(query, user, db, settings)
-                except Exception as fallback_error:
-                    logger.error(f"[RAG_SEARCH] Fallback search also failed: {str(fallback_error)}")
+            # Initialize search engine if needed
+            if not self.search_engine:
+                logger.debug(f"[RAG_SEARCH] Initializing search engine")
+                from vector_db.storage_manager import VectorStorageManager
+                from vector_db.embedding_manager import EnhancedEmbeddingManager
+
+                storage_manager = VectorStorageManager()
+
+                # Create embedding manager based on settings
+                embedding_model = self.embedding_registry.get_model(settings["embedding_model"])
+                if not embedding_model:
+                    logger.error(f"[RAG_SEARCH] Embedding model {settings['embedding_model']} not found")
                     return []
-            else:
-                logger.info(f"[RAG_SEARCH] Fallback search is disabled, returning empty results")
-                return []
 
-    async def _fallback_to_text_search(
-        self,
-        query: str,
-        user: User,
-        db: Session,
-        settings: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
-        """
-        Fallback to text-based search when vector search fails or returns no results.
-        Uses similar logic to the search controller's text search functionality.
-        """
-        import time
-        start_time = time.time()
-        
-        logger.info(f"[RAG_FALLBACK] Starting text search fallback for user {user.id}, query: '{query[:100]}...'")
-        
-        try:
-            from sqlalchemy import or_, and_
-            
-            # Build base query for accessible documents
-            base_query = db.query(Document).filter(
-                and_(
-                    Document.is_deleted == False,
-                    Document.status == 'completed',
-                    or_(
-                        Document.user_id == user.id,  # User's own documents
-                        Document.is_public == True     # Public documents
-                    )
-                )
-            )
-            
-            logger.debug(f"[RAG_FALLBACK] Built base query for accessible documents")
-            
-            # Apply text search if query provided
-            if query and query.strip():
-                query_cleaned = query.strip()
-                logger.info(f"[RAG_FALLBACK] Applying text search for query: '{query_cleaned}'")
-                
-                # Create text search conditions
-                search_conditions = []
-                
-                # Search in extracted_text (main content) - case insensitive
-                if query_cleaned:
-                    search_conditions.append(
-                        Document.extracted_text.ilike(f"%{query_cleaned}%")
-                    )
-                    # Search in title
-                    search_conditions.append(
-                        Document.title.ilike(f"%{query_cleaned}%")
-                    )
-                    # Search in filename
-                    search_conditions.append(
-                        Document.filename.ilike(f"%{query_cleaned}%")
-                    )
-                    # Search in description
-                    search_conditions.append(
-                        Document.description.ilike(f"%{query_cleaned}%")
-                    )
-                
-                if search_conditions:
-                    base_query = base_query.filter(or_(*search_conditions))
-                    logger.debug(f"[RAG_FALLBACK] Added {len(search_conditions)} text search conditions")
-            
-            # Execute query and get results
-            documents = base_query.limit(settings.get("top_k_documents", 5) * 2).all()
-            logger.info(f"[RAG_FALLBACK] Found {len(documents)} matching documents")
-            
-            # Convert to search result format with relevance scoring
-            search_results = []
-            for doc in documents:
-                # Calculate relevance score based on text matches
-                score = self._calculate_text_relevance_score(doc, query)
-                
-                # Extract content snippet with highlighting context
-                content_snippet = self._extract_content_snippet(doc, query)
-                
-                search_result = {
-                    "document_id": doc.id,
-                    "filename": doc.filename,
-                    "chunk_id": f"fallback_{doc.id}",  # Use fallback identifier
-                    "text": content_snippet,
-                    "similarity_score": score,
-                    "metadata": {
-                        "title": doc.title,
-                        "content_type": doc.content_type,
-                        "file_size": doc.file_size,
-                        "created_at": doc.created_at.isoformat() if doc.created_at else None,
-                        "language": doc.language,
-                        "description": doc.description,
-                        "search_type": "text_fallback"
-                    }
-                }
-                search_results.append(search_result)
-                
-                logger.debug(f"[RAG_FALLBACK] Added result: {doc.filename}, score={score:.4f}, snippet_length={len(content_snippet)}")
-            
-            # Sort results by relevance score (highest first)
-            search_results.sort(key=lambda x: x['similarity_score'], reverse=True)
-            
-            # Return top results
-            final_results = search_results[:settings.get("top_k_documents", 5)]
-            total_time = (time.time() - start_time) * 1000
-            
-            logger.info(f"[RAG_FALLBACK] Text search fallback completed in {total_time:.2f}ms - Returning {len(final_results)} results")
-            
-            return final_results
-            
-        except Exception as e:
-            total_time = (time.time() - start_time) * 1000
-            logger.error(f"[RAG_FALLBACK] Text search fallback failed after {total_time:.2f}ms: {str(e)}", exc_info=True)
-            return []
-
-    def _calculate_text_relevance_score(self, document: Document, query: str) -> float:
-        """Calculate relevance score for a document based on text matches."""
-        if not query or not query.strip():
-            return 0.5  # Default score for no query
-        
-        query_lower = query.lower().strip()
-        score = 0.0
-        
-        try:
-            # Title matches (highest weight)
-            if document.title and query_lower in document.title.lower():
-                score += 0.4
-                # Exact title match gets bonus
-                if query_lower == document.title.lower():
-                    score += 0.2
-            
-            # Filename matches (high weight)
-            if document.filename and query_lower in document.filename.lower():
-                score += 0.3
-            
-            # Description matches (medium weight)
-            if document.description and query_lower in document.description.lower():
-                score += 0.2
-            
-            # Content matches (lower weight but can accumulate)
-            if document.extracted_text:
-                content_lower = document.extracted_text.lower()
-                # Count occurrences in content
-                match_count = content_lower.count(query_lower)
-                if match_count > 0:
-                    # Diminishing returns for multiple matches
-                    content_score = min(0.3, match_count * 0.05)
-                    score += content_score
-            
-            # Ensure score is between 0 and 1
-            score = min(1.0, max(0.1, score))
-            
-        except Exception as e:
-            logger.warning(f"[RAG_FALLBACK] Error calculating relevance score for document {document.id}: {e}")
-            score = 0.1  # Minimal score for errors
-        
-        return score
-
-    def _extract_content_snippet(self, document: Document, query: str, max_length: int = 300) -> str:
-        """Extract a relevant content snippet with context around query matches."""
-        if not document.extracted_text:
-            # Fallback to title or description
-            if document.title:
-                return document.title[:max_length]
-            elif document.description:
-                return document.description[:max_length]
-            else:
-                return f"Document: {document.filename}"
-        
-        content = document.extracted_text
-        
-        # If no query, return beginning of content
-        if not query or not query.strip():
-            return content[:max_length] + ("..." if len(content) > max_length else "")
-        
-        query_lower = query.lower().strip()
-        content_lower = content.lower()
-        
-        # Find the first occurrence of the query
-        match_pos = content_lower.find(query_lower)
-        
-        if match_pos == -1:
-            # No match found, return beginning
-            return content[:max_length] + ("..." if len(content) > max_length else "")
-        
-        # Extract context around the match
-        context_start = max(0, match_pos - 100)  # 100 chars before
-        context_end = min(len(content), match_pos + len(query) + 200)  # 200 chars after
-        
-        snippet = content[context_start:context_end]
-        
-        # Add ellipsis if we're not at the beginning/end
-        if context_start > 0:
-            snippet = "..." + snippet
-        if context_end < len(content):
-            snippet = snippet + "..."
-        
-        # Truncate if still too long
-        if len(snippet) > max_length:
-            snippet = snippet[:max_length-3] + "..."
-        
-        return snippet
-
-    async def _perform_hybrid_rag_search(
-        self,
-        query: str,
-        settings: Dict[str, Any],
-        user: User,
-        db: Session
-    ) -> List[Dict[str, Any]]:
-        """
-        Perform hybrid RAG search combining vector search and text search.
-        This provides the best of both worlds - semantic understanding and exact keyword matching.
-        """
-        import time
-        start_time = time.time()
-        
-        logger.info(f"[RAG_HYBRID] Starting hybrid RAG search - User: {user.id}, Query: '{query[:100]}...'")
-        
-        try:
-            # Run both vector search and text search concurrently
-            vector_task = asyncio.create_task(self._get_vector_search_results(query, settings, user, db))
-            text_task = asyncio.create_task(self._fallback_to_text_search(query, user, db, settings))
-            
-            # Wait for both searches to complete
-            vector_results, text_results = await asyncio.gather(vector_task, text_task, return_exceptions=True)
-            
-            # Handle exceptions from either search
-            if isinstance(vector_results, Exception):
-                logger.warning(f"[RAG_HYBRID] Vector search failed: {str(vector_results)}")
-                vector_results = []
-            if isinstance(text_results, Exception):
-                logger.warning(f"[RAG_HYBRID] Text search failed: {str(text_results)}")
-                text_results = []
-            
-            logger.info(f"[RAG_HYBRID] Got {len(vector_results)} vector results and {len(text_results)} text results")
-            
-            # Combine and re-rank results
-            combined_results = self._combine_hybrid_results(vector_results, text_results, query)
-            
-            # Limit to requested number of results
-            final_results = combined_results[:settings.get("top_k_documents", 5)]
-            total_time = (time.time() - start_time) * 1000
-            
-            logger.info(f"[RAG_HYBRID] Hybrid search completed in {total_time:.2f}ms - Returning {len(final_results)} results")
-            
-            return final_results
-            
-        except Exception as e:
-            total_time = (time.time() - start_time) * 1000
-            logger.error(f"[RAG_HYBRID] Hybrid search failed after {total_time:.2f}ms: {str(e)}", exc_info=True)
-            # Fall back to text search only
-            return await self._fallback_to_text_search(query, user, db, settings)
-
-    async def _get_vector_search_results(
-        self,
-        query: str,
-        settings: Dict[str, Any],
-        user: User,
-        db: Session
-    ) -> List[Dict[str, Any]]:
-        """Get vector search results (extracted from main search method for hybrid use)."""
-        try:
-            # Create embedding manager for the selected model
-            embedding_model = self.embedding_registry.get_model(settings["embedding_model"])
-            if not embedding_model:
-                logger.warning(f"[RAG_VECTOR] Embedding model {settings['embedding_model']} not found")
-                return []
-            
-            # Create appropriate embedding manager
-            embedding_manager = None
-            if embedding_model.provider == EmbeddingProvider.HUGGINGFACE:
+                # Create appropriate embedding manager
                 embedding_manager = EnhancedEmbeddingManager.create_huggingface_manager(
                     embedding_model.model_name
                 )
-            elif embedding_model.provider == EmbeddingProvider.OLLAMA:
-                embedding_manager = EnhancedEmbeddingManager.create_ollama_manager(
-                    model_name=embedding_model.model_name
-                )
-            elif embedding_model.provider == EmbeddingProvider.OPENAI:
-                from config import get_settings
-                settings_config = get_settings()
-                if not settings_config.OPENAI_API_KEY:
-                    logger.warning("[RAG_VECTOR] OpenAI API key not configured")
-                    return []
-                embedding_manager = EnhancedEmbeddingManager.create_openai_manager(
-                    api_key=settings_config.OPENAI_API_KEY,
-                    model_name=embedding_model.model_name
-                )
-            else:
-                logger.warning(f"[RAG_VECTOR] Unsupported embedding provider: {embedding_model.provider}")
-                return []
-            
-            # Initialize search engine
-            if not self.search_engine:
-                from vector_db.storage_manager import VectorStorageManager
-                storage_manager = VectorStorageManager()
                 self.search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
-            
-            # Perform vector search
+                logger.info(f"[RAG_SEARCH] Search engine initialized successfully")
+
+            # Use search_with_context with the selected search type
+            logger.info(f"[RAG_SEARCH] Using search_with_context with search type: {search_type}")
+            search_start = time.time()
+
             search_results = await self.search_engine.search_with_context(
                 query=query,
-                search_type=settings.get("search_type", "semantic"),
+                search_type=search_type,
                 user_id=user.id,
-                top_k=settings["top_k_documents"] * 2,
+                top_k=settings.get("top_k_documents", 20),
                 db=db,
                 enable_reranking=settings.get("enable_reranking", False),
                 reranker_model=settings.get("reranker_model"),
                 rerank_score_weight=settings.get("rerank_score_weight", 0.5),
                 min_rerank_score=settings.get("min_rerank_score")
             )
-            
-            # Format results
+
+            search_time = (time.time() - search_start) * 1000
+            logger.info(f"[RAG_SEARCH] Search with context completed in {search_time:.2f}ms, found {len(search_results)} results")
+
+            # Format results for chat controller compatibility
             formatted_results = []
             for result in search_results:
                 document_id = result.get("document_id")
                 if not document_id:
                     continue
-                
+
+                # Get document info for filename
                 document = db.query(Document).filter(
                     and_(
                         Document.id == document_id,
-                        Document.user_id == user.id,
+                        or_(
+                            Document.user_id == user.id,  # User's own documents
+                            Document.is_public == True     # Public documents
+                        ),
                         Document.is_deleted == False
                     )
                 ).first()
-                
+
                 if document:
                     formatted_result = {
                         "document_id": document.id,
@@ -1382,101 +953,19 @@ class ChatController:
                         "chunk_id": result.get("chunk_id", ""),
                         "text": result.get("text", ""),
                         "similarity_score": result.get("similarity_score", 0.0),
-                        "metadata": result.get("metadata", {}),
-                        "search_source": "vector"
+                        "metadata": result.get("metadata", {})
                     }
                     formatted_results.append(formatted_result)
-            
-            logger.debug(f"[RAG_VECTOR] Vector search returned {len(formatted_results)} results")
-            return formatted_results
-            
-        except Exception as e:
-            logger.error(f"[RAG_VECTOR] Vector search failed: {str(e)}")
-            return []
 
-    def _combine_hybrid_results(
-        self,
-        vector_results: List[Dict[str, Any]],
-        text_results: List[Dict[str, Any]],
-        query: str
-    ) -> List[Dict[str, Any]]:
-        """
-        Combine vector and text search results with intelligent scoring.
-        Prioritizes results that appear in both searches and handles unique results from each.
-        """
-        logger.debug(f"[RAG_HYBRID] Combining {len(vector_results)} vector results with {len(text_results)} text results")
-        
-        # Create a combined results dictionary keyed by document_id
-        combined_scores = {}
-        
-        # Weights for different search types
-        vector_weight = 0.6
-        text_weight = 0.4
-        overlap_bonus = 0.2  # Bonus for results that appear in both searches
-        
-        # Process vector results
-        for result in vector_results:
-            doc_id = result["document_id"]
-            key = f"doc_{doc_id}"
-            
-            combined_scores[key] = {
-                "result": result,
-                "vector_score": result["similarity_score"],
-                "text_score": 0.0,
-                "final_score": result["similarity_score"] * vector_weight,
-                "sources": ["vector"]
-            }
-        
-        # Process text results
-        for result in text_results:
-            doc_id = result["document_id"]
-            key = f"doc_{doc_id}"
-            
-            if key in combined_scores:
-                # Document appears in both searches - update scores and add bonus
-                combined_scores[key]["text_score"] = result["similarity_score"]
-                combined_scores[key]["final_score"] = (
-                    combined_scores[key]["vector_score"] * vector_weight +
-                    result["similarity_score"] * text_weight +
-                    overlap_bonus
-                )
-                combined_scores[key]["sources"].append("text")
-                
-                # Use the text result if it has more/better content
-                if len(result.get("text", "")) > len(combined_scores[key]["result"].get("text", "")):
-                    # Keep vector metadata but use text content
-                    combined_scores[key]["result"]["text"] = result["text"]
-                    combined_scores[key]["result"]["metadata"]["search_type"] = "hybrid"
-                
-                logger.debug(f"[RAG_HYBRID] Document {doc_id} found in both searches, final_score: {combined_scores[key]['final_score']:.4f}")
-            else:
-                # Document only in text search
-                combined_scores[key] = {
-                    "result": result,
-                    "vector_score": 0.0,
-                    "text_score": result["similarity_score"],
-                    "final_score": result["similarity_score"] * text_weight,
-                    "sources": ["text"]
-                }
-        
-        # Convert back to list and sort by final score
-        final_results = []
-        for key, data in combined_scores.items():
-            result = data["result"]
-            result["similarity_score"] = data["final_score"]
-            result["metadata"]["hybrid_info"] = {
-                "vector_score": data["vector_score"],
-                "text_score": data["text_score"],
-                "sources": data["sources"]
-            }
-            final_results.append(result)
-        
-        # Sort by final score (highest first)
-        final_results.sort(key=lambda x: x["similarity_score"], reverse=True)
-        
-        logger.info(f"[RAG_HYBRID] Combined results: {len(final_results)} total, {len([r for r in final_results if len(r['metadata']['hybrid_info']['sources']) > 1])} overlapping")
-        
-        return final_results
+            total_time = (time.time() - start_time) * 1000
+            logger.info(f"[RAG_SEARCH] RAG search completed in {total_time:.2f}ms - Returning {len(formatted_results)} results")
+
+            return formatted_results
+
+        except Exception as e:
+            total_time = (time.time() - start_time) * 1000
+            logger.error(f"[RAG_SEARCH] RAG search failed after {total_time:.2f}ms: {str(e)}", exc_info=True)
+            return []
 
     def _prepare_llm_context(
         self,

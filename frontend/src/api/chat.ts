@@ -12,13 +12,24 @@ export interface ChatSettings {
   temperature: number;
   max_tokens: number;
   use_rag: boolean;
-  search_type: 'semantic' | 'hybrid' | 'basic';
-  top_k_documents: number;
+  search_type: 'semantic' | 'contextual' | 'keyword';
   // Reranker settings
   enable_reranking?: boolean;
   reranker_model?: string;
   rerank_score_weight?: number;
   min_rerank_score?: number;
+  // Search filter settings
+  file_type: string[];
+  date_range: { start: string; end: string } | null;
+  tags: string[];
+  tag_match_mode: 'any' | 'all' | 'exact';
+  exclude_tags: string[];
+  languages: string[];
+  file_size_range: [number, number] | null;
+  language: string;
+  is_public?: boolean;
+  max_results: number;
+  min_score: number;
 }
 
 export interface ChatSession {
