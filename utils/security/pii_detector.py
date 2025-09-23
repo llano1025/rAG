@@ -17,7 +17,7 @@ class PIIPattern:
 class PIIConfig:
     patterns_path: Optional[Path] = None
     custom_patterns: List[PIIPattern] = field(default_factory=list)
-    use_spacy: bool = True
+    use_spacy: bool = False
     spacy_model: str = "en_core_web_sm"
     min_confidence: float = 0.85
 

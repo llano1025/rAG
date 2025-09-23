@@ -551,7 +551,7 @@ async def get_recent_searches(user_id: int, limit: int = 10):
                 }
                 results.append(search_dict)
             except Exception as e:
-                logger.warning(f"Failed to serialize recent search {search.id}: {e}")
+                logger.debug(f"Failed to serialize recent search {search.id}: {e}")
                 continue
 
         logger.debug(f"Retrieved {len(results)} recent searches for user {user_id}")
