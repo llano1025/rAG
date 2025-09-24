@@ -37,6 +37,7 @@ except ImportError:
 class OCRMethod(Enum):
     TESSERACT = "tesseract"
     VISION_LLM = "vision_llm"
+    DOCLING = "docling"
 
 class VisionProvider(Enum):
     OPENAI = "openai"

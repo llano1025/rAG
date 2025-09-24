@@ -52,12 +52,23 @@ def _get_ocr_processor():
         logging.warning(f"OCRProcessor not available: {e}")
         return None
 
+# Lazy import for Docling processor
+def _get_docling_processor():
+    """Lazy import of DoclingProcessor."""
+    try:
+        from .docling_processor import DoclingProcessor, create_docling_processor
+        return create_docling_processor
+    except ImportError as e:
+        logging.warning(f"DoclingProcessor not available: {e}")
+        return None
+
 class TextExtractor:
     """Extracts text content from various document formats."""
     
     def __init__(self):
         self.type_detector = FileTypeDetector()
         self.ocr_processor = None  # Will be initialized lazily
+        self.docling_processor = None  # Will be initialized lazily
         self.logger = logging.getLogger(__name__)
 
     def extract(self, file_path: Union[str, Path], mime_type: Optional[str] = None) -> str:
@@ -93,8 +104,13 @@ class TextExtractor:
             temp_path = temp_file.name
         
         try:
+            # Check if Docling OCR was explicitly requested
+            if ocr_method == "docling":
+                self.logger.debug(f"Docling OCR explicitly requested for {filename or 'document'}")
+                return self._extract_with_docling(temp_path, content_type, filename)
+
             # Check if Vision LLM OCR was explicitly requested
-            if ocr_method == "vision_llm":
+            elif ocr_method == "vision_llm":
                 self.logger.debug(f"Vision LLM OCR explicitly requested for {filename or 'document'}")
                 return self._extract_with_vision_llm_ocr(temp_path, content_type, vision_provider)
             
@@ -586,6 +602,33 @@ class TextExtractor:
             raise Exception(f"Document to image conversion not supported for content type: {content_type}")
         
         return images
+
+    def _extract_with_docling(self, file_path: Union[str, Path], content_type: str, filename: str = None) -> str:
+        """Extract text using Docling processor."""
+        try:
+            # Initialize Docling processor if needed
+            if self.docling_processor is None:
+                docling_creator = _get_docling_processor()
+                if docling_creator is None:
+                    raise Exception("Docling processor not available")
+
+                self.docling_processor = docling_creator()
+                if self.docling_processor is None:
+                    raise Exception("Failed to create Docling processor")
+
+            # Extract text using Docling
+            text = self.docling_processor.extract_text(file_path)
+
+            if not text or not text.strip():
+                raise Exception("Docling extraction returned empty text")
+
+            self.logger.debug(f"Docling extraction successful: {len(text)} characters")
+            return text
+
+        except Exception as e:
+            self.logger.error(f"Docling extraction failed for {filename or file_path}: {e}")
+            # Don't raise exception - let caller handle fallback
+            raise Exception(f"Docling OCR failed: {e}")
 
     def _extract_with_vision_llm_ocr(self, file_path: Union[str, Path], content_type: str, vision_provider: str = None) -> str:
         """Extract text from any document type using Vision LLM OCR by converting to images."""

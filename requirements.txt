@@ -16,6 +16,7 @@ sentence-transformers>=2.2.0
 numpy>=1.24.0
 spacy>=3.7.0
 tokenizers>=0.15.0  # Required by transformers for chunking
+docling>=1.0.0  # Advanced OCR with Vision Language Model pipeline
 
 # Vector Search & Similarity
 qdrant-client>=1.6.0
