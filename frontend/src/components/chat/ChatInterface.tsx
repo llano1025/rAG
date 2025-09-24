@@ -21,6 +21,7 @@ import { chatApi } from '../../api/chat';
 import { modelsApi, LoadedModel } from '../../api/models';
 import ModelHealthIndicator from '../models/ModelHealthIndicator';
 import RerankerModelSelector from '../models/RerankerModelSelector';
+import MMRSettingsSelector from '../models/MMRSettingsSelector';
 import EmbeddingModelSelector from '../models/EmbeddingModelSelector';
 import TagInput from '../common/TagInput';
 
@@ -54,6 +55,12 @@ interface ChatSettings {
   reranker_model?: string;
   rerank_score_weight?: number;
   min_rerank_score?: number;
+  // MMR diversification settings
+  enable_mmr?: boolean;
+  mmr_lambda?: number;
+  mmr_similarity_threshold?: number;
+  mmr_max_results?: number;
+  mmr_similarity_metric?: 'cosine' | 'euclidean' | 'dot_product';
   // Search filter settings
   file_type: string[];
   date_range: { start: string; end: string } | null;
@@ -83,6 +90,12 @@ const DEFAULT_SETTINGS: ChatSettings = {
   search_type: 'contextual',
   enable_reranking: false,
   rerank_score_weight: 0.5,
+  // MMR diversification defaults
+  enable_mmr: false,
+  mmr_lambda: 0.6,
+  mmr_similarity_threshold: 0.8,
+  mmr_max_results: undefined,
+  mmr_similarity_metric: 'cosine',
   // Search filter defaults
   file_type: [],
   date_range: null,
@@ -685,17 +698,18 @@ const ChatInterface: React.FC = () => {
 
               {showContentFilters && (
                 <div className="px-3 pb-3 space-y-3 border-t border-gray-200">
-                  {/* Embedding Model & Reranker Settings Row */}
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 mt-3">
-                    <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">Embedding Model</label>
-                      <EmbeddingModelSelector
-                        selectedModel={settings.embedding_model}
-                        onModelChange={(model) => setSettings(prev => ({ ...prev, embedding_model: model }))}
-                        className=""
-                      />
-                    </div>
+                  {/* Embedding Model - Full Width */}
+                  <div className="mt-3">
+                    <label className="block text-xs font-medium text-gray-700 mb-1">Embedding Model</label>
+                    <EmbeddingModelSelector
+                      selectedModel={settings.embedding_model}
+                      onModelChange={(model) => setSettings(prev => ({ ...prev, embedding_model: model }))}
+                      className=""
+                    />
+                  </div>
 
+                  {/* Reranker & MMR Settings Row */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs font-medium text-gray-700 mb-2">Reranker Settings</label>
                       <RerankerModelSelector
@@ -707,6 +721,23 @@ const ChatInterface: React.FC = () => {
                         onScoreWeightChange={(weight) => setSettings(prev => ({ ...prev, rerank_score_weight: weight }))}
                         minScore={settings.min_rerank_score}
                         onMinScoreChange={(score) => setSettings(prev => ({ ...prev, min_rerank_score: score }))}
+                        compact={true}
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-2">Result Diversification</label>
+                      <MMRSettingsSelector
+                        enabled={settings.enable_mmr ?? false}
+                        onEnabledChange={(enabled) => setSettings(prev => ({ ...prev, enable_mmr: enabled }))}
+                        lambda={settings.mmr_lambda ?? 0.6}
+                        onLambdaChange={(lambda) => setSettings(prev => ({ ...prev, mmr_lambda: lambda }))}
+                        similarityThreshold={settings.mmr_similarity_threshold ?? 0.8}
+                        onSimilarityThresholdChange={(threshold) => setSettings(prev => ({ ...prev, mmr_similarity_threshold: threshold }))}
+                        maxResults={settings.mmr_max_results}
+                        onMaxResultsChange={(maxResults) => setSettings(prev => ({ ...prev, mmr_max_results: maxResults }))}
+                        similarityMetric={settings.mmr_similarity_metric ?? 'cosine'}
+                        onSimilarityMetricChange={(metric) => setSettings(prev => ({ ...prev, mmr_similarity_metric: metric }))}
                         compact={true}
                       />
                     </div>

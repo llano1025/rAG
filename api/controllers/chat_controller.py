@@ -482,7 +482,13 @@ class ChatController:
             "enable_reranking": False,
             "reranker_model": None,  # Use default from config
             "rerank_score_weight": 0.5,
-            "min_rerank_score": None
+            "min_rerank_score": None,
+            # MMR (Maximal Marginal Relevance) diversification settings
+            "enable_mmr": False,
+            "mmr_lambda": 0.6,  # Balance between relevance and diversity
+            "mmr_similarity_threshold": 0.8,
+            "mmr_max_results": None,
+            "mmr_similarity_metric": "cosine"
         }
         
         # Merge with provided settings
@@ -543,7 +549,18 @@ class ChatController:
             validated_settings["rerank_score_weight"] = max(0.0, min(1.0, float(validated_settings["rerank_score_weight"])))
         if validated_settings.get("min_rerank_score") is not None:
             validated_settings["min_rerank_score"] = max(0.0, min(1.0, float(validated_settings["min_rerank_score"])))
-        
+
+        # Validate MMR settings
+        validated_settings["enable_mmr"] = bool(validated_settings.get("enable_mmr", False))
+        if validated_settings.get("mmr_lambda") is not None:
+            validated_settings["mmr_lambda"] = max(0.0, min(1.0, float(validated_settings["mmr_lambda"])))
+        if validated_settings.get("mmr_similarity_threshold") is not None:
+            validated_settings["mmr_similarity_threshold"] = max(0.0, min(1.0, float(validated_settings["mmr_similarity_threshold"])))
+        if validated_settings.get("mmr_max_results") is not None:
+            validated_settings["mmr_max_results"] = max(1, min(100, int(validated_settings["mmr_max_results"])))
+        if validated_settings.get("mmr_similarity_metric") not in ["cosine", "euclidean", "dot_product"]:
+            validated_settings["mmr_similarity_metric"] = "cosine"
+
         # Validate boolean settings
         validated_settings["enable_fallback"] = bool(validated_settings["enable_fallback"])
         validated_settings["fallback_threshold"] = max(0, int(validated_settings["fallback_threshold"]))
@@ -976,6 +993,12 @@ class ChatController:
                 reranker_model=settings.get("reranker_model"),
                 rerank_score_weight=settings.get("rerank_score_weight", 0.5),
                 min_rerank_score=settings.get("min_rerank_score"),
+                # MMR parameters for diversification
+                enable_mmr=settings.get("enable_mmr", False),
+                mmr_lambda=settings.get("mmr_lambda", 0.6),
+                mmr_similarity_threshold=settings.get("mmr_similarity_threshold", 0.8),
+                mmr_max_results=settings.get("mmr_max_results"),
+                mmr_similarity_metric=settings.get("mmr_similarity_metric", "cosine"),
                 # Filter parameters for search
                 tags=settings.get("tags"),
                 tag_match_mode=settings.get("tag_match_mode"),

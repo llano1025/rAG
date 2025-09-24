@@ -23,6 +23,7 @@ from .reranker import get_reranker_manager, get_reranker_config, RerankResult
 from .reranker.base_reranker import SearchResult as RerankerSearchResult
 from .search_types import SearchType, SearchFilter, SearchResult, TagMatchMode, TableSearchFilter
 from .table_search_enhancer import TableSearchEnhancer
+from .mmr_diversifier import MMRDiversifier, get_default_mmr_diversifier
 # QueryOptimizer removed - using direct Redis caching
 from config import get_settings
 
@@ -338,6 +339,12 @@ class EnhancedSearchEngine:
         reranker_model: Optional[str] = None,
         rerank_score_weight: float = 0.5,
         min_rerank_score: Optional[float] = None,
+        # MMR parameters for chat controller compatibility
+        enable_mmr: bool = False,
+        mmr_lambda: float = 0.6,
+        mmr_similarity_threshold: float = 0.8,
+        mmr_max_results: Optional[int] = None,
+        mmr_similarity_metric: str = "cosine",
         # Filter parameters for chat controller compatibility
         tags: Optional[List[str]] = None,
         tag_match_mode: str = None,
@@ -376,12 +383,19 @@ class EnhancedSearchEngine:
             # Convert top_k to limit
             limit = top_k or self.default_limit
             
-            # Create search filter with reranker and filter settings
+            # Create search filter with reranker and MMR settings
             search_filters = SearchFilter()
             search_filters.enable_reranking = enable_reranking
             search_filters.reranker_model = reranker_model
             search_filters.rerank_score_weight = rerank_score_weight
             search_filters.min_rerank_score = min_rerank_score
+
+            # Set MMR parameters
+            search_filters.enable_mmr = enable_mmr
+            search_filters.mmr_lambda = mmr_lambda
+            search_filters.mmr_similarity_threshold = mmr_similarity_threshold
+            search_filters.mmr_max_results = mmr_max_results
+            search_filters.mmr_similarity_metric = mmr_similarity_metric
 
             # Apply filter parameters from chat settings
             if tags:
@@ -451,6 +465,12 @@ class EnhancedSearchEngine:
                 'reranker_model': filters.reranker_model,
                 'rerank_score_weight': filters.rerank_score_weight,
                 'min_rerank_score': filters.min_rerank_score,
+                # MMR settings that affect results
+                'enable_mmr': filters.enable_mmr,
+                'mmr_lambda': filters.mmr_lambda,
+                'mmr_similarity_threshold': filters.mmr_similarity_threshold,
+                'mmr_max_results': filters.mmr_max_results,
+                'mmr_similarity_metric': filters.mmr_similarity_metric,
             }
             
             # Remove None values and normalize the structure
@@ -651,7 +671,11 @@ class EnhancedSearchEngine:
             if filters.enable_reranking and self.reranker_config.enabled:
                 results = await self._apply_reranking(query, results, filters, search_type)
 
-            # Apply final minimum score filtering after reranking
+            # Apply MMR diversification if enabled
+            if filters.enable_mmr:
+                results = await self._apply_mmr_diversification(results, filters)
+
+            # Apply final minimum score filtering after reranking and MMR
             if filters.min_score is not None and filters.min_score > 0:
                 initial_count = len(results)
                 results = [result for result in results if result.score >= filters.min_score]
@@ -1630,6 +1654,125 @@ class EnhancedSearchEngine:
             search_results.append(search_result)
         
         return search_results
+
+    async def _apply_mmr_diversification(
+        self,
+        results: List[SearchResult],
+        filters: SearchFilter
+    ) -> List[SearchResult]:
+        """
+        Apply MMR (Maximal Marginal Relevance) diversification to search results.
+
+        Args:
+            results: Initial search results
+            filters: Search filters with MMR settings
+
+        Returns:
+            Diversified search results
+        """
+        if not results:
+            return results
+
+        try:
+            logger.info(f"[MMR_DEBUG] Starting MMR diversification: {len(results)} results, λ={filters.mmr_lambda}, threshold={filters.mmr_similarity_threshold}")
+            logger.debug(f"Starting MMR diversification: {len(results)} results, λ={filters.mmr_lambda}, threshold={filters.mmr_similarity_threshold}")
+
+            # Create MMR diversifier with filter settings
+            mmr_diversifier = MMRDiversifier(
+                lambda_param=filters.mmr_lambda,
+                similarity_threshold=filters.mmr_similarity_threshold,
+                max_results=filters.mmr_max_results,
+                similarity_metric=filters.mmr_similarity_metric
+            )
+
+            # Ensure results have embeddings for MMR computation
+            results_with_embeddings = await self._ensure_embeddings_for_mmr(results)
+
+            if not results_with_embeddings:
+                logger.warning("No results with embeddings found for MMR, returning original results")
+                return results
+
+            # Apply MMR diversification
+            diversified_results = await mmr_diversifier.diversify(
+                results_with_embeddings,
+                lambda_param=filters.mmr_lambda,
+                max_results=filters.mmr_max_results
+            )
+
+            # Update metadata to include MMR information
+            for i, result in enumerate(diversified_results):
+                if hasattr(result, 'metadata'):
+                    result.metadata = result.metadata or {}
+                    result.metadata.update({
+                        'mmr_applied': True,
+                        'mmr_lambda': filters.mmr_lambda,
+                        'mmr_similarity_threshold': filters.mmr_similarity_threshold,
+                        'mmr_rank': i + 1,
+                        'mmr_similarity_metric': filters.mmr_similarity_metric
+                    })
+
+            logger.info(f"[MMR_DEBUG] MMR diversification completed: {len(results)} → {len(diversified_results)} results")
+            logger.info(f"MMR diversification completed: {len(results)} → {len(diversified_results)} results")
+
+            return diversified_results
+
+        except Exception as e:
+            logger.error(f"MMR diversification failed, returning original results: {e}")
+            return results
+
+    async def _ensure_embeddings_for_mmr(
+        self,
+        results: List[SearchResult]
+    ) -> List[SearchResult]:
+        """
+        Ensure search results have embeddings for MMR computation.
+
+        Args:
+            results: Search results
+
+        Returns:
+            Results with embeddings attached
+        """
+        try:
+            results_with_embeddings = []
+
+            for result in results:
+                # Check if embedding already exists in metadata
+                embedding = None
+
+                if hasattr(result, 'metadata') and result.metadata:
+                    embedding = result.metadata.get('embedding') or result.metadata.get('vector')
+
+                # If no embedding found, try to retrieve from storage
+                if embedding is None:
+                    try:
+                        # Get embedding from vector storage using chunk_id
+                        vector_data = await self.storage_manager.get_vector_by_chunk_id(result.chunk_id)
+                        if vector_data and 'vector' in vector_data:
+                            embedding = vector_data['vector']
+                    except Exception as e:
+                        logger.debug(f"Could not retrieve embedding for chunk {result.chunk_id}: {e}")
+                        continue
+
+                # Add embedding to result metadata
+                if embedding:
+                    if not hasattr(result, 'metadata'):
+                        result.metadata = {}
+                    elif result.metadata is None:
+                        result.metadata = {}
+
+                    result.metadata['embedding'] = embedding
+                    results_with_embeddings.append(result)
+                else:
+                    logger.debug(f"No embedding found for chunk {result.chunk_id}, excluding from MMR")
+
+            logger.debug(f"MMR embedding preparation: {len(results)} → {len(results_with_embeddings)} results with embeddings")
+
+            return results_with_embeddings
+
+        except Exception as e:
+            logger.error(f"Failed to ensure embeddings for MMR: {e}")
+            return results
 
     async def _table_content_search(
         self,

@@ -52,6 +52,13 @@ class SearchFilter:
         self.min_rerank_score: Optional[float] = None
         self.max_results_to_rerank: int = 100
 
+        # MMR (Maximal Marginal Relevance) diversification settings
+        self.enable_mmr: bool = False
+        self.mmr_lambda: float = 0.6  # Balance between relevance (1.0) and diversity (0.0)
+        self.mmr_similarity_threshold: float = 0.8  # Minimum similarity for diversity penalty
+        self.mmr_max_results: Optional[int] = None  # Maximum diversified results (None = no limit)
+        self.mmr_similarity_metric: str = "cosine"  # "cosine", "euclidean", "dot_product"
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert filter to dictionary for serialization."""
         return {
@@ -70,7 +77,12 @@ class SearchFilter:
             'reranker_model': self.reranker_model,
             'rerank_score_weight': self.rerank_score_weight,
             'min_rerank_score': self.min_rerank_score,
-            'max_results_to_rerank': self.max_results_to_rerank
+            'max_results_to_rerank': self.max_results_to_rerank,
+            'enable_mmr': self.enable_mmr,
+            'mmr_lambda': self.mmr_lambda,
+            'mmr_similarity_threshold': self.mmr_similarity_threshold,
+            'mmr_max_results': self.mmr_max_results,
+            'mmr_similarity_metric': self.mmr_similarity_metric
         }
 
     def normalize_tags(self, tags: List[str]) -> List[str]:

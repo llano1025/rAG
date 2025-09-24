@@ -3,6 +3,7 @@ import { searchApi, AvailableFilters } from '@/api/search';
 import TagInput from '@/components/common/TagInput';
 import EmbeddingModelSelector from '../models/EmbeddingModelSelector';
 import RerankerModelSelector from '../models/RerankerModelSelector';
+import MMRSettingsSelector from '../models/MMRSettingsSelector';
 import {
   ArrowPathIcon,
   ChevronDownIcon,
@@ -36,6 +37,17 @@ interface SearchFiltersProps {
   onRerankerScoreWeightChange: (weight: number) => void;
   rerankerMinScore?: number;
   onRerankerMinScoreChange: (score: number | undefined) => void;
+  // MMR (Maximal Marginal Relevance) diversification props
+  mmrEnabled: boolean;
+  onMmrEnabledChange: (enabled: boolean) => void;
+  mmrLambda: number;
+  onMmrLambdaChange: (lambda: number) => void;
+  mmrSimilarityThreshold: number;
+  onMmrSimilarityThresholdChange: (threshold: number) => void;
+  mmrMaxResults?: number;
+  onMmrMaxResultsChange: (maxResults: number | undefined) => void;
+  mmrSimilarityMetric: 'cosine' | 'euclidean' | 'dot_product';
+  onMmrSimilarityMetricChange: (metric: 'cosine' | 'euclidean' | 'dot_product') => void;
   // Search parameters
   maxResults: number;
   onMaxResultsChange: (value: number) => void;
@@ -56,6 +68,16 @@ export default function SearchFilters({
   onRerankerScoreWeightChange,
   rerankerMinScore,
   onRerankerMinScoreChange,
+  mmrEnabled,
+  onMmrEnabledChange,
+  mmrLambda,
+  onMmrLambdaChange,
+  mmrSimilarityThreshold,
+  onMmrSimilarityThresholdChange,
+  mmrMaxResults,
+  onMmrMaxResultsChange,
+  mmrSimilarityMetric,
+  onMmrSimilarityMetricChange,
   maxResults,
   onMaxResultsChange,
   minScore,
@@ -104,14 +126,14 @@ export default function SearchFilters({
   // Auto-expand sections if filters are active
   useEffect(() => {
     if (filters.tags.length > 0 || filters.exclude_tags.length > 0 || filters.language ||
-        filters.embedding_model || selectedEmbeddingModel || rerankerEnabled) {
+        filters.embedding_model || selectedEmbeddingModel || rerankerEnabled || mmrEnabled) {
       setShowContentFilters(true);
     }
     if (filters.folder_ids?.length || filters.languages?.length || filters.file_size_range ||
         filters.is_public !== undefined) {
       setShowAdvancedFilters(true);
     }
-  }, [filters, selectedEmbeddingModel, rerankerEnabled]);
+  }, [filters, selectedEmbeddingModel, rerankerEnabled, mmrEnabled]);
 
   const handleFileTypeChange = (fileTypes: string[]) => {
     onFiltersChange({
@@ -197,6 +219,7 @@ export default function SearchFilters({
     filters.embedding_model ||
     selectedEmbeddingModel ||
     rerankerEnabled ||
+    mmrEnabled ||
     (filters.folder_ids && filters.folder_ids.length > 0) ||
     (filters.languages && filters.languages.length > 0);
 
@@ -347,20 +370,39 @@ export default function SearchFilters({
               </div>
             </div>
 
-            {/* Reranker Settings - Full Width */}
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-2">Reranker Settings</label>
-              <RerankerModelSelector
-                selectedModel={rerankerModel}
-                onModelChange={onRerankerModelChange}
-                enabled={rerankerEnabled}
-                onEnabledChange={onRerankerEnabledChange}
-                scoreWeight={rerankerScoreWeight}
-                onScoreWeightChange={onRerankerScoreWeightChange}
-                minScore={rerankerMinScore}
-                onMinScoreChange={onRerankerMinScoreChange}
-                compact={true}
-              />
+            {/* Reranker & MMR Settings Row */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-2">Reranker Settings</label>
+                <RerankerModelSelector
+                  selectedModel={rerankerModel}
+                  onModelChange={onRerankerModelChange}
+                  enabled={rerankerEnabled}
+                  onEnabledChange={onRerankerEnabledChange}
+                  scoreWeight={rerankerScoreWeight}
+                  onScoreWeightChange={onRerankerScoreWeightChange}
+                  minScore={rerankerMinScore}
+                  onMinScoreChange={onRerankerMinScoreChange}
+                  compact={true}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-2">Result Diversification</label>
+                <MMRSettingsSelector
+                  enabled={mmrEnabled}
+                  onEnabledChange={onMmrEnabledChange}
+                  lambda={mmrLambda}
+                  onLambdaChange={onMmrLambdaChange}
+                  similarityThreshold={mmrSimilarityThreshold}
+                  onSimilarityThresholdChange={onMmrSimilarityThresholdChange}
+                  maxResults={mmrMaxResults}
+                  onMaxResultsChange={onMmrMaxResultsChange}
+                  similarityMetric={mmrSimilarityMetric}
+                  onSimilarityMetricChange={onMmrSimilarityMetricChange}
+                  compact={true}
+                />
+              </div>
             </div>
           </div>
         )}

@@ -92,7 +92,15 @@ class Settings(BaseSettings):
     VISION_LLM_MAX_TOKENS: int = Field(default=4096, env="VISION_LLM_MAX_TOKENS")
     VISION_LLM_TEMPERATURE: float = Field(default=0.1, env="VISION_LLM_TEMPERATURE")
     VISION_LLM_TIMEOUT: int = Field(default=30, env="VISION_LLM_TIMEOUT")  # seconds
-    
+
+    # MMR (Maximal Marginal Relevance) diversification settings
+    MMR_ENABLED_BY_DEFAULT: bool = Field(default=False, env="MMR_ENABLED_BY_DEFAULT")
+    MMR_DEFAULT_LAMBDA: float = Field(default=0.6, env="MMR_DEFAULT_LAMBDA")  # Balance between relevance (1.0) and diversity (0.0)
+    MMR_DEFAULT_SIMILARITY_THRESHOLD: float = Field(default=0.8, env="MMR_DEFAULT_SIMILARITY_THRESHOLD")
+    MMR_DEFAULT_MAX_RESULTS: Optional[int] = Field(default=None, env="MMR_DEFAULT_MAX_RESULTS")  # None = no limit
+    MMR_DEFAULT_SIMILARITY_METRIC: str = Field(default="cosine", env="MMR_DEFAULT_SIMILARITY_METRIC")  # cosine, euclidean, dot_product
+    MMR_MINIMUM_RESULTS_FOR_DIVERSIFICATION: int = Field(default=3, env="MMR_MINIMUM_RESULTS_FOR_DIVERSIFICATION")
+
     # Rate limiting
     RATE_LIMIT_REQUESTS: int = Field(default=100, env="RATE_LIMIT_REQUESTS")
     RATE_LIMIT_WINDOW: int = Field(default=60, env="RATE_LIMIT_WINDOW")  # seconds

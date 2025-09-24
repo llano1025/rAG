@@ -49,6 +49,13 @@ export default function SearchInterface() {
   const [rerankerScoreWeight, setRerankerScoreWeight] = useState(0.5);
   const [rerankerMinScore, setRerankerMinScore] = useState<number | undefined>(undefined);
 
+  // MMR (Maximal Marginal Relevance) parameters
+  const [mmrEnabled, setMmrEnabled] = useState(false);
+  const [mmrLambda, setMmrLambda] = useState(0.6);
+  const [mmrSimilarityThreshold, setMmrSimilarityThreshold] = useState(0.8);
+  const [mmrMaxResults, setMmrMaxResults] = useState<number | undefined>(undefined);
+  const [mmrSimilarityMetric, setMmrSimilarityMetric] = useState<'cosine' | 'euclidean' | 'dot_product'>('cosine');
+
   // Embedding model settings
   const [selectedEmbeddingModel, setSelectedEmbeddingModel] = useState<string | undefined>(undefined);
 
@@ -194,9 +201,24 @@ export default function SearchInterface() {
         reranker_model: rerankerModel,
         rerank_score_weight: rerankerScoreWeight,
         min_rerank_score: rerankerMinScore,
+        // MMR diversification settings
+        enable_mmr: mmrEnabled,
+        mmr_lambda: mmrLambda,
+        mmr_similarity_threshold: mmrSimilarityThreshold,
+        mmr_max_results: mmrMaxResults,
+        mmr_similarity_metric: mmrSimilarityMetric,
         // Embedding model selection
         embedding_model: selectedEmbeddingModel,
       };
+
+      // Debug MMR parameters
+      console.log('[SEARCH_DEBUG] MMR Parameters:', {
+        enable_mmr: mmrEnabled,
+        mmr_lambda: mmrLambda,
+        mmr_similarity_threshold: mmrSimilarityThreshold,
+        mmr_max_results: mmrMaxResults,
+        mmr_similarity_metric: mmrSimilarityMetric
+      });
 
       let response: SearchResponse;
       
@@ -294,6 +316,12 @@ export default function SearchInterface() {
         reranker_model: rerankerModel,
         rerank_score_weight: rerankerScoreWeight,
         min_rerank_score: rerankerMinScore,
+        // MMR diversification settings
+        enable_mmr: mmrEnabled,
+        mmr_lambda: mmrLambda,
+        mmr_similarity_threshold: mmrSimilarityThreshold,
+        mmr_max_results: mmrMaxResults,
+        mmr_similarity_metric: mmrSimilarityMetric,
         // Embedding model selection
         embedding_model: selectedEmbeddingModel,
       };
@@ -535,6 +563,16 @@ export default function SearchInterface() {
                 onRerankerScoreWeightChange={setRerankerScoreWeight}
                 rerankerMinScore={rerankerMinScore}
                 onRerankerMinScoreChange={setRerankerMinScore}
+                mmrEnabled={mmrEnabled}
+                onMmrEnabledChange={setMmrEnabled}
+                mmrLambda={mmrLambda}
+                onMmrLambdaChange={setMmrLambda}
+                mmrSimilarityThreshold={mmrSimilarityThreshold}
+                onMmrSimilarityThresholdChange={setMmrSimilarityThreshold}
+                mmrMaxResults={mmrMaxResults}
+                onMmrMaxResultsChange={setMmrMaxResults}
+                mmrSimilarityMetric={mmrSimilarityMetric}
+                onMmrSimilarityMetricChange={setMmrSimilarityMetric}
                 maxResults={maxResults}
                 onMaxResultsChange={setMaxResults}
                 minScore={minScore}

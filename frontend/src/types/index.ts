@@ -86,6 +86,12 @@ export interface SearchQuery {
   reranker_model?: string;
   rerank_score_weight?: number;
   min_rerank_score?: number;
+  // MMR (Maximal Marginal Relevance) diversification settings
+  enable_mmr?: boolean;
+  mmr_lambda?: number;
+  mmr_similarity_threshold?: number;
+  mmr_max_results?: number;
+  mmr_similarity_metric?: 'cosine' | 'euclidean' | 'dot_product';
   // Embedding model selection
   embedding_model?: string;
 }

@@ -59,6 +59,31 @@ class SearchQuery(BaseModel):
         ge=0.0,
         le=1.0
     )
+    # MMR (Maximal Marginal Relevance) diversification settings
+    enable_mmr: bool = Field(False, description="Whether to enable MMR diversification of search results")
+    mmr_lambda: float = Field(
+        0.6,
+        description="MMR lambda parameter: balance between relevance (1.0) and diversity (0.0)",
+        ge=0.0,
+        le=1.0
+    )
+    mmr_similarity_threshold: float = Field(
+        0.8,
+        description="Minimum similarity threshold for MMR diversity penalty",
+        ge=0.0,
+        le=1.0
+    )
+    mmr_max_results: Optional[int] = Field(
+        None,
+        description="Maximum number of results after MMR diversification (None = no limit)",
+        ge=1,
+        le=100
+    )
+    mmr_similarity_metric: str = Field(
+        "cosine",
+        description="Similarity metric for MMR diversification",
+        pattern="^(cosine|euclidean|dot_product)$"
+    )
     # Embedding model selection
     embedding_model: Optional[str] = Field(None, description="Embedding model to use for query encoding (e.g., 'all-MiniLM-L6-v2')")
     # Pagination fields
