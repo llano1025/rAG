@@ -108,7 +108,7 @@ class MMRDiversifier:
             # Return diversified results
             diversified_results = [results[i] for i in diversified_indices]
 
-            logger.info(
+            logger.debug(
                 f"MMR diversification completed: {len(results)} → {len(diversified_results)} results"
             )
 

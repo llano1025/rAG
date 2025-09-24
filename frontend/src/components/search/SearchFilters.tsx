@@ -173,7 +173,7 @@ export default function SearchFilters({
       enable_mmr: false,
       mmr_lambda: 0.6,
       mmr_similarity_threshold: 0.8,
-      mmr_max_results: undefined,
+      mmr_max_results: 10,
       mmr_similarity_metric: 'cosine',
     });
     // Reset embedding model selection

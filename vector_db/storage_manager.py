@@ -554,7 +554,53 @@ class VectorStorageManager:
         except Exception as e:
             logger.error(f"Database error while fetching chunk_id {chunk_id}: {e}")
             return f"[Database error for chunk {chunk_id}: {str(e)[:100]}...]"
-    
+
+    async def get_vector_by_chunk_id(self, chunk_id: str) -> Dict[str, Any]:
+        """
+        Get vector data by chunk_id for MMR diversification.
+
+        Args:
+            chunk_id: The chunk ID to retrieve vector for
+
+        Returns:
+            Dictionary containing vector data or None if not found
+        """
+        try:
+            # Get all available indexes and try their collections
+            for optimizer_key in self.search_optimizers.keys():
+                # Extract index name from optimizer key (remove "_content" suffix)
+                if optimizer_key.endswith("_content"):
+                    index_name = optimizer_key[:-8]  # Remove "_content"
+
+                    # Get both collection names for this index
+                    content_collection, context_collection = self._get_collection_names(index_name)
+
+                    # Try content collection first, then context collection
+                    for collection_name in [content_collection, context_collection]:
+                        try:
+                            vector_data = await self.qdrant_manager.get_vector(
+                                collection_name=collection_name,
+                                chunk_id=chunk_id
+                            )
+
+                            if vector_data and 'vector' in vector_data:
+                                return {
+                                    'vector': vector_data['vector'],
+                                    'source': optimizer_key,
+                                    'collection': collection_name
+                                }
+                        except Exception as e:
+                            logger.debug(f"Failed to get vector from {collection_name} for chunk {chunk_id}: {e}")
+                            continue
+
+            # No vector found
+            logger.debug(f"No vector found for chunk_id: {chunk_id}")
+            return None
+
+        except Exception as e:
+            logger.error(f"Error getting vector for chunk_id {chunk_id}: {e}")
+            return None
+
     async def contextual_search(
         self,
         index_name: str,
@@ -580,7 +626,7 @@ class VectorStorageManager:
         Returns:
             List of search results with combined scores
         """
-        logger.info(f"Starting contextual search for index: {index_name}, limit: {limit}")
+        logger.debug(f"Starting contextual search for index: {index_name}, limit: {limit}")
         logger.debug(f"Available search optimizers: {list(self.search_optimizers.keys())}")
         logger.debug(f"Content weight: {content_weight}, Context weight: {context_weight}")
 
@@ -593,7 +639,7 @@ class VectorStorageManager:
                 limit=limit * 2,  # Get more results for better combination
                 metadata_filters=metadata_filters
             )
-            logger.info(f"Content search returned {len(content_results)} results")
+            logger.debug(f"Content search returned {len(content_results)} results")
 
             context_results = await self.search_vectors(
                 index_name=index_name,
@@ -602,7 +648,7 @@ class VectorStorageManager:
                 limit=limit * 2,
                 metadata_filters=metadata_filters
             )
-            logger.info(f"Context search returned {len(context_results)} results")
+            logger.debug(f"Context search returned {len(context_results)} results")
             
             # Combine results by chunk_id
             combined_scores = {}
@@ -656,7 +702,7 @@ class VectorStorageManager:
                     filtered_count += 1
 
             if filtered_count > 0:
-                logger.info(f"Filtered {filtered_count} results below score threshold {score_threshold}")
+                logger.debug(f"Filtered {filtered_count} results below score threshold {score_threshold}")
 
             # Sort by combined score and return top results
             final_results.sort(key=lambda x: x["score"], reverse=True)

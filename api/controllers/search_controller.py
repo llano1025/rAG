@@ -1,20 +1,16 @@
-from typing import List, Dict, Optional, Tuple
-import numpy as np
+from typing import List, Optional, Dict
 from sqlalchemy.ext.asyncio import AsyncSession
 import json
 import logging
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, Query
 
 from vector_db.embedding_manager import EmbeddingManager
-from vector_db.search_optimizer import SearchOptimizer, SearchError
+from vector_db.search_optimizer import SearchOptimizer
 from vector_db.search_context_processor import ContextProcessor
-from vector_db.chunking import Chunk
 from vector_db.search_manager import EnhancedSearchEngine
 from vector_db.search_types import SearchFilter, SearchType
 from database.models import User, SearchQuery, Document, SavedSearch
 from utils.security.audit_logger import AuditLogger
-from ..schemas.search_schemas import SearchQuery as SearchQuerySchema
 from database.connection import get_db
 
 logger = logging.getLogger(__name__)
@@ -48,7 +44,7 @@ class SearchController:
         query: str,
         user: User,
         search_type: str = "contextual",
-        filters: Optional[Dict] = None,
+        filters: Optional[SearchFilter] = None,
         top_k: int = 20,
         similarity_threshold: Optional[float] = None,
         embedding_model: Optional[str] = None,
@@ -57,8 +53,8 @@ class SearchController:
         start_time = datetime.now(timezone.utc)
 
         try:
-            # Create search filters from API filters
-            search_filters = self._convert_api_filters_to_search_filter(filters)
+            # Use filters directly (already converted by route)
+            search_filters = filters or SearchFilter()
 
             # Set search parameters
             if similarity_threshold is not None:
@@ -106,59 +102,7 @@ class SearchController:
 
         except Exception as e:
             logger.error(f"Failed to perform search by controller: {e}")
-
-    def _convert_api_filters_to_search_filter(self, api_filters: Optional[Dict]) -> SearchFilter:
-        """Convert API filters to SearchFilter object."""
-        search_filters = SearchFilter()
-
-        if not api_filters:
-            return search_filters
-
-        # Map common filter fields
-        if 'folder_ids' in api_filters:
-            search_filters.folder_ids = api_filters['folder_ids']
-        if 'tags' in api_filters:
-            search_filters.tags = api_filters['tags']
-        if 'tag_match_mode' in api_filters:
-            search_filters.tag_match_mode = api_filters['tag_match_mode']
-        if 'exclude_tags' in api_filters:
-            search_filters.exclude_tags = api_filters['exclude_tags']
-        if 'file_types' in api_filters:
-            search_filters.file_types = api_filters['file_types']
-        if 'date_range' in api_filters:
-            search_filters.date_range = api_filters['date_range']
-        if 'file_size_range' in api_filters:
-            search_filters.file_size_range = api_filters['file_size_range']
-        if 'language' in api_filters:
-            search_filters.language = api_filters['language']
-        if 'is_public' in api_filters:
-            search_filters.is_public = api_filters['is_public']
-        if 'metadata_filters' in api_filters:
-            search_filters.metadata_filters = api_filters['metadata_filters']
-        if 'languages' in api_filters:
-            search_filters.languages = api_filters['languages']
-
-        if 'enable_reranking' in api_filters:
-            search_filters.enable_reranking = api_filters['enable_reranking']
-        if 'reranker_model' in api_filters:
-            search_filters.reranker_model = api_filters['reranker_model']
-        if 'rerank_score_weight' in api_filters:
-            search_filters.rerank_score_weight = api_filters['rerank_score_weight']
-        if 'min_rerank_score' in api_filters:
-            search_filters.min_rerank_score = api_filters['min_rerank_score']
-
-        if 'enable_mmr' in api_filters:
-            search_filters.enable_mmr = api_filters['enable_mmr']
-        if 'mmr_lambda' in api_filters:
-            search_filters.mmr_lambda = api_filters['mmr_lambda']
-        if 'mmr_similarity_threshold' in api_filters:
-            search_filters.mmr_similarity_threshold = api_filters['mmr_similarity_threshold']
-        if 'mmr_max_results' in api_filters:
-            search_filters.mmr_max_results = api_filters['mmr_max_results']
-        if 'mmr_similarity_metric' in api_filters:
-            search_filters.mmr_similarity_metric = api_filters['mmr_similarity_metric']
-
-        return search_filters
+            return []  # Return empty list instead of None
 
 
 async def save_search(name: str, search_request: Dict, user_id: int):

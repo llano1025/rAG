@@ -350,14 +350,24 @@ class QdrantManager:
             logger.error(f"Failed to search vectors in {collection_name}: {e}")
             return []
     
-    async def get_vector(self, collection_name: str, point_id: str) -> Optional[Dict[str, Any]]:
+    async def get_vector(self, collection_name: str, chunk_id: str) -> Optional[Dict[str, Any]]:
         """Retrieve a specific vector by ID."""
         self.ensure_connected()
-        
+
         try:
+            # Convert single chunk_id to UUID if needed
+            if isinstance(chunk_id, str) and not chunk_id.startswith(('0', '1', '2', '3', '4', '5', '6', '7', '8', '9')):
+                # Convert string chunk ID to UUID5 (deterministic)
+                # This ensures the same chunk_id always gets the same UUID
+                namespace = uuid.UUID('12345678-1234-5678-1234-567812345678')  # Fixed namespace
+                converted_id = str(uuid.uuid5(namespace, chunk_id))
+            else:
+                # Already a valid ID format
+                converted_id = str(chunk_id)
+
             points = self.client.retrieve(
                 collection_name=collection_name,
-                ids=[point_id],
+                ids=[converted_id],
                 with_payload=True,
                 with_vectors=True
             )
@@ -372,7 +382,7 @@ class QdrantManager:
             return None
             
         except Exception as e:
-            logger.error(f"Failed to get vector {point_id} from {collection_name}: {e}")
+            logger.error(f"Failed to get vector {chunk_id} from {collection_name}: {e}")
             return None
     
     async def delete_vectors(self, collection_name: str, point_ids: List[str]) -> bool:

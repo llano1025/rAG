@@ -1674,7 +1674,6 @@ class EnhancedSearchEngine:
             return results
 
         try:
-            logger.info(f"[MMR_DEBUG] Starting MMR diversification: {len(results)} results, λ={filters.mmr_lambda}, threshold={filters.mmr_similarity_threshold}")
             logger.debug(f"Starting MMR diversification: {len(results)} results, λ={filters.mmr_lambda}, threshold={filters.mmr_similarity_threshold}")
 
             # Create MMR diversifier with filter settings
@@ -1711,7 +1710,6 @@ class EnhancedSearchEngine:
                         'mmr_similarity_metric': filters.mmr_similarity_metric
                     })
 
-            logger.info(f"[MMR_DEBUG] MMR diversification completed: {len(results)} → {len(diversified_results)} results")
             logger.info(f"MMR diversification completed: {len(results)} → {len(diversified_results)} results")
 
             return diversified_results

@@ -13,7 +13,6 @@ from ..schemas.search_schemas import (
     convert_api_filters_to_search_filter
 )
 from vector_db.search_manager import get_initialized_search_engine
-from vector_db.search_types import SearchType
 from vector_db.embedding_manager import EnhancedEmbeddingManager
 from database.connection import get_db
 from utils.security.audit_logger import AuditLogger, AuditLoggerConfig
@@ -64,12 +63,15 @@ async def search(
     Uses SearchController with EnhancedSearchEngine and supports MMR and reranking.
     """
     try:
+        # Convert filters using imported function
+        converted_filters = convert_api_filters_to_search_filter(request.filters)
+
         # Execute search using SearchController
         results = await search_controller.search(
             query=request.query,
             user=current_user,
             search_type=request.search_type,
-            filters=request.filters,
+            filters=converted_filters,
             top_k=request.top_k or 20,
             similarity_threshold=request.similarity_threshold,
             embedding_model=getattr(request, 'embedding_model', None)

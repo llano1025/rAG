@@ -1,5 +1,5 @@
 from typing import List, Optional
-from pydantic import BaseModel, Field, confloat
+from pydantic import BaseModel, Field
 
 
 class SearchFilters(BaseModel):
@@ -100,8 +100,7 @@ class SearchQuery(BaseModel):
 
 
 from pydantic import BaseModel, Field
-from typing import List, Tuple, Dict
-from decimal import Decimal
+from typing import List, Dict
 
 
 class SearchResult(BaseModel):
@@ -250,7 +249,7 @@ def convert_search_response_to_api_format(results: List, query: str,
     )
 
 
-def convert_api_filters_to_search_filter(api_filters: Optional[SearchFilters]) -> 'SearchFilter':
+def convert_api_filters_to_search_filter(api_filters: Optional[SearchFilters]):
     """Convert API SearchFilters to SearchEngine SearchFilter with enhanced tag support."""
     from vector_db.search_types import SearchFilter, TagMatchMode
     from datetime import datetime
@@ -311,5 +310,34 @@ def convert_api_filters_to_search_filter(api_filters: Optional[SearchFilters]) -
         if api_filters.metadata_filters:
             # Custom metadata filtering can be extended here
             pass
-    
+
+        # Convert reranker settings
+        if api_filters.enable_reranking is not None:
+            search_filter.enable_reranking = api_filters.enable_reranking
+
+        if api_filters.reranker_model:
+            search_filter.reranker_model = api_filters.reranker_model
+
+        if api_filters.rerank_score_weight is not None:
+            search_filter.rerank_score_weight = api_filters.rerank_score_weight
+
+        if api_filters.min_rerank_score is not None:
+            search_filter.min_rerank_score = api_filters.min_rerank_score
+
+        # Convert MMR settings
+        if api_filters.enable_mmr is not None:
+            search_filter.enable_mmr = api_filters.enable_mmr
+
+        if api_filters.mmr_lambda is not None:
+            search_filter.mmr_lambda = api_filters.mmr_lambda
+
+        if api_filters.mmr_similarity_threshold is not None:
+            search_filter.mmr_similarity_threshold = api_filters.mmr_similarity_threshold
+
+        if api_filters.mmr_max_results is not None:
+            search_filter.mmr_max_results = api_filters.mmr_max_results
+
+        if api_filters.mmr_similarity_metric:
+            search_filter.mmr_similarity_metric = api_filters.mmr_similarity_metric
+
     return search_filter
