@@ -1,7 +1,9 @@
 from typing import List, Optional
 from pydantic import BaseModel, Field, confloat
 
+
 class SearchFilters(BaseModel):
+    # Content settings
     folder_ids: Optional[List[str]] = Field(None, description="Filter by folder IDs")
     tags: Optional[List[str]] = Field(None, description="Filter by tags (case-insensitive)")
     tag_match_mode: Optional[str] = Field(
@@ -16,34 +18,6 @@ class SearchFilters(BaseModel):
     language: Optional[str] = Field(None, description="Filter by document language")
     is_public: Optional[bool] = Field(None, description="Filter by public/private status")
     metadata_filters: Optional[dict] = Field(None, description="Filter by custom metadata")
-    embedding_model: Optional[str] = Field(None, description="Filter by embedding model used to index documents")
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "tags": ["python", "machine-learning"],
-                "tag_match_mode": "any",
-                "exclude_tags": ["deprecated"],
-                "file_types": ["application/pdf", "text/plain"],
-                "date_range": ["2024-01-01T00:00:00Z", "2024-12-31T23:59:59Z"],
-                "file_size_range": [1024, 10485760],
-                "language": "en",
-                "is_public": False,
-                "embedding_model": "all-MiniLM-L6-v2"
-            }
-        }
-
-class SearchQuery(BaseModel):
-    query: str = Field(..., description="Search query text")
-    filters: Optional[SearchFilters] = None
-    semantic_search: bool = Field(True, description="Whether to use semantic search")
-    top_k: int = Field(10, description="Number of results to return", ge=1, le=100)
-    similarity_threshold: Optional[float] = Field(
-        None, 
-        description="Minimum similarity score threshold",
-        ge=0.0,
-        le=1.0
-    )
     # Reranker settings
     enable_reranking: bool = Field(False, description="Whether to enable reranking of search results")
     reranker_model: Optional[str] = Field(None, description="Reranker model to use (e.g., 'ms-marco-MiniLM-L-6-v2')")
@@ -84,6 +58,38 @@ class SearchQuery(BaseModel):
         description="Similarity metric for MMR diversification",
         pattern="^(cosine|euclidean|dot_product)$"
     )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "tags": ["python", "machine-learning"],
+                "tag_match_mode": "any",
+                "exclude_tags": ["deprecated"],
+                "file_types": ["application/pdf", "text/plain"],
+                "date_range": ["2024-01-01T00:00:00Z", "2024-12-31T23:59:59Z"],
+                "file_size_range": [1024, 10485760],
+                "language": "en",
+                "is_public": False,
+                "embedding_model": "all-MiniLM-L6-v2"
+            }
+        }
+
+
+class SearchQuery(BaseModel):
+    query: str = Field(..., description="Search query text")
+    filters: Optional[SearchFilters] = None
+    search_type: Optional[str] = Field(
+        "contextual",
+        description="Type of search to perform: 'semantic', 'contextual', or 'text'",
+        pattern="^(semantic|contextual|text)$"
+    )
+    top_k: int = Field(10, description="Number of results to return", ge=1, le=100)
+    similarity_threshold: Optional[float] = Field(
+        None, 
+        description="Minimum similarity score threshold",
+        ge=0.0,
+        le=1.0
+    )
     # Embedding model selection
     embedding_model: Optional[str] = Field(None, description="Embedding model to use for query encoding (e.g., 'all-MiniLM-L6-v2')")
     # Pagination fields
@@ -92,9 +98,11 @@ class SearchQuery(BaseModel):
     # Sorting field
     sort: Optional[str] = Field(None, description="Sort order (relevance, date, title)")
 
+
 from pydantic import BaseModel, Field
 from typing import List, Tuple, Dict
 from decimal import Decimal
+
 
 class SearchResult(BaseModel):
     """
@@ -138,6 +146,7 @@ class SearchResult(BaseModel):
                 }
             }
         }
+
 
 class SearchResponse(BaseModel):
     results: List[SearchResult]

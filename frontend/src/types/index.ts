@@ -59,28 +59,17 @@ export interface DocumentUpload {
 
 // Search types
 export interface SearchFilters {
+  // Content settings
   folder_ids?: string[];
-  tags?: string[];  // Changed from tag_ids to tags
-  tag_match_mode?: 'any' | 'all' | 'exact';  // New tag matching mode
-  exclude_tags?: string[];  // New tag exclusion support
+  tags?: string[];
+  tag_match_mode?: 'any' | 'all' | 'exact';
+  exclude_tags?: string[];
   file_types?: string[];
   date_range?: [string, string];
-  file_size_range?: [number, number];  // New file size filtering
-  language?: string;  // New language filtering
-  is_public?: boolean;  // New public/private filtering
+  file_size_range?: [number, number];
+  language?: string;
+  is_public?: boolean;
   metadata_filters?: Record<string, any>;
-  embedding_model?: string;  // Filter by embedding model used
-}
-
-export interface SearchQuery {
-  query: string;
-  filters?: SearchFilters;
-  semantic_search?: boolean;
-  top_k?: number;
-  similarity_threshold?: number;
-  page?: number;
-  page_size?: number;
-  sort?: string;
   // Reranker settings
   enable_reranking?: boolean;
   reranker_model?: string;
@@ -92,7 +81,17 @@ export interface SearchQuery {
   mmr_similarity_threshold?: number;
   mmr_max_results?: number;
   mmr_similarity_metric?: 'cosine' | 'euclidean' | 'dot_product';
-  // Embedding model selection
+}
+
+export interface SearchQuery {
+  query: string;
+  filters?: SearchFilters;
+  search_type?: 'semantic' | 'contextual' | 'text';
+  top_k?: number;
+  similarity_threshold?: number;
+  page?: number;
+  page_size?: number;
+  sort?: string;
   embedding_model?: string;
 }
 

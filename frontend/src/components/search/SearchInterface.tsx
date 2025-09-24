@@ -28,7 +28,11 @@ export default function SearchInterface() {
   const [suggestions, setSuggestions] = useState<SearchSuggestion[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [suggestionLoading, setSuggestionLoading] = useState(false);
-  const [filters, setFilters] = useState({
+  const [filters, setFilters] = useState<SearchFiltersType & {
+    file_type: string[];
+    date_range: { start: string; end: string } | null;
+    owner: string;
+  }>({
     file_type: [] as string[],
     date_range: null as { start: string; end: string } | null,
     owner: '',
@@ -40,21 +44,18 @@ export default function SearchInterface() {
     file_size_range: null as [number, number] | null,
     language: '',
     is_public: undefined as boolean | undefined,
-    embedding_model: undefined as string | undefined,
+    // Reranker settings moved into filters
+    enable_reranking: false,
+    reranker_model: undefined,
+    rerank_score_weight: 0.5,
+    min_rerank_score: undefined,
+    // MMR settings moved into filters
+    enable_mmr: false,
+    mmr_lambda: 0.6,
+    mmr_similarity_threshold: 0.8,
+    mmr_max_results: undefined,
+    mmr_similarity_metric: 'cosine',
   });
-
-  // Reranker settings
-  const [rerankerEnabled, setRerankerEnabled] = useState(false);
-  const [rerankerModel, setRerankerModel] = useState<string | undefined>(undefined);
-  const [rerankerScoreWeight, setRerankerScoreWeight] = useState(0.5);
-  const [rerankerMinScore, setRerankerMinScore] = useState<number | undefined>(undefined);
-
-  // MMR (Maximal Marginal Relevance) parameters
-  const [mmrEnabled, setMmrEnabled] = useState(false);
-  const [mmrLambda, setMmrLambda] = useState(0.6);
-  const [mmrSimilarityThreshold, setMmrSimilarityThreshold] = useState(0.8);
-  const [mmrMaxResults, setMmrMaxResults] = useState<number | undefined>(undefined);
-  const [mmrSimilarityMetric, setMmrSimilarityMetric] = useState<'cosine' | 'euclidean' | 'dot_product'>('cosine');
 
   // Embedding model settings
   const [selectedEmbeddingModel, setSelectedEmbeddingModel] = useState<string | undefined>(undefined);
@@ -140,101 +141,59 @@ export default function SearchInterface() {
     setLoading(true);
     try {
       // Build search filters in backend format
-      const searchFilters: SearchFiltersType = {};
-      
-      if (filters.file_type.length > 0) {
-        searchFilters.file_types = filters.file_type;
-      }
-      
-      // Updated tag filtering with new schema
-      if (filters.tags.length > 0) {
-        searchFilters.tags = filters.tags;  // Changed from tag_ids to tags
-        searchFilters.tag_match_mode = filters.tag_match_mode;
-      }
+      const searchFilters: SearchFiltersType = {
+        // Copy all filters from state, converting legacy fields
+        ...filters,
+        file_types: filters.file_type.length > 0 ? filters.file_type : undefined,
+      };
 
-      if (filters.exclude_tags.length > 0) {
-        searchFilters.exclude_tags = filters.exclude_tags;
-      }
-
-      if (filters.folder_ids && filters.folder_ids.length > 0) {
-        searchFilters.folder_ids = filters.folder_ids;
-      }
-      
+      // Handle legacy date_range format conversion
       if (filters.date_range) {
         searchFilters.date_range = [filters.date_range.start, filters.date_range.end];
       }
 
-      if (filters.file_size_range) {
-        searchFilters.file_size_range = filters.file_size_range;
+      // Handle owner and languages through metadata_filters
+      if (filters.owner || (filters.languages && filters.languages.length > 0)) {
+        searchFilters.metadata_filters = {};
+        if (filters.owner) {
+          searchFilters.metadata_filters.owner = filters.owner;
+        }
+        if (filters.languages && filters.languages.length > 0) {
+          searchFilters.metadata_filters.languages = filters.languages;
+        }
       }
 
-      if (filters.language) {
-        searchFilters.language = filters.language;
-      }
+      // Remove legacy fields that shouldn't be sent to backend
+      delete (searchFilters as any).file_type;
+      delete (searchFilters as any).owner;
 
-      if (filters.is_public !== undefined) {
-        searchFilters.is_public = filters.is_public;
-      }
-      
-      if (filters.owner) {
-        // Handle owner filter through metadata_filters
-        searchFilters.metadata_filters = { owner: filters.owner };
-      }
-
-      if (filters.languages && filters.languages.length > 0) {
-        searchFilters.metadata_filters = {
-          ...searchFilters.metadata_filters,
-          languages: filters.languages
-        };
-      }
+      // Map frontend search types to backend search types
+      const mapSearchType = (frontendType: string) => {
+        switch (frontendType) {
+          case 'semantic':
+            return 'semantic';
+          case 'contextual':
+            return 'contextual';
+          case 'basic':
+            return 'text';
+          default:
+            return 'contextual';
+        }
+      };
 
       const searchQuery: SearchQuery = {
         query: data.query,
-        filters: Object.keys(searchFilters).length > 0 ? searchFilters : undefined,
+        filters: searchFilters,
         page: 1,
         page_size: maxResults,
         top_k: maxResults,
         similarity_threshold: minScore,
-        semantic_search: data.searchType === 'semantic',
-        // Reranker settings
-        enable_reranking: rerankerEnabled,
-        reranker_model: rerankerModel,
-        rerank_score_weight: rerankerScoreWeight,
-        min_rerank_score: rerankerMinScore,
-        // MMR diversification settings
-        enable_mmr: mmrEnabled,
-        mmr_lambda: mmrLambda,
-        mmr_similarity_threshold: mmrSimilarityThreshold,
-        mmr_max_results: mmrMaxResults,
-        mmr_similarity_metric: mmrSimilarityMetric,
-        // Embedding model selection
+        search_type: mapSearchType(data.searchType),
         embedding_model: selectedEmbeddingModel,
       };
 
-      // Debug MMR parameters
-      console.log('[SEARCH_DEBUG] MMR Parameters:', {
-        enable_mmr: mmrEnabled,
-        mmr_lambda: mmrLambda,
-        mmr_similarity_threshold: mmrSimilarityThreshold,
-        mmr_max_results: mmrMaxResults,
-        mmr_similarity_metric: mmrSimilarityMetric
-      });
-
-      let response: SearchResponse;
-      
-      switch (data.searchType) {
-        case 'semantic':
-          response = await searchApi.semanticSearch(searchQuery);
-          break;
-        case 'contextual':
-          response = await searchApi.contextualSearch(searchQuery);
-          break;
-        case 'basic':
-          response = await searchApi.textSearch(searchQuery);
-          break;
-        default:
-          response = await searchApi.search(searchQuery);
-      }
+      // Use unified search endpoint (search_type parameter controls behavior)
+      const response: SearchResponse = await searchApi.search(searchQuery);
 
       setSearchResponse(response);
       fetchSearchHistory(); // Refresh history after search
@@ -255,74 +214,54 @@ export default function SearchInterface() {
     if (!name) return;
 
     try {
-      // Build search query object
-      const searchFilters: SearchFiltersType = {};
-      
-      if (filters.file_type.length > 0) {
-        searchFilters.file_types = filters.file_type;
-      }
-      
-      // Updated tag filtering with new schema
-      if (filters.tags.length > 0) {
-        searchFilters.tags = filters.tags;  // Changed from tag_ids to tags
-        searchFilters.tag_match_mode = filters.tag_match_mode;
-      }
+      // Build search filters in backend format
+      const searchFilters: SearchFiltersType = {
+        // Copy all filters from state, converting legacy fields
+        ...filters,
+        file_types: filters.file_type.length > 0 ? filters.file_type : undefined,
+      };
 
-      if (filters.exclude_tags.length > 0) {
-        searchFilters.exclude_tags = filters.exclude_tags;
-      }
-
-      if (filters.folder_ids && filters.folder_ids.length > 0) {
-        searchFilters.folder_ids = filters.folder_ids;
-      }
-      
+      // Handle legacy date_range format conversion
       if (filters.date_range) {
         searchFilters.date_range = [filters.date_range.start, filters.date_range.end];
       }
 
-      if (filters.file_size_range) {
-        searchFilters.file_size_range = filters.file_size_range;
+      // Handle owner and languages through metadata_filters
+      if (filters.owner || (filters.languages && filters.languages.length > 0)) {
+        searchFilters.metadata_filters = {};
+        if (filters.owner) {
+          searchFilters.metadata_filters.owner = filters.owner;
+        }
+        if (filters.languages && filters.languages.length > 0) {
+          searchFilters.metadata_filters.languages = filters.languages;
+        }
       }
 
-      if (filters.language) {
-        searchFilters.language = filters.language;
-      }
+      // Remove legacy fields that shouldn't be sent to backend
+      delete (searchFilters as any).file_type;
+      delete (searchFilters as any).owner;
 
-      if (filters.is_public !== undefined) {
-        searchFilters.is_public = filters.is_public;
-      }
-      
-      if (filters.owner) {
-        searchFilters.metadata_filters = { owner: filters.owner };
-      }
-
-      if (filters.languages && filters.languages.length > 0) {
-        searchFilters.metadata_filters = {
-          ...searchFilters.metadata_filters,
-          languages: filters.languages
-        };
-      }
+      const mapSearchType = (frontendType: string) => {
+        switch (frontendType) {
+          case 'semantic':
+            return 'semantic';
+          case 'contextual':
+            return 'contextual';
+          case 'basic':
+            return 'text';
+          default:
+            return 'contextual';
+        }
+      };
 
       const searchQuery: SearchQuery = {
         query: query,
-        filters: Object.keys(searchFilters).length > 0 ? searchFilters : undefined,
+        filters: searchFilters,
         page: 1,
         page_size: maxResults,
         top_k: maxResults,
         similarity_threshold: minScore,
-        semantic_search: searchType === 'semantic',
-        // Reranker settings
-        enable_reranking: rerankerEnabled,
-        reranker_model: rerankerModel,
-        rerank_score_weight: rerankerScoreWeight,
-        min_rerank_score: rerankerMinScore,
-        // MMR diversification settings
-        enable_mmr: mmrEnabled,
-        mmr_lambda: mmrLambda,
-        mmr_similarity_threshold: mmrSimilarityThreshold,
-        mmr_max_results: mmrMaxResults,
-        mmr_similarity_metric: mmrSimilarityMetric,
-        // Embedding model selection
+        search_type: mapSearchType(searchType),
         embedding_model: selectedEmbeddingModel,
       };
 
@@ -351,27 +290,28 @@ export default function SearchInterface() {
         file_size_range: searchFilters.file_size_range || null,
         language: searchFilters.language || '',
         is_public: searchFilters.is_public,
-        embedding_model: searchFilters.embedding_model,
         date_range: searchFilters.date_range ? {
           start: searchFilters.date_range[0],
           end: searchFilters.date_range[1]
         } : null,
         owner: searchFilters.metadata_filters?.owner || '',
+        // Load reranker settings
+        enable_reranking: searchFilters.enable_reranking || false,
+        reranker_model: searchFilters.reranker_model,
+        rerank_score_weight: searchFilters.rerank_score_weight ?? 0.5,
+        min_rerank_score: searchFilters.min_rerank_score,
+        // Load MMR settings
+        enable_mmr: searchFilters.enable_mmr || false,
+        mmr_lambda: searchFilters.mmr_lambda ?? 0.6,
+        mmr_similarity_threshold: searchFilters.mmr_similarity_threshold ?? 0.8,
+        mmr_max_results: searchFilters.mmr_max_results,
+        mmr_similarity_metric: searchFilters.mmr_similarity_metric || 'cosine',
       });
-    }
 
-    // Load reranker and embedding model settings if available (from the saved search query)
-    if (savedSearch.filters) {
-      const query = savedSearch.filters as any;
-      setRerankerEnabled(query.enable_reranking ?? true);
-      setRerankerModel(query.reranker_model);
-      setRerankerScoreWeight(query.rerank_score_weight ?? 0.5);
-      setRerankerMinScore(query.min_rerank_score);
-      setSelectedEmbeddingModel(query.embedding_model);
-
-      // Load search parameters
-      setMaxResults(query.top_k ?? query.page_size ?? 20);
-      setMinScore(query.similarity_threshold ?? 0.0);
+      // Load embedding model and search parameters
+      setSelectedEmbeddingModel(searchFilters.embedding_model);
+      setMaxResults(savedSearch.max_results ?? 20);
+      setMinScore(savedSearch.similarity_threshold ?? 0.0);
     }
     
     setShowSuggestions(false);
@@ -394,25 +334,28 @@ export default function SearchInterface() {
         file_size_range: searchFilters.file_size_range || null,
         language: searchFilters.language || '',
         is_public: searchFilters.is_public,
-        embedding_model: searchFilters.embedding_model,
         date_range: searchFilters.date_range ? {
           start: searchFilters.date_range[0],
           end: searchFilters.date_range[1]
         } : null,
         owner: searchFilters.metadata_filters?.owner || '',
+        // Load reranker settings
+        enable_reranking: searchFilters.enable_reranking || false,
+        reranker_model: searchFilters.reranker_model,
+        rerank_score_weight: searchFilters.rerank_score_weight ?? 0.5,
+        min_rerank_score: searchFilters.min_rerank_score,
+        // Load MMR settings
+        enable_mmr: searchFilters.enable_mmr || false,
+        mmr_lambda: searchFilters.mmr_lambda ?? 0.6,
+        mmr_similarity_threshold: searchFilters.mmr_similarity_threshold ?? 0.8,
+        mmr_max_results: searchFilters.mmr_max_results,
+        mmr_similarity_metric: searchFilters.mmr_similarity_metric || 'cosine',
       });
 
-      // Load reranker and embedding model settings if available (from the history item query)
-      const query = historyItem.filters as any;
-      setRerankerEnabled(query.enable_reranking ?? true);
-      setRerankerModel(query.reranker_model);
-      setRerankerScoreWeight(query.rerank_score_weight ?? 0.5);
-      setRerankerMinScore(query.min_rerank_score);
-      setSelectedEmbeddingModel(query.embedding_model);
-
-      // Load search parameters
-      setMaxResults(query.top_k ?? query.page_size ?? 20);
-      setMinScore(query.similarity_threshold ?? 0.0);
+      // Load embedding model and search parameters
+      setSelectedEmbeddingModel(searchFilters.embedding_model);
+      setMaxResults(historyItem.filters.top_k ?? historyItem.filters.page_size ?? 20);
+      setMinScore(historyItem.filters.similarity_threshold ?? 0.0);
     }
     
     setShowSuggestions(false);
@@ -555,24 +498,6 @@ export default function SearchInterface() {
                 onFiltersChange={setFilters}
                 selectedEmbeddingModel={selectedEmbeddingModel}
                 onEmbeddingModelChange={setSelectedEmbeddingModel}
-                rerankerEnabled={rerankerEnabled}
-                onRerankerEnabledChange={setRerankerEnabled}
-                rerankerModel={rerankerModel}
-                onRerankerModelChange={setRerankerModel}
-                rerankerScoreWeight={rerankerScoreWeight}
-                onRerankerScoreWeightChange={setRerankerScoreWeight}
-                rerankerMinScore={rerankerMinScore}
-                onRerankerMinScoreChange={setRerankerMinScore}
-                mmrEnabled={mmrEnabled}
-                onMmrEnabledChange={setMmrEnabled}
-                mmrLambda={mmrLambda}
-                onMmrLambdaChange={setMmrLambda}
-                mmrSimilarityThreshold={mmrSimilarityThreshold}
-                onMmrSimilarityThresholdChange={setMmrSimilarityThreshold}
-                mmrMaxResults={mmrMaxResults}
-                onMmrMaxResultsChange={setMmrMaxResults}
-                mmrSimilarityMetric={mmrSimilarityMetric}
-                onMmrSimilarityMetricChange={setMmrSimilarityMetric}
                 maxResults={maxResults}
                 onMaxResultsChange={setMaxResults}
                 minScore={minScore}

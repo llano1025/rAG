@@ -5,6 +5,7 @@ import logging
 from pydantic import BaseModel, Field
 from ..middleware.auth import get_current_active_user
 from ..controllers import search_controller
+from ..controllers.search_controller import SearchController
 from ..schemas.search_schemas import (
     SearchQuery,
     SearchResponse,
@@ -15,6 +16,8 @@ from vector_db.search_engine import EnhancedSearchEngine, get_initialized_search
 from vector_db.search_types import SearchType
 from vector_db.embedding_manager import EnhancedEmbeddingManager
 from database.connection import get_db
+from utils.security.audit_logger import AuditLogger, AuditLoggerConfig
+from pathlib import Path
 import warnings
 
 logger = logging.getLogger(__name__)
@@ -26,275 +29,64 @@ class SearchMetadata(BaseModel):
     execution_time: float
     filters_applied: List[str]
 
+async def get_search_controller(
+    current_user = Depends(get_current_active_user),
+    db = Depends(get_db)
+) -> SearchController:
+    """Dependency to get initialized SearchController."""
+    search_engine = await get_initialized_search_engine()
+
+    # Create audit logger configuration
+    audit_config = AuditLoggerConfig(
+        log_path=Path("/tmp/audit_logs"),  # Default path, should be configurable
+        rotation_size_mb=10,
+        retention_days=90,
+        batch_size=100,
+        flush_interval_seconds=5,
+        enable_async=True
+    )
+    audit_logger = AuditLogger(audit_config)
+
+    return SearchController(
+        search_engine=search_engine,
+        db=db,
+        audit_logger=audit_logger
+    )
+
 @router.post("/", response_model=SearchResponse)
-async def unified_search(
+async def search(
     request: SearchQuery,
-    current_user = Depends(get_current_active_user)
+    current_user = Depends(get_current_active_user),
+    search_controller = Depends(get_search_controller)
 ):
     """
-    Intelligent unified search that automatically selects the best search strategy.
-    Uses EnhancedSearchEngine with automatic mode selection based on query characteristics.
+    Unified intelligent search that automatically selects the best search strategy.
+    Uses SearchController with EnhancedSearchEngine and supports MMR and reranking.
     """
     try:
-        # Get search engine components
-        # Use persistent search engine instance
-        search_engine = await get_initialized_search_engine()
-        embedding_manager = EnhancedEmbeddingManager.create_default_manager()
-        
-        db = next(get_db())
-        
-        # Intelligent search type detection based on query characteristics
-        def detect_optimal_search_type(query: str) -> str:
-            # Short queries → keyword search
-            if len(query.split()) <= 2:
-                return SearchType.KEYWORD
-            
-            # Question-like queries → semantic search  
-            if query.lower().startswith(('what', 'how', 'why', 'when', 'where', 'who')):
-                return SearchType.SEMANTIC
-            
-            # Complex queries → contextual search
-            if len(query.split()) > 5:
-                return SearchType.CONTEXTUAL
-
-            # Default to contextual for best results
-            return SearchType.CONTEXTUAL
-        
-        search_type = detect_optimal_search_type(request.query)
-        
-        # Convert API filters to search engine format
-        search_filters = convert_api_filters_to_search_filter(request.filters)
-        if request.similarity_threshold is not None:
-            search_filters.min_score = request.similarity_threshold
-        
-        # Apply reranking settings
-        if hasattr(request, 'enable_reranking'):
-            search_filters.enable_reranking = request.enable_reranking
-        if hasattr(request, 'reranker_model'):
-            search_filters.reranker_model = request.reranker_model
-        if hasattr(request, 'rerank_score_weight'):
-            search_filters.rerank_score_weight = request.rerank_score_weight
-        if hasattr(request, 'min_rerank_score'):
-            search_filters.min_rerank_score = request.min_rerank_score
-
-        # Apply MMR settings
-        if hasattr(request, 'enable_mmr'):
-            search_filters.enable_mmr = request.enable_mmr
-        if hasattr(request, 'mmr_lambda'):
-            search_filters.mmr_lambda = request.mmr_lambda
-        if hasattr(request, 'mmr_similarity_threshold'):
-            search_filters.mmr_similarity_threshold = request.mmr_similarity_threshold
-        if hasattr(request, 'mmr_max_results'):
-            search_filters.mmr_max_results = request.mmr_max_results
-        if hasattr(request, 'mmr_similarity_metric'):
-            search_filters.mmr_similarity_metric = request.mmr_similarity_metric
-
-        if hasattr(request, 'embedding_model'):
-            search_filters.embedding_model = request.embedding_model
-
-        # Execute unified search
-        results = await search_engine.search(
+        # Execute search using SearchController
+        results = await search_controller.search(
             query=request.query,
             user=current_user,
-            search_type=search_type,
-            filters=search_filters,
-            limit=request.top_k,
-            db=db
+            search_type=request.search_type,
+            filters=request.filters,
+            top_k=request.top_k or 20,
+            similarity_threshold=request.similarity_threshold,
+            embedding_model=getattr(request, 'embedding_model', None)
         )
-        
-        # Convert to API response format
+
+        # Convert to API response format using schema converter
         return convert_search_response_to_api_format(
             results=results,
             query=request.query,
-            execution_time=0.0,  # TODO: Add timing
-            search_type=search_type.value,
+            execution_time=0.0,  # Controller handles timing internally
+            search_type=request.search_type,
             filters=request.filters,
-            reranking_applied=getattr(search_filters, 'enable_reranking', False)
+            reranking_applied=getattr(request, 'enable_reranking', False)
         )
-        
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Unified search failed: {str(e)}")
-
-@router.post("/text", response_model=SearchResponse)
-async def text_search(
-    request: SearchQuery,
-    current_user = Depends(get_current_active_user)
-):
-    """
-    Pure text-based search using keyword matching algorithm via EnhancedSearchEngine.
-    """
-    import logging
-    logger = logging.getLogger(__name__)
-    
-    try:
-        logger.info(f"Text search request: query='{request.query[:50]}...', user_id={current_user.id}, top_k={request.top_k}")
-        
-        # Get search engine components
-        # Use persistent search engine instance
-        search_engine = await get_initialized_search_engine()
-        embedding_manager = EnhancedEmbeddingManager.create_default_manager()
-        logger.debug("Search engine components initialized successfully")
-        
-        # Get database session with proper error handling
-        try:
-            db = next(get_db())
-            logger.debug("Database session obtained")
-        except Exception as db_error:
-            logger.error(f"Failed to get database session: {db_error}")
-            raise HTTPException(status_code=500, detail="Database connection failed")
-        
-        # Convert API filters to search engine format with validation
-        try:
-            search_filters = convert_api_filters_to_search_filter(request.filters)
-            if request.similarity_threshold is not None:
-                search_filters.min_score = request.similarity_threshold
-            
-            logger.info(f"Search filters: min_score={getattr(search_filters, 'min_score', None)}, "
-                       f"content_types={getattr(search_filters, 'content_types', None)}, "
-                       f"tags={getattr(search_filters, 'tags', None)}")
-        except Exception as filter_error:
-            logger.error(f"Failed to convert search filters: {filter_error}")
-            raise HTTPException(status_code=400, detail=f"Invalid search filters: {str(filter_error)}")
-        
-        # Execute keyword search using SearchEngine
-        logger.info(f"Calling search() with SearchType.KEYWORD")
-        results = await search_engine.search(
-            query=request.query,
-            user=current_user,
-            search_type=SearchType.KEYWORD,
-            filters=search_filters,
-            limit=request.top_k,
-            db=db
-        )
-        
-        logger.info(f"Search completed successfully, returned {len(results)} results")
-        
-        # Convert to API response format
-        response = convert_search_response_to_api_format(
-            results=results,
-            query=request.query,
-            execution_time=0.0,  # TODO: Add timing
-            search_type="keyword",
-            filters=request.filters
-        )
-        
-        logger.debug("Response formatted successfully")
-        return response
-        
-    except Exception as e:
-        error_msg = f"Text search failed: {type(e).__name__}: {str(e)}"
-        logger.error(error_msg, exc_info=True)
-        raise HTTPException(status_code=400, detail=error_msg)
-
-@router.post("/semantic", response_model=SearchResponse)
-async def semantic_search(
-    request: SearchQuery,
-    current_user = Depends(get_current_active_user)
-):
-    """
-    Semantic search using document vectors via EnhancedSearchEngine.
-    """
-    try:
-        # Get search engine components
-        # Use persistent search engine instance
-        search_engine = await get_initialized_search_engine()
-        embedding_manager = EnhancedEmbeddingManager.create_default_manager()
-        
-        db = next(get_db())
-        
-        # Convert API filters to search engine format
-        search_filters = convert_api_filters_to_search_filter(request.filters)
-        if request.similarity_threshold is not None:
-            search_filters.min_score = request.similarity_threshold
-        
-        # Apply reranking settings
-        if hasattr(request, 'enable_reranking'):
-            search_filters.enable_reranking = request.enable_reranking
-        if hasattr(request, 'reranker_model'):
-            search_filters.reranker_model = request.reranker_model
-        if hasattr(request, 'rerank_score_weight'):
-            search_filters.rerank_score_weight = request.rerank_score_weight
-        if hasattr(request, 'min_rerank_score'):
-            search_filters.min_rerank_score = request.min_rerank_score
-        
-        # Execute semantic search using SearchEngine
-        results = await search_engine.search(
-            query=request.query,
-            user=current_user,
-            search_type=SearchType.SEMANTIC,
-            filters=search_filters,
-            limit=request.top_k,
-            db=db
-        )
-        
-        # Convert to API response format
-        return convert_search_response_to_api_format(
-            results=results,
-            query=request.query,
-            execution_time=0.0,  # TODO: Add timing
-            search_type="semantic",
-            filters=request.filters,
-            reranking_applied=getattr(search_filters, 'enable_reranking', False)
-        )
-        
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Semantic search failed: {str(e)}")
-
-@router.post("/contextual", response_model=SearchResponse)
-async def contextual_search(
-    request: SearchQuery,
-    current_user = Depends(get_current_active_user)
-):
-    """
-    Contextual search combining content and context vectors for enhanced relevance via EnhancedSearchEngine.
-    Uses weighted scoring (70% content, 30% context) for superior document understanding.
-    """
-    try:
-        # Get search engine components
-        # Use persistent search engine instance
-        search_engine = await get_initialized_search_engine()
-        embedding_manager = EnhancedEmbeddingManager.create_default_manager()
-        
-        db = next(get_db())
-        
-        # Convert API filters to search engine format
-        search_filters = convert_api_filters_to_search_filter(request.filters)
-        if request.similarity_threshold is not None:
-            search_filters.min_score = request.similarity_threshold
-        
-        # Apply reranking settings
-        if hasattr(request, 'enable_reranking'):
-            search_filters.enable_reranking = request.enable_reranking
-        if hasattr(request, 'reranker_model'):
-            search_filters.reranker_model = request.reranker_model
-        if hasattr(request, 'rerank_score_weight'):
-            search_filters.rerank_score_weight = request.rerank_score_weight
-        if hasattr(request, 'min_rerank_score'):
-            search_filters.min_rerank_score = request.min_rerank_score
-        
-        # Execute contextual search using SearchEngine
-        results = await search_engine.search(
-            query=request.query,
-            user=current_user,
-            search_type=SearchType.CONTEXTUAL,
-            filters=search_filters,
-            limit=request.top_k,
-            db=db
-        )
-        
-        # Convert to API response format
-        return convert_search_response_to_api_format(
-            results=results,
-            query=request.query,
-            execution_time=0.0,  # TODO: Add timing
-            search_type="contextual",
-            filters=request.filters,
-            fusion_method="contextual_content_context_vectors",
-            reranking_applied=getattr(search_filters, 'enable_reranking', False)
-        )
-        
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Contextual search failed: {str(e)}")
+        logger.error(f"Unified search failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
 
 class FilterOption(BaseModel):
     value: str

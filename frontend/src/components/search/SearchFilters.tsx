@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { searchApi, AvailableFilters } from '@/api/search';
+import { SearchFilters as SearchFiltersType } from '@/types';
 import TagInput from '@/components/common/TagInput';
 import EmbeddingModelSelector from '../models/EmbeddingModelSelector';
 import RerankerModelSelector from '../models/RerankerModelSelector';
@@ -11,44 +12,19 @@ import {
 } from '@heroicons/react/24/outline';
 
 interface SearchFiltersProps {
-  filters: {
+  filters: SearchFiltersType & {
+    file_type: string[];  // Legacy compatibility
+    date_range: { start: string; end: string } | null;  // Legacy compatibility
+    owner: string;  // Legacy compatibility
+  };
+  onFiltersChange: (filters: SearchFiltersType & {
     file_type: string[];
     date_range: { start: string; end: string } | null;
     owner: string;
-    tags: string[];
-    tag_match_mode: 'any' | 'all' | 'exact';
-    exclude_tags: string[];
-    folder_ids?: string[];
-    languages?: string[];
-    file_size_range?: [number, number] | null;
-    language?: string;
-    is_public?: boolean;
-    embedding_model?: string;
-  };
-  onFiltersChange: (filters: any) => void;
-  // Reranker props
+  }) => void;
+  // Search parameters
   selectedEmbeddingModel?: string;
   onEmbeddingModelChange: (modelId: string) => void;
-  rerankerEnabled: boolean;
-  onRerankerEnabledChange: (enabled: boolean) => void;
-  rerankerModel?: string;
-  onRerankerModelChange: (model: string | undefined) => void;
-  rerankerScoreWeight: number;
-  onRerankerScoreWeightChange: (weight: number) => void;
-  rerankerMinScore?: number;
-  onRerankerMinScoreChange: (score: number | undefined) => void;
-  // MMR (Maximal Marginal Relevance) diversification props
-  mmrEnabled: boolean;
-  onMmrEnabledChange: (enabled: boolean) => void;
-  mmrLambda: number;
-  onMmrLambdaChange: (lambda: number) => void;
-  mmrSimilarityThreshold: number;
-  onMmrSimilarityThresholdChange: (threshold: number) => void;
-  mmrMaxResults?: number;
-  onMmrMaxResultsChange: (maxResults: number | undefined) => void;
-  mmrSimilarityMetric: 'cosine' | 'euclidean' | 'dot_product';
-  onMmrSimilarityMetricChange: (metric: 'cosine' | 'euclidean' | 'dot_product') => void;
-  // Search parameters
   maxResults: number;
   onMaxResultsChange: (value: number) => void;
   minScore: number;
@@ -60,24 +36,6 @@ export default function SearchFilters({
   onFiltersChange,
   selectedEmbeddingModel,
   onEmbeddingModelChange,
-  rerankerEnabled,
-  onRerankerEnabledChange,
-  rerankerModel,
-  onRerankerModelChange,
-  rerankerScoreWeight,
-  onRerankerScoreWeightChange,
-  rerankerMinScore,
-  onRerankerMinScoreChange,
-  mmrEnabled,
-  onMmrEnabledChange,
-  mmrLambda,
-  onMmrLambdaChange,
-  mmrSimilarityThreshold,
-  onMmrSimilarityThresholdChange,
-  mmrMaxResults,
-  onMmrMaxResultsChange,
-  mmrSimilarityMetric,
-  onMmrSimilarityMetricChange,
   maxResults,
   onMaxResultsChange,
   minScore,
@@ -125,15 +83,19 @@ export default function SearchFilters({
 
   // Auto-expand sections if filters are active
   useEffect(() => {
-    if (filters.tags.length > 0 || filters.exclude_tags.length > 0 || filters.language ||
-        filters.embedding_model || selectedEmbeddingModel || rerankerEnabled || mmrEnabled) {
+    if (filters.tags && filters.tags.length > 0 ||
+        filters.exclude_tags && filters.exclude_tags.length > 0 ||
+        filters.language ||
+        selectedEmbeddingModel ||
+        filters.enable_reranking ||
+        filters.enable_mmr) {
       setShowContentFilters(true);
     }
     if (filters.folder_ids?.length || filters.languages?.length || filters.file_size_range ||
         filters.is_public !== undefined) {
       setShowAdvancedFilters(true);
     }
-  }, [filters, selectedEmbeddingModel, rerankerEnabled, mmrEnabled]);
+  }, [filters, selectedEmbeddingModel]);
 
   const handleFileTypeChange = (fileTypes: string[]) => {
     onFiltersChange({
@@ -202,24 +164,31 @@ export default function SearchFilters({
       file_size_range: null,
       language: '',
       is_public: undefined,
-      embedding_model: undefined,
+      // Reset reranker settings
+      enable_reranking: false,
+      reranker_model: undefined,
+      rerank_score_weight: 0.5,
+      min_rerank_score: undefined,
+      // Reset MMR settings
+      enable_mmr: false,
+      mmr_lambda: 0.6,
+      mmr_similarity_threshold: 0.8,
+      mmr_max_results: undefined,
+      mmr_similarity_metric: 'cosine',
     });
-    // Reset model selections
+    // Reset embedding model selection
     onEmbeddingModelChange('');
-    onRerankerEnabledChange(false);
-    onRerankerModelChange(undefined);
   };
 
   const hasActiveFilters = filters.file_type.length > 0 ||
-    filters.tags.length > 0 ||
-    filters.exclude_tags.length > 0 ||
+    (filters.tags && filters.tags.length > 0) ||
+    (filters.exclude_tags && filters.exclude_tags.length > 0) ||
     filters.file_size_range ||
     filters.language ||
     filters.is_public !== undefined ||
-    filters.embedding_model ||
     selectedEmbeddingModel ||
-    rerankerEnabled ||
-    mmrEnabled ||
+    filters.enable_reranking ||
+    filters.enable_mmr ||
     (filters.folder_ids && filters.folder_ids.length > 0) ||
     (filters.languages && filters.languages.length > 0);
 
@@ -375,14 +344,14 @@ export default function SearchFilters({
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-2">Reranker Settings</label>
                 <RerankerModelSelector
-                  selectedModel={rerankerModel}
-                  onModelChange={onRerankerModelChange}
-                  enabled={rerankerEnabled}
-                  onEnabledChange={onRerankerEnabledChange}
-                  scoreWeight={rerankerScoreWeight}
-                  onScoreWeightChange={onRerankerScoreWeightChange}
-                  minScore={rerankerMinScore}
-                  onMinScoreChange={onRerankerMinScoreChange}
+                  selectedModel={filters.reranker_model}
+                  onModelChange={(model) => onFiltersChange({ ...filters, reranker_model: model })}
+                  enabled={filters.enable_reranking || false}
+                  onEnabledChange={(enabled) => onFiltersChange({ ...filters, enable_reranking: enabled })}
+                  scoreWeight={filters.rerank_score_weight || 0.5}
+                  onScoreWeightChange={(weight) => onFiltersChange({ ...filters, rerank_score_weight: weight })}
+                  minScore={filters.min_rerank_score}
+                  onMinScoreChange={(score) => onFiltersChange({ ...filters, min_rerank_score: score })}
                   compact={true}
                 />
               </div>
@@ -390,16 +359,16 @@ export default function SearchFilters({
               <div>
                 <label className="block text-xs font-medium text-gray-700 mb-2">Result Diversification</label>
                 <MMRSettingsSelector
-                  enabled={mmrEnabled}
-                  onEnabledChange={onMmrEnabledChange}
-                  lambda={mmrLambda}
-                  onLambdaChange={onMmrLambdaChange}
-                  similarityThreshold={mmrSimilarityThreshold}
-                  onSimilarityThresholdChange={onMmrSimilarityThresholdChange}
-                  maxResults={mmrMaxResults}
-                  onMaxResultsChange={onMmrMaxResultsChange}
-                  similarityMetric={mmrSimilarityMetric}
-                  onSimilarityMetricChange={onMmrSimilarityMetricChange}
+                  enabled={filters.enable_mmr || false}
+                  onEnabledChange={(enabled) => onFiltersChange({ ...filters, enable_mmr: enabled })}
+                  lambda={filters.mmr_lambda || 0.6}
+                  onLambdaChange={(lambda) => onFiltersChange({ ...filters, mmr_lambda: lambda })}
+                  similarityThreshold={filters.mmr_similarity_threshold || 0.8}
+                  onSimilarityThresholdChange={(threshold) => onFiltersChange({ ...filters, mmr_similarity_threshold: threshold })}
+                  maxResults={filters.mmr_max_results}
+                  onMaxResultsChange={(maxResults) => onFiltersChange({ ...filters, mmr_max_results: maxResults })}
+                  similarityMetric={filters.mmr_similarity_metric || 'cosine'}
+                  onSimilarityMetricChange={(metric) => onFiltersChange({ ...filters, mmr_similarity_metric: metric })}
                   compact={true}
                 />
               </div>

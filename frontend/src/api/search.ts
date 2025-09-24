@@ -69,20 +69,23 @@ export interface RecentSearch {
 
 export const searchApi = {
   search: async (query: SearchQuery): Promise<SearchResponse> => {
-    return apiClient.post('/api/search', query);
+    // Use unified search endpoint (auto-detects search type)
+    return apiClient.post('/api/search/', query);
   },
 
   textSearch: async (query: SearchQuery): Promise<SearchResponse> => {
-    return apiClient.post('/api/search/text', query);
+    // Use unified search with text search type
+    return apiClient.post('/api/search/', { ...query, search_type: 'text' });
   },
 
   semanticSearch: async (query: SearchQuery): Promise<SearchResponse> => {
-    return apiClient.post('/api/search/semantic', query);
+    // Use unified search with semantic search type
+    return apiClient.post('/api/search/', { ...query, search_type: 'semantic' });
   },
 
-
   contextualSearch: async (query: SearchQuery): Promise<SearchResponse> => {
-    return apiClient.post('/api/search/contextual', query);
+    // Use unified search with contextual search type
+    return apiClient.post('/api/search/', { ...query, search_type: 'contextual' });
   },
 
   getSearchHistory: async (): Promise<RecentSearch[]> => {
