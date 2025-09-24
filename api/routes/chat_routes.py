@@ -46,6 +46,13 @@ class ChatSettings(BaseModel):
     rerank_score_weight: Optional[float] = Field(default=0.5, description="Reranker score weight")
     min_rerank_score: Optional[float] = Field(default=None, description="Minimum rerank score")
 
+    # MMR (Maximal Marginal Relevance) diversification settings
+    enable_mmr: Optional[bool] = Field(default=False, description="Enable MMR diversification")
+    mmr_lambda: Optional[float] = Field(default=0.6, description="MMR lambda parameter")
+    mmr_similarity_threshold: Optional[float] = Field(default=0.8, description="MMR similarity threshold")
+    mmr_max_results: Optional[int] = Field(default=None, description="MMR max results")
+    mmr_similarity_metric: Optional[str] = Field(default="cosine", description="MMR similarity metric")
+
 class CreateSessionRequest(BaseModel):
     """Request to create a new chat session."""
     settings: Optional[ChatSettings] = None

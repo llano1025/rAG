@@ -31,7 +31,7 @@ class SearchController:
         context_processor: Optional[ContextProcessor] = None
     ):
         self.search_engine = search_engine
-        self.db = next(get_db())
+        self.db = db
         self.audit_logger = audit_logger
         # Legacy components (kept for backward compatibility)
         self.embedding_manager = embedding_manager

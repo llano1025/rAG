@@ -341,3 +341,78 @@ def convert_api_filters_to_search_filter(api_filters: Optional[SearchFilters]):
             search_filter.mmr_similarity_metric = api_filters.mmr_similarity_metric
 
     return search_filter
+
+
+def convert_dict_to_search_filter(settings: dict):
+    """Convert chat settings dict to SearchFilter object."""
+    from vector_db.search_types import SearchFilter, TagMatchMode
+    from datetime import datetime
+
+    search_filter = SearchFilter()
+
+    # Basic search settings
+    if settings.get("tags"):
+        search_filter.set_tags(settings["tags"])
+
+        # Set tag matching mode
+        if settings.get("tag_match_mode"):
+            mode_map = {
+                "any": TagMatchMode.ANY,
+                "all": TagMatchMode.ALL,
+                "exact": TagMatchMode.EXACT
+            }
+            search_filter.tag_match_mode = mode_map.get(settings["tag_match_mode"].lower(), TagMatchMode.ANY)
+
+    if settings.get("exclude_tags"):
+        search_filter.set_exclude_tags(settings["exclude_tags"])
+
+    if settings.get("file_type"):
+        search_filter.content_types = settings["file_type"]
+
+    if settings.get("language"):
+        search_filter.language = settings["language"]
+
+    if settings.get("is_public") is not None:
+        search_filter.is_public = settings["is_public"]
+
+    if settings.get("file_size_range"):
+        search_filter.file_size_range = tuple(settings["file_size_range"])
+
+    if settings.get("date_range"):
+        dr = settings["date_range"]
+        if isinstance(dr, dict) and "start" in dr and "end" in dr:
+            search_filter.date_range = (dr["start"], dr["end"])
+
+    if settings.get("min_score") is not None:
+        search_filter.min_score = settings["min_score"]
+
+    # Reranker settings
+    if settings.get("enable_reranking"):
+        search_filter.enable_reranking = settings["enable_reranking"]
+
+    if settings.get("reranker_model"):
+        search_filter.reranker_model = settings["reranker_model"]
+
+    if settings.get("rerank_score_weight") is not None:
+        search_filter.rerank_score_weight = settings["rerank_score_weight"]
+
+    if settings.get("min_rerank_score") is not None:
+        search_filter.min_rerank_score = settings["min_rerank_score"]
+
+    # MMR settings
+    if settings.get("enable_mmr"):
+        search_filter.enable_mmr = settings["enable_mmr"]
+
+    if settings.get("mmr_lambda") is not None:
+        search_filter.mmr_lambda = settings["mmr_lambda"]
+
+    if settings.get("mmr_similarity_threshold") is not None:
+        search_filter.mmr_similarity_threshold = settings["mmr_similarity_threshold"]
+
+    if settings.get("mmr_max_results") is not None:
+        search_filter.mmr_max_results = settings["mmr_max_results"]
+
+    if settings.get("mmr_similarity_metric"):
+        search_filter.mmr_similarity_metric = settings["mmr_similarity_metric"]
+
+    return search_filter
