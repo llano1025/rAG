@@ -13,7 +13,7 @@ from sqlalchemy import and_, or_
 from database.models import User, Document, ChatSessionModel, RegisteredModel
 from llm.factory import create_model_manager_with_registered_models_sync
 from vector_db.embedding_model_registry import get_embedding_model_registry, EmbeddingProvider
-from vector_db.search_engine import EnhancedSearchEngine
+from vector_db.search_manager import EnhancedSearchEngine
 from utils.security.audit_logger import log_user_action
 
 logger = logging.getLogger(__name__)

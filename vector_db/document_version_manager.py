@@ -739,7 +739,7 @@ class DocumentVersionManager:
             
             # Invalidate search cache for this document
             try:
-                from .search_engine import get_search_engine
+                from .search_manager import get_search_engine
                 search_engine = get_search_engine()
                 await search_engine.invalidate_cache_for_documents([document_id])
             except Exception as e:
@@ -807,7 +807,7 @@ class DocumentVersionManager:
             
             # Invalidate search cache since document is now available again
             try:
-                from .search_engine import get_search_engine
+                from .search_manager import get_search_engine
                 search_engine = get_search_engine()
                 await search_engine.invalidate_cache_for_documents([document_id])
             except Exception as e:

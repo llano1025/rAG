@@ -14,7 +14,7 @@ from dataclasses import asdict
 from database.models import User, Document, DocumentChunk, VectorIndex, DocumentStatusEnum, PermissionEnum
 from vector_db.storage_manager import VectorStorageManager, get_storage_manager, init_storage_manager
 from vector_db.document_version_manager import DocumentVersionManager, get_version_manager
-from vector_db.search_engine import EnhancedSearchEngine, get_search_engine
+from vector_db.search_manager import EnhancedSearchEngine, get_search_engine
 from vector_db.search_types import SearchFilter, SearchType
 from file_processor.text_extractor import TextExtractor
 from file_processor.type_detector import FileTypeDetector
