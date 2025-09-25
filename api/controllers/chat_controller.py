@@ -950,34 +950,25 @@ class ChatController:
         logger.debug(f"Tag filtering settings - tags: {tags_setting}, tag_match_mode: {tag_match_mode_setting}, exclude_tags: {exclude_tags_setting}")
 
         try:
-            # Initialize search engine if needed
-            if not self.search_engine:
-                logger.debug(f"Initializing search engine")
+            # Initialize search engine if needed or if embedding model has changed
+            requested_model_id = settings["embedding_model"]
+            search_engine_needs_init = (
+                not self.search_engine or
+                getattr(self, '_current_embedding_model', None) != requested_model_id
+            )
+
+            if search_engine_needs_init:
+                logger.debug(f"Initializing/updating search engine for embedding model: {requested_model_id}")
                 from vector_db.storage_manager import VectorStorageManager
-                from vector_db.embedding_manager import EnhancedEmbeddingManager
 
                 storage_manager = VectorStorageManager()
 
-                # Create embedding manager based on settings
-                requested_model_id = settings["embedding_model"]
-                logger.info(f"Requested embedding model ID: '{requested_model_id}'")
+                # Create search engine without embedding manager - it will be set dynamically
+                if not self.search_engine:
+                    self.search_engine = EnhancedSearchEngine(storage_manager, None)
+                    logger.info(f"Search engine initialized successfully")
 
-                embedding_model = self.embedding_registry.get_model(requested_model_id)
-                if not embedding_model:
-                    logger.error(f"Embedding model '{requested_model_id}' not found in registry")
-                    available_models = self.embedding_registry.list_models()
-                    logger.error(f"Available models: {[m.model_id for m in available_models]}")
-                    return []
-
-                logger.info(f"Resolved embedding model - ID: '{embedding_model.model_id}', Name: '{embedding_model.model_name}', Provider: {embedding_model.provider}")
-
-                # Create appropriate embedding manager
-                logger.info(f"Creating HuggingFace manager with model: '{embedding_model.model_name}'")
-                embedding_manager = EnhancedEmbeddingManager.create_huggingface_manager(
-                    embedding_model.model_name
-                )
-                self.search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
-                logger.info(f"Search engine initialized successfully")
+                # The embedding model will be set dynamically in the search engine based on the filter
 
             # Convert chat settings to SearchFilter
             from api.schemas.search_schemas import convert_dict_to_search_filter

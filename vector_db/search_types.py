@@ -44,6 +44,7 @@ class SearchFilter:
         self.language: Optional[str] = None
         self.is_public: Optional[bool] = None
         self.min_score: Optional[float] = None
+        self.embedding_model: Optional[str] = None  # Embedding model to use for vector operations
 
         # Reranker settings
         self.enable_reranking: bool = False
@@ -73,6 +74,7 @@ class SearchFilter:
             'language': self.language,
             'is_public': self.is_public,
             'min_score': self.min_score,
+            'embedding_model': self.embedding_model,
             'enable_reranking': self.enable_reranking,
             'reranker_model': self.reranker_model,
             'rerank_score_weight': self.rerank_score_weight,

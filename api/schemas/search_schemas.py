@@ -394,6 +394,10 @@ def convert_dict_to_search_filter(settings: dict):
     if min_score is not None:
         search_filter.min_score = min_score
 
+    # Handle embedding model
+    if settings.get("embedding_model"):
+        search_filter.embedding_model = settings["embedding_model"]
+
     # Reranker settings
     if settings.get("enable_reranking") is not None:
         search_filter.enable_reranking = settings["enable_reranking"]

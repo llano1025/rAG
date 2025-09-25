@@ -281,14 +281,14 @@ class EnhancedSearchEngine:
         self.storage_manager = storage_manager or get_storage_manager()
         self.embedding_manager = embedding_manager  # Use provided or initialize lazily
         self.context_processor = ContextProcessor()
-        
+
         # Ensure storage manager is initialized (will be called async)
         self._storage_initialized = False
-        
+
         # Reranker components
         self.reranker_manager = get_reranker_manager()
         self.reranker_config = get_reranker_config()
-        
+
         # BM25 corpus statistics manager
         self.corpus_stats_manager = CorpusStatsManager()
 
@@ -298,12 +298,79 @@ class EnhancedSearchEngine:
         # Redis cache manager for caching and performance
         from utils.caching.redis_manager import RedisManager
         self.redis_manager = RedisManager()
-        
+
         # Search configuration
         self.default_limit = 10
         self.max_limit = 100
         self.cache_duration_hours = 24
-    
+
+        # Dynamic embedding manager support
+        self.current_model_id = None
+        self.embedding_manager_cache = {}  # Cache managers by model ID
+
+    def _get_embedding_manager_for_model(self, model_id: str = None):
+        """
+        Get or create embedding manager for specific model.
+
+        Args:
+            model_id: Embedding model ID to use. If None, uses default/existing manager.
+
+        Returns:
+            EmbeddingManager instance for the specified model
+        """
+        try:
+            # If no specific model requested, return existing manager
+            if model_id is None:
+                return self.embedding_manager
+
+            # If current manager matches requested model, reuse it
+            if self.current_model_id == model_id and self.embedding_manager is not None:
+                logger.debug(f"Reusing existing embedding manager for model {model_id}")
+                return self.embedding_manager
+
+            # Check cache for this model
+            if model_id in self.embedding_manager_cache:
+                logger.debug(f"Using cached embedding manager for model {model_id}")
+                cached_manager = self.embedding_manager_cache[model_id]
+                # Update current manager reference
+                self.embedding_manager = cached_manager
+                self.current_model_id = model_id
+                return cached_manager
+
+            # Create new embedding manager for this model
+            logger.info(f"Creating new embedding manager for model {model_id}")
+
+            from vector_db.embedding_model_registry import get_embedding_model_registry
+            registry = get_embedding_model_registry()
+
+            embedding_model = registry.get_model(model_id)
+            if not embedding_model:
+                logger.warning(f"Embedding model '{model_id}' not found in registry, using existing manager")
+                return self.embedding_manager
+
+            logger.debug(f"Resolved embedding model - ID: '{embedding_model.model_id}', Name: '{embedding_model.model_name}', Provider: {embedding_model.provider}")
+
+            # Create appropriate embedding manager
+            from vector_db.embedding_manager import EnhancedEmbeddingManager
+            new_manager = EnhancedEmbeddingManager.create_huggingface_manager(
+                embedding_model.model_name
+            )
+
+            # Cache the new manager
+            self.embedding_manager_cache[model_id] = new_manager
+
+            # Update current manager reference
+            self.embedding_manager = new_manager
+            self.current_model_id = model_id
+
+            logger.info(f"Successfully created and cached embedding manager for model {model_id}")
+            return new_manager
+
+        except Exception as e:
+            logger.error(f"Failed to create embedding manager for model {model_id}: {str(e)}")
+            logger.info("Falling back to existing embedding manager")
+            return self.embedding_manager
+
     async def _ensure_storage_initialized(self):
         """Ensure storage manager is properly initialized."""
         if not self._storage_initialized:
@@ -426,12 +493,18 @@ class EnhancedSearchEngine:
             logger.warning(f"Unknown search type '{search_type}', initializing storage as safety measure")
             await self._ensure_storage_initialized()
         
+        # Ensure we have the appropriate embedding manager for the requested model
+        requested_embedding_model = getattr(filters, 'embedding_model', None) if filters else None
+        if requested_embedding_model:
+            logger.debug(f"Search requested embedding model: {requested_embedding_model}")
+            self.embedding_manager = self._get_embedding_manager_for_model(requested_embedding_model)
+
         # Generate cache key ONCE at the beginning - before any filter modifications
         cache_key = None
         if use_cache:
             cache_key = self._generate_stable_cache_key(query, user.id, search_type, filters)
             logger.debug(f"Generated cache key for entire method: {cache_key}")
-        
+
         try:
             # Hierarchical cache strategy - check multiple cache levels
             if use_cache and cache_key:

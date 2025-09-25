@@ -60,6 +60,10 @@ class SearchController:
             if similarity_threshold is not None:
                 search_filters.min_score = similarity_threshold
 
+            # Set embedding model if provided
+            if embedding_model is not None:
+                search_filters.embedding_model = embedding_model
+
             # Execute search based on type
             if search_type == "semantic":
                 results = await self.search_engine.search(
