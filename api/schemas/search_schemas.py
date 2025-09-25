@@ -346,7 +346,6 @@ def convert_api_filters_to_search_filter(api_filters: Optional[SearchFilters]):
 def convert_dict_to_search_filter(settings: dict):
     """Convert chat settings dict to SearchFilter object."""
     from vector_db.search_types import SearchFilter, TagMatchMode
-    from datetime import datetime
 
     search_filter = SearchFilter()
 
@@ -366,11 +365,18 @@ def convert_dict_to_search_filter(settings: dict):
     if settings.get("exclude_tags"):
         search_filter.set_exclude_tags(settings["exclude_tags"])
 
-    if settings.get("file_type"):
-        search_filter.content_types = settings["file_type"]
+    # Handle both file_type (chat) and file_types (search) fields
+    file_types = settings.get("file_type") or settings.get("file_types")
+    if file_types:
+        search_filter.content_types = file_types
 
-    if settings.get("language"):
-        search_filter.language = settings["language"]
+    # Handle both language (single) and languages (array) fields
+    language = settings.get("language")
+    languages = settings.get("languages")
+    if language:
+        search_filter.language = language
+    elif languages and len(languages) > 0:
+        search_filter.language = languages[0]  # Use first language for now
 
     if settings.get("is_public") is not None:
         search_filter.is_public = settings["is_public"]
@@ -383,11 +389,13 @@ def convert_dict_to_search_filter(settings: dict):
         if isinstance(dr, dict) and "start" in dr and "end" in dr:
             search_filter.date_range = (dr["start"], dr["end"])
 
-    if settings.get("min_score") is not None:
-        search_filter.min_score = settings["min_score"]
+    # Handle min_score and similarity_threshold
+    min_score = settings.get("min_score") or settings.get("similarity_threshold")
+    if min_score is not None:
+        search_filter.min_score = min_score
 
     # Reranker settings
-    if settings.get("enable_reranking"):
+    if settings.get("enable_reranking") is not None:
         search_filter.enable_reranking = settings["enable_reranking"]
 
     if settings.get("reranker_model"):
@@ -400,7 +408,7 @@ def convert_dict_to_search_filter(settings: dict):
         search_filter.min_rerank_score = settings["min_rerank_score"]
 
     # MMR settings
-    if settings.get("enable_mmr"):
+    if settings.get("enable_mmr") is not None:
         search_filter.enable_mmr = settings["enable_mmr"]
 
     if settings.get("mmr_lambda") is not None:

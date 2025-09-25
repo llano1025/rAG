@@ -12,7 +12,7 @@ from sqlalchemy import and_, or_
 
 from database.models import User, Document, ChatSessionModel, RegisteredModel
 from llm.factory import create_model_manager_with_registered_models_sync
-from vector_db.embedding_model_registry import get_embedding_model_registry, EmbeddingProvider
+from vector_db.embedding_model_registry import get_embedding_model_registry
 from vector_db.search_manager import EnhancedSearchEngine
 from utils.security.audit_logger import log_user_action
 
@@ -933,7 +933,7 @@ class ChatController:
         user: User,
         db: Session
     ) -> List[Dict[str, Any]]:
-        """Perform RAG search using search_with_context with direct method selection."""
+        """Perform RAG search using direct search engine call."""
         import time
         start_time = time.time()
 
@@ -979,44 +979,35 @@ class ChatController:
                 self.search_engine = EnhancedSearchEngine(storage_manager, embedding_manager)
                 logger.info(f"Search engine initialized successfully")
 
-            # Use search_with_context with the selected search type
-            logger.info(f"Using search_with_context with search type: {search_type}")
+            # Convert chat settings to SearchFilter
+            from api.schemas.search_schemas import convert_dict_to_search_filter
+            search_filters = convert_dict_to_search_filter(settings)
+
+            # Set user ID for access control
+            search_filters.user_id = user.id
+
+            # Use direct search method
+            logger.info(f"Using direct search with search type: {search_type}")
             search_start = time.time()
 
-            search_results = await self.search_engine.search_with_context(
+            limit = settings.get("max_results", 20)
+            search_results = await self.search_engine.search(
                 query=query,
+                user=user,
                 search_type=search_type,
-                user_id=user.id,
-                top_k=settings.get("max_results", 20),
+                filters=search_filters,
+                limit=limit,
                 db=db,
-                enable_reranking=settings.get("enable_reranking", False),
-                reranker_model=settings.get("reranker_model"),
-                rerank_score_weight=settings.get("rerank_score_weight", 0.5),
-                min_rerank_score=settings.get("min_rerank_score"),
-                # MMR parameters for diversification
-                enable_mmr=settings.get("enable_mmr", False),
-                mmr_lambda=settings.get("mmr_lambda", 0.6),
-                mmr_similarity_threshold=settings.get("mmr_similarity_threshold", 0.8),
-                mmr_max_results=settings.get("mmr_max_results"),
-                mmr_similarity_metric=settings.get("mmr_similarity_metric", "cosine"),
-                # Filter parameters for search
-                tags=settings.get("tags"),
-                tag_match_mode=settings.get("tag_match_mode"),
-                exclude_tags=settings.get("exclude_tags"),
-                file_type=settings.get("file_type"),
-                language=settings.get("language"),
-                is_public=settings.get("is_public"),
-                min_score=settings.get("min_score"),
-                file_size_range=settings.get("file_size_range")
+                use_cache=True
             )
 
             search_time = (time.time() - search_start) * 1000
-            logger.info(f"Search with context completed in {search_time:.2f}ms, found {len(search_results)} results")
+            logger.info(f"Direct search completed in {search_time:.2f}ms, found {len(search_results)} results")
 
-            # Format results for chat controller compatibility
+            # Convert SearchResult objects to dictionaries and add document filename
             formatted_results = []
             for result in search_results:
-                document_id = result.get("document_id")
+                document_id = result.document_id
                 if not document_id:
                     continue
 
@@ -1036,10 +1027,10 @@ class ChatController:
                     formatted_result = {
                         "document_id": document.id,
                         "filename": document.filename,
-                        "chunk_id": result.get("chunk_id", ""),
-                        "text": result.get("text", ""),
-                        "similarity_score": result.get("similarity_score", 0.0),
-                        "metadata": result.get("metadata", {})
+                        "chunk_id": result.chunk_id,
+                        "text": result.text,
+                        "similarity_score": result.score,
+                        "metadata": result.metadata
                     }
                     formatted_results.append(formatted_result)
 

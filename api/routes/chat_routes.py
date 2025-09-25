@@ -1,6 +1,6 @@
 # api/routes/chat_routes.py
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -12,46 +12,69 @@ from database.connection import get_db
 from api.middleware.auth import get_current_user, get_current_active_user
 from api.controllers.chat_controller import get_chat_controller
 from database.models import User
+from api.schemas.search_schemas import SearchFilters
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
 
-# Request/Response Models
-class ChatSettings(BaseModel):
-    """Chat configuration settings."""
+# Base class combining SearchFilters and SearchQuery
+class ChatSettings(SearchFilters):
+    """Base chat settings inheriting from SearchFilters for consistent search functionality."""
+    # Core SearchQuery fields
+    query: Optional[str] = Field(None, description="Search query text (not used in chat settings)")
+    search_type: Optional[str] = Field(
+        "semantic",
+        description="Type of search to perform: 'semantic', 'contextual', 'keyword', or 'hybrid'",
+        pattern="^(semantic|contextual|keyword|hybrid|text)$"
+    )
+    top_k: int = Field(20, description="Number of results to return", ge=1, le=100)
+    similarity_threshold: Optional[float] = Field(
+        None,
+        description="Minimum similarity score threshold",
+        ge=0.0,
+        le=1.0
+    )
+
+    # Override fields with chat-specific defaults and rename for compatibility
+    max_results: int = Field(20, description="Maximum number of results (alias for top_k)")
+    top_k_documents: int = Field(5, description="Number of documents to retrieve for context")
+
+    # Chat-specific field mappings for backward compatibility
+    file_type: Optional[List[str]] = Field(None, description="File types to filter by (alias for file_types)")
+    languages: Optional[List[str]] = Field(None, description="Languages filter (array, alias for language)")
+
+    # LLM-specific settings
     llm_model: str = Field(default="openai-gpt35", description="LLM model to use")
-    embedding_model: str = Field(default="hf-minilm-l6-v2", description="Embedding model for RAG")
+    embedding_model: Optional[str] = Field(default="hf-minilm-l6-v2", description="Embedding model for RAG")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0, description="Response randomness")
     max_tokens: int = Field(default=2048, ge=1, le=8192, description="Maximum response tokens")
     use_rag: bool = Field(default=True, description="Whether to use RAG for context")
-    search_type: str = Field(default="semantic", description="Type of search (semantic, hybrid, basic)")
-    top_k_documents: int = Field(default=5, ge=1, le=20, description="Number of documents to retrieve")
 
-    # Search filter settings (missing fields that frontend sends)
-    tags: Optional[list] = Field(default=[], description="Tags to filter by")
-    tag_match_mode: str = Field(default="any", description="Tag matching mode (any, all, exact)")
-    exclude_tags: Optional[list] = Field(default=[], description="Tags to exclude")
-    file_type: Optional[list] = Field(default=[], description="File types to filter by")
-    language: Optional[str] = Field(default=None, description="Language filter")
-    languages: Optional[list] = Field(default=[], description="Languages filter (array)")
-    is_public: Optional[bool] = Field(default=None, description="Public/private filter")
-    min_score: Optional[float] = Field(default=None, description="Minimum similarity score")
-    max_results: int = Field(default=20, description="Maximum number of results")
-    file_size_range: Optional[list] = Field(default=None, description="File size range filter")
-    date_range: Optional[dict] = Field(default=None, description="Date range filter")
+    # Enable fallback settings
+    enable_fallback: bool = Field(default=True, description="Enable text search fallback")
+    fallback_threshold: int = Field(default=1, description="Minimum results before fallback")
 
-    # Reranker settings
-    enable_reranking: Optional[bool] = Field(default=False, description="Enable reranking")
-    reranker_model: Optional[str] = Field(default=None, description="Reranker model to use")
-    rerank_score_weight: Optional[float] = Field(default=0.5, description="Reranker score weight")
-    min_rerank_score: Optional[float] = Field(default=None, description="Minimum rerank score")
-
-    # MMR (Maximal Marginal Relevance) diversification settings
-    enable_mmr: Optional[bool] = Field(default=False, description="Enable MMR diversification")
-    mmr_lambda: Optional[float] = Field(default=0.6, description="MMR lambda parameter")
-    mmr_similarity_threshold: Optional[float] = Field(default=0.8, description="MMR similarity threshold")
-    mmr_max_results: Optional[int] = Field(default=None, description="MMR max results")
-    mmr_similarity_metric: Optional[str] = Field(default="cosine", description="MMR similarity metric")
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "llm_model": "openai-gpt35",
+                "embedding_model": "hf-minilm-l6-v2",
+                "temperature": 0.7,
+                "max_tokens": 2048,
+                "use_rag": True,
+                "search_type": "semantic",
+                "top_k_documents": 5,
+                "max_results": 20,
+                "tags": ["python", "machine-learning"],
+                "tag_match_mode": "any",
+                "exclude_tags": ["deprecated"],
+                "file_type": ["application/pdf", "text/plain"],
+                "language": "en",
+                "is_public": False,
+                "enable_reranking": False,
+                "enable_mmr": False
+            }
+        }
 
 class CreateSessionRequest(BaseModel):
     """Request to create a new chat session."""

@@ -326,125 +326,6 @@ class EnhancedSearchEngine:
                 raise ImportError("EmbeddingManager not available")
         return self.embedding_manager
     
-    async def search_with_context(
-        self,
-        query: str,
-        search_type: str = SearchType.SEMANTIC,
-        user_id: int = None,
-        top_k: int = None,
-        db: Session = None,
-        use_cache: bool = True,
-        # Reranker parameters for chat controller compatibility
-        enable_reranking: bool = False,
-        reranker_model: Optional[str] = None,
-        rerank_score_weight: float = 0.5,
-        min_rerank_score: Optional[float] = None,
-        # MMR parameters for chat controller compatibility
-        enable_mmr: bool = False,
-        mmr_lambda: float = 0.6,
-        mmr_similarity_threshold: float = 0.8,
-        mmr_max_results: Optional[int] = None,
-        mmr_similarity_metric: str = "cosine",
-        # Filter parameters for chat controller compatibility
-        tags: Optional[List[str]] = None,
-        tag_match_mode: str = None,
-        exclude_tags: Optional[List[str]] = None,
-        file_type: Optional[List[str]] = None,
-        language: Optional[str] = None,
-        is_public: Optional[bool] = None,
-        min_score: Optional[float] = None,
-        file_size_range: Optional[List[int]] = None
-    ) -> List[Dict[str, Any]]:
-        """
-        Perform search with context - compatibility method for chat controller.
-        
-        Args:
-            query: Search query text
-            search_type: Type of search (semantic, keyword, hybrid, contextual)
-            user_id: ID of user performing the search
-            top_k: Maximum number of results (aliases for limit)
-            db: Database session
-            use_cache: Whether to use cached results
-            
-        Returns:
-            List of search results as dictionaries
-        """
-        try:
-            # Get user from database
-            if not db or not user_id:
-                logger.error("Database session and user_id required for search_with_context")
-                return []
-            
-            user = db.query(User).filter(User.id == user_id).first()
-            if not user:
-                logger.error(f"User {user_id} not found")
-                return []
-            
-            # Convert top_k to limit
-            limit = top_k or self.default_limit
-            
-            # Create search filter with reranker and MMR settings
-            search_filters = SearchFilter()
-            search_filters.enable_reranking = enable_reranking
-            search_filters.reranker_model = reranker_model
-            search_filters.rerank_score_weight = rerank_score_weight
-            search_filters.min_rerank_score = min_rerank_score
-
-            # Set MMR parameters
-            search_filters.enable_mmr = enable_mmr
-            search_filters.mmr_lambda = mmr_lambda
-            search_filters.mmr_similarity_threshold = mmr_similarity_threshold
-            search_filters.mmr_max_results = mmr_max_results
-            search_filters.mmr_similarity_metric = mmr_similarity_metric
-
-            # Apply filter parameters from chat settings
-            if tags:
-                search_filters.tags = tags
-            if tag_match_mode:
-                search_filters.tag_match_mode = tag_match_mode
-            if exclude_tags:
-                search_filters.exclude_tags = exclude_tags
-            if file_type:
-                search_filters.content_types = file_type  # Note: content_types maps to file_type
-            if language:
-                search_filters.language = language
-            if is_public is not None:
-                search_filters.is_public = is_public
-            if min_score is not None:
-                search_filters.min_score = min_score
-            if file_size_range and len(file_size_range) == 2:
-                search_filters.file_size_range = tuple(file_size_range)
-            
-            # Perform search using existing method
-            results = await self.search(
-                query=query,
-                user=user,
-                search_type=search_type,
-                filters=search_filters,
-                limit=limit,
-                db=db,
-                use_cache=use_cache
-            )
-            
-            # Convert SearchResult objects to dictionaries for compatibility
-            dict_results = []
-            for result in results:
-                dict_result = {
-                    "document_id": result.document_id,
-                    "chunk_id": result.chunk_id,
-                    "text": result.text,
-                    "similarity_score": result.score,
-                    "metadata": result.metadata
-                }
-                dict_results.append(dict_result)
-            
-            logger.debug(f"search_with_context completed: {len(dict_results)} results for query '{query[:50]}...'")
-            return dict_results
-            
-        except Exception as e:
-            logger.error(f"search_with_context failed: {str(e)}")
-            return []
-
     def _generate_stable_cache_key(self, query: str, user_id: int, search_type: str, filters: 'SearchFilter') -> str:
         """Generate a stable, deterministic cache key for search operations."""
         try:
@@ -719,23 +600,19 @@ class EnhancedSearchEngine:
     async def _get_accessible_documents(self, user: User, db: Session, filters: SearchFilter = None) -> List[int]:
         """Get list of document IDs accessible to the user with optional filtering."""
         try:
-            # Build query for accessible documents with active vector indices
-            query = db.query(Document.id).join(
-                VectorIndex, Document.id == VectorIndex.document_id
-            ).filter(
-                Document.is_deleted == False,
-                VectorIndex.is_active == True,  # Only documents with active vector indices
-                or_(
-                    Document.user_id == user.id,  # User's own documents
-                    Document.is_public == True,   # Public documents
-                    and_(
-                        user.is_superuser == True  # Admin access
-                    )
-                )
-            ).distinct()  # Remove duplicates from join
-            
-            # Additional filter for admin users
-            if user.has_role("admin"):
+            # Check if user is admin using session-aware query to avoid lazy loading issues
+            is_admin_user = user.is_superuser
+            if not is_admin_user:
+                # Query user roles directly from database to avoid lazy loading
+                from database.models import UserRole, UserRoleEnum
+                admin_role_count = db.query(UserRole).filter(
+                    UserRole.user_id == user.id,
+                    UserRole.name == UserRoleEnum.ADMIN
+                ).count()
+                is_admin_user = admin_role_count > 0
+
+            # Build query based on user access level
+            if is_admin_user:
                 # Admins can access all documents with active indices
                 query = db.query(Document.id).join(
                     VectorIndex, Document.id == VectorIndex.document_id
@@ -743,16 +620,28 @@ class EnhancedSearchEngine:
                     Document.is_deleted == False,
                     VectorIndex.is_active == True
                 ).distinct()
-            
+            else:
+                # Regular users: own documents + public documents
+                query = db.query(Document.id).join(
+                    VectorIndex, Document.id == VectorIndex.document_id
+                ).filter(
+                    Document.is_deleted == False,
+                    VectorIndex.is_active == True,  # Only documents with active vector indices
+                    or_(
+                        Document.user_id == user.id,  # User's own documents
+                        Document.is_public == True    # Public documents
+                    )
+                ).distinct()  # Remove duplicates from join
+
             # Apply additional filters if provided
             if filters:
                 query = self._apply_search_filters_to_query(query, filters)
-            
+
             doc_ids = [row[0] for row in query.all()]
-            logger.debug(f"User {user.id} has access to {len(doc_ids)} documents (after filtering)")
-            
+            logger.debug(f"User {user.id} has access to {len(doc_ids)} documents (admin: {is_admin_user}, after filtering)")
+
             return doc_ids
-            
+
         except Exception as e:
             logger.error(f"Failed to get accessible documents: {e}")
             return []
