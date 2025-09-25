@@ -97,10 +97,16 @@ export interface SearchQuery {
 
 export interface SearchResult {
   document_id: string;
+  chunk_id: string;
   filename: string;
-  content_snippet: string;
+  text: string;
+  snippet: string;
+  content_snippet: string; // For backward compatibility
   score: number;
   metadata?: Record<string, any>;
+  document_metadata?: Record<string, any>;
+  highlight?: string;
+  timestamp?: string;
   // Reranker result fields
   original_score?: number;
   rerank_score?: number;

@@ -15,7 +15,7 @@ from database.models import User, Document, DocumentChunk, VectorIndex, Document
 from vector_db.storage_manager import VectorStorageManager, get_storage_manager, init_storage_manager
 from vector_db.document_version_manager import DocumentVersionManager, get_version_manager
 from vector_db.search_manager import EnhancedSearchEngine, get_search_engine
-from vector_db.search_types import SearchFilter, SearchType
+from api.schemas.search_schemas import SearchType, SearchFilters
 from file_processor.text_extractor import TextExtractor
 from file_processor.type_detector import FileTypeDetector
 from file_processor.metadata_extractor import MetadataExtractor
@@ -359,7 +359,7 @@ class VectorController:
                 )
             
             # Create search filter
-            search_filter = SearchFilter()
+            search_filter = SearchFilters()
             if filters:
                 if 'content_types' in filters:
                     search_filter.content_types = filters['content_types']

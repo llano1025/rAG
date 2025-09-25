@@ -8,7 +8,7 @@ from vector_db.embedding_manager import EmbeddingManager
 from vector_db.search_optimizer import SearchOptimizer
 from vector_db.search_context_processor import ContextProcessor
 from vector_db.search_manager import EnhancedSearchEngine
-from vector_db.search_types import SearchFilter, SearchType
+from api.schemas.search_schemas import SearchType, SearchFilters
 from database.models import User, SearchQuery, Document, SavedSearch
 from utils.security.audit_logger import AuditLogger
 from database.connection import get_db
@@ -44,7 +44,7 @@ class SearchController:
         query: str,
         user: User,
         search_type: str = "contextual",
-        filters: Optional[SearchFilter] = None,
+        filters: Optional[SearchFilters] = None,
         top_k: int = 20,
         similarity_threshold: Optional[float] = None,
         embedding_model: Optional[str] = None,
@@ -54,7 +54,7 @@ class SearchController:
 
         try:
             # Use filters directly (already converted by route)
-            search_filters = filters or SearchFilter()
+            search_filters = filters or SearchFilters()
 
             # Set search parameters
             if similarity_threshold is not None:

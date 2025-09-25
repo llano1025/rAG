@@ -12,7 +12,7 @@ from database.connection import get_db
 from api.middleware.auth import get_current_user, get_current_active_user
 from api.controllers.chat_controller import get_chat_controller
 from database.models import User
-from api.schemas.search_schemas import SearchFilters
+from api.schemas.search_schemas import SearchFilters, SearchType
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
@@ -22,10 +22,9 @@ class ChatSettings(SearchFilters):
     """Base chat settings inheriting from SearchFilters for consistent search functionality."""
     # Core SearchQuery fields
     query: Optional[str] = Field(None, description="Search query text (not used in chat settings)")
-    search_type: Optional[str] = Field(
-        "semantic",
-        description="Type of search to perform: 'semantic', 'contextual', 'keyword', or 'hybrid'",
-        pattern="^(semantic|contextual|keyword|hybrid|text)$"
+    search_type: SearchType = Field(
+        SearchType.SEMANTIC,
+        description="Type of search to perform"
     )
     top_k: int = Field(20, description="Number of results to return", ge=1, le=100)
     similarity_threshold: Optional[float] = Field(

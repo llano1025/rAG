@@ -12,7 +12,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
-from .search_types import SearchResult
+from api.schemas.search_schemas import SearchResult
 
 logger = logging.getLogger(__name__)
 

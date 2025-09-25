@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
 
 from database.models import DocumentChunk, Document
-from .search_types import SearchResult, SearchFilter, TableSearchFilter, TableSearchType
+from api.schemas.search_schemas import SearchResult, SearchFilters, TableSearchFilter, TableSearchType
 
 logger = logging.getLogger(__name__)
 

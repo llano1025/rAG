@@ -1,15 +1,46 @@
-from typing import List, Optional
+from typing import List, Optional, Dict, Union
 from pydantic import BaseModel, Field
+from enum import Enum
+from datetime import datetime
+
+
+class SearchType(str, Enum):
+    """Unified search type definitions for all search operations."""
+    SEMANTIC = "semantic"
+    KEYWORD = "keyword"
+    CONTEXTUAL = "contextual"
+    HYBRID = "hybrid"
+    TEXT = "text"  # Alias for keyword search
+    # Table-specific search types
+    TABLE_CONTENT = "table_content"
+    TABLE_HEADERS = "table_headers"
+    TABLE_CONTEXT = "table_context"
+    TABLE_HYBRID = "table_hybrid"
+
+
+class TagMatchMode(str, Enum):
+    """Tag matching modes for search filtering."""
+    ANY = "any"      # Document must have ANY of the specified tags (OR logic)
+    ALL = "all"      # Document must have ALL of the specified tags (AND logic)
+    EXACT = "exact"  # Document must have EXACTLY the specified tags (no more, no less)
+
+
+class TableSearchType(str, Enum):
+    """Extended search types for table-aware search."""
+    TABLE_CONTENT = "table_content"  # Search within table data
+    TABLE_HEADERS = "table_headers"  # Search table headers/columns
+    TABLE_CONTEXT = "table_context"  # Search text around tables
+    TABLE_HYBRID = "table_hybrid"    # Combined table and text search
 
 
 class SearchFilters(BaseModel):
+    """Unified search filters for both API and internal use."""
     # Content settings
     folder_ids: Optional[List[str]] = Field(None, description="Filter by folder IDs")
     tags: Optional[List[str]] = Field(None, description="Filter by tags (case-insensitive)")
-    tag_match_mode: Optional[str] = Field(
-        "any", 
-        description="Tag matching mode: 'any' (OR logic), 'all' (AND logic), or 'exact' (exact match)",
-        pattern="^(any|all|exact)$"
+    tag_match_mode: TagMatchMode = Field(
+        TagMatchMode.ANY,
+        description="Tag matching mode: 'any' (OR logic), 'all' (AND logic), or 'exact' (exact match)"
     )
     exclude_tags: Optional[List[str]] = Field(None, description="Tags to exclude from results")
     file_types: Optional[List[str]] = Field(None, description="Filter by file types (MIME types)")
@@ -18,6 +49,13 @@ class SearchFilters(BaseModel):
     language: Optional[str] = Field(None, description="Filter by document language")
     is_public: Optional[bool] = Field(None, description="Filter by public/private status")
     metadata_filters: Optional[dict] = Field(None, description="Filter by custom metadata")
+
+    # Internal engine fields (optional for API use)
+    user_id: Optional[int] = Field(None, description="User ID for access control (internal use)")
+    document_ids: Optional[List[int]] = Field(None, description="Specific document IDs to search (internal use)")
+    content_types: Optional[List[str]] = Field(None, description="Content types filter (alias for file_types)")
+    min_score: Optional[float] = Field(None, description="Minimum similarity score threshold")
+    embedding_model: Optional[str] = Field(None, description="Embedding model to use for vector operations")
     # Reranker settings
     enable_reranking: bool = Field(False, description="Whether to enable reranking of search results")
     reranker_model: Optional[str] = Field(None, description="Reranker model to use (e.g., 'ms-marco-MiniLM-L-6-v2')")
@@ -59,6 +97,34 @@ class SearchFilters(BaseModel):
         pattern="^(cosine|euclidean|dot_product)$"
     )
 
+    def set_tags(self, tags: List[str]) -> None:
+        """Set tags with normalization."""
+        if tags:
+            self.tags = [tag.strip().lower() for tag in tags if tag.strip()]
+
+    def set_exclude_tags(self, exclude_tags: List[str]) -> None:
+        """Set exclude tags with normalization."""
+        if exclude_tags:
+            self.exclude_tags = [tag.strip().lower() for tag in exclude_tags if tag.strip()]
+
+    def to_dict(self) -> Dict:
+        """Convert filters to dictionary for internal compatibility."""
+        result = {}
+        for field_name, field_value in self.__dict__.items():
+            if field_value is not None:
+                if isinstance(field_value, Enum):
+                    result[field_name] = field_value.value
+                elif hasattr(field_value, 'isoformat'):
+                    result[field_name] = field_value.isoformat()
+                else:
+                    result[field_name] = field_value
+        return result
+
+    @property
+    def max_results_to_rerank(self) -> int:
+        """Compatibility property for internal use."""
+        return 100  # Default value from original SearchFilter
+
     class Config:
         json_schema_extra = {
             "example": {
@@ -75,13 +141,23 @@ class SearchFilters(BaseModel):
         }
 
 
+class TableSearchFilter(SearchFilters):
+    """Extended search filter with table-specific options."""
+    # Table-specific attributes
+    table_only: bool = Field(False, description="Search only in table content")
+    table_types: List[str] = Field(default_factory=list, description="Table types filter (e.g., ['table', 'mixed'])")
+    has_cross_page_tables: Optional[bool] = Field(None, description="Filter for cross-page tables")
+    min_table_rows: Optional[int] = Field(None, description="Minimum number of table rows")
+    min_table_columns: Optional[int] = Field(None, description="Minimum number of table columns")
+    table_confidence_threshold: float = Field(0.0, description="Table detection confidence threshold", ge=0.0, le=1.0)
+
+
 class SearchQuery(BaseModel):
     query: str = Field(..., description="Search query text")
     filters: Optional[SearchFilters] = None
-    search_type: Optional[str] = Field(
-        "contextual",
-        description="Type of search to perform: 'semantic', 'contextual', or 'text'",
-        pattern="^(semantic|contextual|text)$"
+    search_type: SearchType = Field(
+        SearchType.CONTEXTUAL,
+        description="Type of search to perform"
     )
     top_k: int = Field(10, description="Number of results to return", ge=1, le=100)
     similarity_threshold: Optional[float] = Field(
@@ -105,36 +181,99 @@ from typing import List, Dict
 
 class SearchResult(BaseModel):
     """
-    Represents a single search result from the RAG system.
-    
+    Unified search result model for both API and internal use.
+
     Attributes:
-        document_id: Unique identifier of the document
-        filename: Name of the document file
-        content_snippet: Relevant text excerpt from the document
+        document_id: Unique identifier of the document (flexible str/int)
+        chunk_id: Unique identifier of the text chunk
+        text: Full text content of the chunk
+        snippet: Short preview text for quick scanning
+        content_snippet: Alias for snippet (for API compatibility)
+        filename: Name of the document file (optional, for API use)
         score: Relevance score between 0 and 1
-        metadata: Additional document metadata
+        metadata: Chunk-level metadata
+        document_metadata: Document-level metadata
+        highlight: Highlighted text snippet (optional)
+        timestamp: When this result was created
     """
-    document_id: str = Field(..., description="Unique identifier of the document")
-    filename: str = Field(..., description="Name of the document file")
-    content_snippet: str = Field(..., description="Relevant text excerpt from the document")
-    score: float = Field(
-        ...,
-        ge=0.0,
-        le=1.0,
-        description="Relevance score between 0 and 1"
-    )
+    document_id: Union[str, int] = Field(..., description="Unique identifier of the document")
+    chunk_id: str = Field(..., description="Unique identifier of the text chunk")
+    text: str = Field(..., description="Full text content of the chunk")
+    snippet: Optional[str] = Field(None, description="Short preview text for quick result scanning")
+    score: float = Field(..., description="Relevance score")
     metadata: Dict = Field(
         default_factory=dict,
-        description="Additional document metadata"
+        description="Chunk-level metadata"
     )
+    document_metadata: Dict = Field(
+        default_factory=dict,
+        description="Document-level metadata"
+    )
+
+    # Optional fields for specific use cases
+    filename: Optional[str] = Field(None, description="Name of the document file")
+    highlight: Optional[str] = Field(None, description="Highlighted text snippet")
+    timestamp: Optional[datetime] = Field(None, description="When this result was created")
+
+    # API compatibility - content_snippet as computed field
+    @property
+    def content_snippet(self) -> str:
+        """Alias for snippet field for API compatibility."""
+        if self.snippet is not None:
+            return self.snippet
+        # Generate snippet from text if not provided
+        return generate_intelligent_snippet(self.text, self.highlight)
+
+    def to_dict(self) -> Dict:
+        """Convert result to dictionary for internal compatibility."""
+        result = {
+            'chunk_id': self.chunk_id,
+            'document_id': self.document_id,
+            'text': self.text,
+            'score': self.score,
+            'metadata': self.metadata,
+            'document_metadata': self.document_metadata,
+        }
+        if self.snippet is not None:
+            result['snippet'] = self.snippet
+        if self.highlight is not None:
+            result['highlight'] = self.highlight
+        if self.timestamp is not None:
+            result['timestamp'] = self.timestamp.isoformat() if isinstance(self.timestamp, datetime) else self.timestamp
+        return result
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'SearchResult':
+        """Create SearchResult from dictionary for internal compatibility."""
+        # Handle timestamp conversion
+        timestamp = data.get('timestamp')
+        if isinstance(timestamp, str):
+            try:
+                timestamp = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+            except:
+                timestamp = None
+
+        return cls(
+            document_id=data['document_id'],
+            chunk_id=data['chunk_id'],
+            text=data['text'],
+            snippet=data.get('snippet'),  # Can be None, will auto-generate in property
+            score=data['score'],
+            metadata=data.get('metadata', {}),
+            document_metadata=data.get('document_metadata', {}),
+            highlight=data.get('highlight'),
+            timestamp=timestamp
+        )
 
     class Config:
         """Pydantic model configuration"""
         json_schema_extra = {
             "example": {
                 "document_id": "doc123",
+                "chunk_id": "chunk_456",
+                "text": "This is the full text content of the document chunk that contains all the detailed information...",
+                "snippet": "This is a relevant excerpt from the document...",
                 "filename": "example.pdf",
-                "content_snippet": "This is a relevant excerpt from the document...",
                 "score": 0.95,
                 "metadata": {
                     "title": "Example Document",
@@ -157,7 +296,7 @@ class SearchResponse(BaseModel):
     processing_time: Optional[float] = Field(None, description="Processing time in seconds")
     
     # Additional compatibility fields
-    search_type: Optional[str] = Field(None, description="Type of search performed (semantic/keyword/hybrid)")
+    search_type: Optional[SearchType] = Field(None, description="Type of search performed")
     fusion_method: Optional[str] = Field(None, description="Method used for result fusion")
     reranking_applied: bool = Field(False, description="Whether reranking was applied to results")
     cache_hit: bool = Field(False, description="Whether results came from cache")
@@ -211,27 +350,79 @@ class RecentSearchResponse(BaseModel):
     results_count: int = 0
 
 
+# Helper functions for search result processing
+def generate_intelligent_snippet(text: str, highlight: Optional[str] = None, max_length: int = 250) -> str:
+    """
+    Generate an intelligent snippet from full text.
+
+    Args:
+        text: Full text content
+        highlight: Optional highlighted text snippet
+        max_length: Maximum length of snippet
+
+    Returns:
+        Intelligent snippet with word boundaries
+    """
+    if not text:
+        return ""
+
+    # If we have highlight text and it's not too long, use it
+    if highlight and len(highlight.strip()) <= max_length:
+        return highlight.strip()
+
+    # If text is already short enough, return as-is
+    if len(text) <= max_length:
+        return text.strip()
+
+    # Find a good cutoff point at word boundary
+    snippet = text[:max_length].strip()
+
+    # If the cutoff splits a word, back up to the last complete word
+    if len(text) > max_length and text[max_length] not in [' ', '\n', '\t', '.', ',', ';', '!', '?']:
+        last_space = snippet.rfind(' ')
+        if last_space > max_length // 2:  # Only if we don't lose too much content
+            snippet = snippet[:last_space]
+
+    # Add ellipsis if we truncated
+    if len(snippet) < len(text.strip()):
+        snippet = snippet.strip() + "..."
+
+    return snippet
+
+
 # Helper function to convert SearchResult from EnhancedSearchEngine to API format
-def convert_search_result_to_api_format(result, search_type: str = "semantic") -> SearchResult:
-    """Convert SearchEngine result to API SearchResult format."""
+def convert_search_result_to_api_format(result, search_type: SearchType = SearchType.SEMANTIC) -> SearchResult:
+    """Convert SearchEngine result to API SearchResult format.
+
+    Args:
+        result: Search result object from search engine
+        search_type: Type of search performed (unused but kept for API compatibility)
+    """
+    # Safe attribute access with fallbacks
+    document_metadata = getattr(result, 'document_metadata', {}) or {}
+    metadata = getattr(result, 'metadata', {}) or {}
+    highlight = getattr(result, 'highlight', None)
+    text = getattr(result, 'text', '')
+
+    # Generate intelligent snippet
+    snippet = generate_intelligent_snippet(text, highlight)
+
     return SearchResult(
-        document_id=str(result.document_id),
-        filename=result.document_metadata.get("filename", "Unknown"),
-        content_snippet=result.text[:300] + "..." if len(result.text) > 300 else result.text,
-        score=result.score,
-        metadata={
-            **result.metadata,
-            **result.document_metadata,
-            "search_type": search_type,
-            "chunk_id": result.chunk_id,
-            "chunk_index": getattr(result, 'chunk_index', 0)
-        }
+        document_id=str(getattr(result, 'document_id', '')),
+        chunk_id=str(getattr(result, 'chunk_id', '')),
+        text=str(text),
+        snippet=snippet,
+        filename=document_metadata.get("filename", "Unknown") if isinstance(document_metadata, dict) else "Unknown",
+        score=getattr(result, 'score', 0.0),
+        metadata=metadata,
+        document_metadata=document_metadata,
+        highlight=highlight,
     )
 
 
-def convert_search_response_to_api_format(results: List, query: str, 
+def convert_search_response_to_api_format(results: List, query: str,
                                         execution_time: float = 0.0,
-                                        search_type: str = "semantic",
+                                        search_type: SearchType = SearchType.SEMANTIC,
                                         filters: Optional[SearchFilters] = None,
                                         **kwargs) -> SearchResponse:
     """Convert SearchEngine results to API SearchResponse format."""
@@ -251,10 +442,8 @@ def convert_search_response_to_api_format(results: List, query: str,
 
 def convert_api_filters_to_search_filter(api_filters: Optional[SearchFilters]):
     """Convert API SearchFilters to SearchEngine SearchFilter with enhanced tag support."""
-    from vector_db.search_types import SearchFilter, TagMatchMode
-    from datetime import datetime
     
-    search_filter = SearchFilter()
+    search_filter = SearchFilters()
     
     if api_filters:
         # Convert file types
@@ -345,9 +534,8 @@ def convert_api_filters_to_search_filter(api_filters: Optional[SearchFilters]):
 
 def convert_dict_to_search_filter(settings: dict):
     """Convert chat settings dict to SearchFilter object."""
-    from vector_db.search_types import SearchFilter, TagMatchMode
 
-    search_filter = SearchFilter()
+    search_filter = SearchFilters()
 
     # Basic search settings
     if settings.get("tags"):

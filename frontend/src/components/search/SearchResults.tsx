@@ -6,6 +6,8 @@ import {
   ArrowDownTrayIcon,
   StarIcon,
   DocumentMagnifyingGlassIcon,
+  ChevronUpIcon,
+  ChevronDownIcon,
 } from '@heroicons/react/24/outline';
 import { StarIcon as StarIconSolid } from '@heroicons/react/24/solid';
 import { SearchResponse } from '@/types';
@@ -19,6 +21,17 @@ interface SearchResultsProps {
 export default function SearchResults({ response, loading }: SearchResultsProps) {
   const [selectedResult, setSelectedResult] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'metadata' | 'fulltext'>('metadata');
+  const [expandedTextResults, setExpandedTextResults] = useState<Set<string>>(new Set());
+
+  const toggleTextExpansion = (resultId: string) => {
+    const newExpanded = new Set(expandedTextResults);
+    if (newExpanded.has(resultId)) {
+      newExpanded.delete(resultId);
+    } else {
+      newExpanded.add(resultId);
+    }
+    setExpandedTextResults(newExpanded);
+  };
 
   if (loading) {
     return (
@@ -65,8 +78,9 @@ export default function SearchResults({ response, loading }: SearchResultsProps)
   };
 
   const highlightText = (text: string, query: string) => {
+    if (!text) return text || '';
     if (!query) return text;
-    
+
     const regex = new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
     const parts = text.split(regex);
     
@@ -137,11 +151,39 @@ export default function SearchResults({ response, loading }: SearchResultsProps)
                   </div>
                 </div>
 
-                {/* Content Snippet */}
+                {/* Content Snippet with Expand/Collapse */}
                 <div className="mb-3">
-                  <p className="text-sm text-gray-600 leading-relaxed">
-                    {highlightText(result.content_snippet, response.query || '')}
-                  </p>
+                  <div className="text-sm text-gray-600 leading-relaxed">
+                    {expandedTextResults.has(result.chunk_id) ? (
+                      // Show full text when expanded
+                      <div>
+                        <p className="whitespace-pre-wrap">
+                          {highlightText(result.text || result.snippet || result.content_snippet, response.query || '')}
+                        </p>
+                        <button
+                          onClick={() => toggleTextExpansion(result.chunk_id)}
+                          className="mt-2 text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
+                        >
+                          Show Less <ChevronUpIcon className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ) : (
+                      // Show snippet by default
+                      <div>
+                        <p>
+                          {highlightText(result.snippet || result.content_snippet, response.query || '')}
+                        </p>
+                        {result.text && result.text.length > ((result.snippet || result.content_snippet)?.length || 0) && (
+                          <button
+                            onClick={() => toggleTextExpansion(result.chunk_id)}
+                            className="mt-2 text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1"
+                          >
+                            Show More <ChevronDownIcon className="h-3 w-3" />
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Metadata */}

@@ -21,7 +21,7 @@ from .storage_manager import VectorStorageManager, get_storage_manager
 from .search_context_processor import ContextProcessor
 from .reranker import get_reranker_manager, get_reranker_config, RerankResult
 from .reranker.base_reranker import SearchResult as RerankerSearchResult
-from .search_types import SearchType, SearchFilter, SearchResult, TagMatchMode, TableSearchFilter
+from api.schemas.search_schemas import SearchType, SearchFilters, SearchResult, TagMatchMode, TableSearchFilter
 from .table_search_enhancer import TableSearchEnhancer
 from .mmr_diversifier import MMRDiversifier, get_default_mmr_diversifier
 # QueryOptimizer removed - using direct Redis caching
@@ -393,7 +393,7 @@ class EnhancedSearchEngine:
                 raise ImportError("EmbeddingManager not available")
         return self.embedding_manager
     
-    def _generate_stable_cache_key(self, query: str, user_id: int, search_type: str, filters: 'SearchFilter') -> str:
+    def _generate_stable_cache_key(self, query: str, user_id: int, search_type: str, filters: 'SearchFilters') -> str:
         """Generate a stable, deterministic cache key for search operations."""
         try:
             # Create normalized filter dictionary with only essential stable fields
@@ -455,7 +455,7 @@ class EnhancedSearchEngine:
         query: str,
         user: User,
         search_type: str = SearchType.SEMANTIC,
-        filters: SearchFilter = None,
+        filters: SearchFilters = None,
         limit: int = None,
         db: Session = None,
         use_cache: bool = True
@@ -477,7 +477,7 @@ class EnhancedSearchEngine:
         """
         start_time = datetime.now(timezone.utc)
         limit = min(limit or self.default_limit, self.max_limit)
-        filters = filters or SearchFilter()
+        filters = filters or SearchFilters()
         
         # Only initialize storage for vector-based search types
         vector_search_types = {SearchType.SEMANTIC, SearchType.CONTEXTUAL,
@@ -670,7 +670,7 @@ class EnhancedSearchEngine:
             logger.error(f"Search failed for query '{query}': {e}")
             return []
     
-    async def _get_accessible_documents(self, user: User, db: Session, filters: SearchFilter = None) -> List[int]:
+    async def _get_accessible_documents(self, user: User, db: Session, filters: SearchFilters = None) -> List[int]:
         """Get list of document IDs accessible to the user with optional filtering."""
         try:
             # Check if user is admin using session-aware query to avoid lazy loading issues
@@ -719,7 +719,7 @@ class EnhancedSearchEngine:
             logger.error(f"Failed to get accessible documents: {e}")
             return []
     
-    def _apply_search_filters_to_query(self, query, filters: SearchFilter):
+    def _apply_search_filters_to_query(self, query, filters: SearchFilters):
         """Apply search filters to a database query."""
         
         # Apply content type filtering
@@ -756,7 +756,7 @@ class EnhancedSearchEngine:
         
         return query
     
-    def _apply_tag_filters_to_query(self, query, filters: SearchFilter):
+    def _apply_tag_filters_to_query(self, query, filters: SearchFilters):
         """Apply tag filtering to a database query optimized for TEXT columns."""
         from sqlalchemy import text
         import logging
@@ -834,7 +834,7 @@ class EnhancedSearchEngine:
     async def _semantic_search(
         self,
         query: str,
-        filters: SearchFilter,
+        filters: SearchFilters,
         limit: int,
         db: Session
     ) -> List[SearchResult]:
@@ -938,7 +938,7 @@ class EnhancedSearchEngine:
     async def _contextual_search(
         self,
         query: str,
-        filters: SearchFilter,
+        filters: SearchFilters,
         limit: int,
         db: Session
     ) -> List[SearchResult]:
@@ -981,7 +981,7 @@ class EnhancedSearchEngine:
     async def _get_semantic_contextual_results(
         self,
         query: str,
-        filters: SearchFilter,
+        filters: SearchFilters,
         limit: int,
         db: Session
     ) -> List[SearchResult]:
@@ -1103,7 +1103,7 @@ class EnhancedSearchEngine:
     async def _keyword_search(
         self,
         query: str,
-        filters: SearchFilter,
+        filters: SearchFilters,
         limit: int,
         db: Session
     ) -> List[SearchResult]:
@@ -1371,7 +1371,7 @@ class EnhancedSearchEngine:
         query: str,
         user_id: int,
         search_type: str,
-        filters: SearchFilter,
+        filters: SearchFilters,
         db: Session
     ) -> Optional[List[SearchResult]]:
         """Get cached search results if available."""
@@ -1418,7 +1418,7 @@ class EnhancedSearchEngine:
         query: str,
         user_id: int,
         search_type: str,
-        filters: SearchFilter,
+        filters: SearchFilters,
         results: List[SearchResult],
         db: Session
     ):
@@ -1463,7 +1463,7 @@ class EnhancedSearchEngine:
         query: str,
         user_id: int,
         search_type: str,
-        filters: SearchFilter,
+        filters: SearchFilters,
         results_count: int,
         search_time_ms: float,
         db: Session
@@ -1494,7 +1494,7 @@ class EnhancedSearchEngine:
         self,
         query: str,
         results: List[SearchResult],
-        filters: SearchFilter,
+        filters: SearchFilters,
         search_type: str
     ) -> List[SearchResult]:
         """
@@ -1620,7 +1620,7 @@ class EnhancedSearchEngine:
     async def _apply_mmr_diversification(
         self,
         results: List[SearchResult],
-        filters: SearchFilter
+        filters: SearchFilters
     ) -> List[SearchResult]:
         """
         Apply MMR (Maximal Marginal Relevance) diversification to search results.
@@ -1737,13 +1737,13 @@ class EnhancedSearchEngine:
     async def _table_content_search(
         self,
         query: str,
-        filters: SearchFilter,
+        filters: SearchFilters,
         limit: int,
         db: Session
     ) -> List[SearchResult]:
         """Search specifically within table content using semantic similarity."""
         # Apply table-specific filters
-        table_filters = filters.copy() if hasattr(filters, 'copy') else SearchFilter(**filters.to_dict())
+        table_filters = filters.copy() if hasattr(filters, 'copy') else SearchFilters(**filters.to_dict())
 
         # Add metadata filter for table chunks
         if not hasattr(table_filters, 'metadata_filters'):
@@ -1762,7 +1762,7 @@ class EnhancedSearchEngine:
     async def _table_headers_search(
         self,
         query: str,
-        filters: SearchFilter,
+        filters: SearchFilters,
         limit: int,
         db: Session
     ) -> List[SearchResult]:
@@ -1816,7 +1816,7 @@ class EnhancedSearchEngine:
     async def _table_context_search(
         self,
         query: str,
-        filters: SearchFilter,
+        filters: SearchFilters,
         limit: int,
         db: Session
     ) -> List[SearchResult]:
@@ -1856,7 +1856,7 @@ class EnhancedSearchEngine:
     async def _table_hybrid_search(
         self,
         query: str,
-        filters: SearchFilter,
+        filters: SearchFilters,
         limit: int,
         db: Session
     ) -> List[SearchResult]:
@@ -2379,7 +2379,7 @@ class EnhancedSearchEngine:
     async def _check_vector_cache_coverage(
         self, 
         query: str, 
-        filters: SearchFilter, 
+        filters: SearchFilters, 
         expected_docs: List[int]
     ) -> float:
         """
@@ -2427,7 +2427,7 @@ class EnhancedSearchEngine:
     async def _assemble_from_vector_cache(
         self,
         query: str,
-        filters: SearchFilter,
+        filters: SearchFilters,
         limit: int,
         expected_docs: List[int]
     ) -> List[SearchResult]:
